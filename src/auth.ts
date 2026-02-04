@@ -6,6 +6,7 @@ import consola from "consola"
 import { PATHS, ensurePaths } from "./lib/paths"
 import { state } from "./lib/state"
 import { setupGitHubToken } from "./lib/token"
+import { cacheVSCodeVersion } from "./lib/utils"
 
 interface RunAuthOptions {
   verbose: boolean
@@ -18,9 +19,10 @@ export async function runAuth(options: RunAuthOptions): Promise<void> {
     consola.info("Verbose logging enabled")
   }
 
-  state.showToken = options.showToken
+  state.config.showToken = options.showToken
 
   await ensurePaths()
+  await cacheVSCodeVersion()
   await setupGitHubToken({ force: true })
   consola.success("GitHub token written to", PATHS.GITHUB_TOKEN_PATH)
 }

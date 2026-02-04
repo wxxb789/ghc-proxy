@@ -5,7 +5,7 @@ import { state } from "~/lib/state"
 export async function getGitHubUser() {
   const response = await fetch(`${GITHUB_API_BASE_URL}/user`, {
     headers: {
-      authorization: `token ${state.githubToken}`,
+      authorization: `token ${state.auth.githubToken}`,
       ...standardHeaders(),
     },
   })

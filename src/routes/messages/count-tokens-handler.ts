@@ -4,8 +4,8 @@ import consola from "consola"
 
 import { state } from "~/lib/state"
 import { getTokenCount } from "~/lib/tokenizer"
+import { parseAnthropicMessagesPayload } from "~/lib/validation"
 
-import { type AnthropicMessagesPayload } from "./anthropic-types"
 import { translateToOpenAI } from "./non-stream-translation"
 
 /**
@@ -15,11 +15,11 @@ export async function handleCountTokens(c: Context) {
   try {
     const anthropicBeta = c.req.header("anthropic-beta")
 
-    const anthropicPayload = await c.req.json<AnthropicMessagesPayload>()
+    const anthropicPayload = parseAnthropicMessagesPayload(await c.req.json())
 
     const openAIPayload = translateToOpenAI(anthropicPayload)
 
-    const selectedModel = state.models?.data.find(
+    const selectedModel = state.cache.models?.data.find(
       (model) => model.id === anthropicPayload.model,
     )
 

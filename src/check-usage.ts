@@ -3,6 +3,7 @@ import consola from "consola"
 
 import { ensurePaths } from "./lib/paths"
 import { setupGitHubToken } from "./lib/token"
+import { cacheVSCodeVersion } from "./lib/utils"
 import {
   getCopilotUsage,
   type QuotaDetail,
@@ -15,6 +16,7 @@ export const checkUsage = defineCommand({
   },
   async run() {
     await ensurePaths()
+    await cacheVSCodeVersion()
     await setupGitHubToken()
     try {
       const usage = await getCopilotUsage()

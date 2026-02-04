@@ -3,19 +3,14 @@ import type { Context } from "hono"
 import consola from "consola"
 import { streamSSE } from "hono/streaming"
 
-import { awaitApproval } from "~/lib/approval"
-import { checkRateLimit } from "~/lib/rate-limit"
-import { state } from "~/lib/state"
+import { parseAnthropicMessagesPayload } from "~/lib/validation"
 import {
   createChatCompletions,
   type ChatCompletionChunk,
   type ChatCompletionResponse,
 } from "~/services/copilot/create-chat-completions"
 
-import {
-  type AnthropicMessagesPayload,
-  type AnthropicStreamState,
-} from "./anthropic-types"
+import { type AnthropicStreamState } from "./anthropic-types"
 import {
   translateToAnthropic,
   translateToOpenAI,
@@ -23,9 +18,7 @@ import {
 import { translateChunkToAnthropicEvents } from "./stream-translation"
 
 export async function handleCompletion(c: Context) {
-  await checkRateLimit(state)
-
-  const anthropicPayload = await c.req.json<AnthropicMessagesPayload>()
+  const anthropicPayload = parseAnthropicMessagesPayload(await c.req.json())
   consola.debug("Anthropic request payload:", JSON.stringify(anthropicPayload))
 
   const openAIPayload = translateToOpenAI(anthropicPayload)
@@ -39,10 +32,6 @@ export async function handleCompletion(c: Context) {
     "Translated OpenAI request payload:",
     JSON.stringify(openAIPayload),
   )
-
-  if (state.manualApprove) {
-    await awaitApproval()
-  }
 
   const response = await createChatCompletions(openAIPayload)
 

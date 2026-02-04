@@ -37,21 +37,21 @@ export async function runServer(options: RunServerOptions): Promise<void> {
     consola.info("Verbose logging enabled")
   }
 
-  state.accountType = options.accountType
+  state.config.accountType = options.accountType
   if (options.accountType !== "individual") {
     consola.info(`Using ${options.accountType} plan GitHub account`)
   }
 
-  state.manualApprove = options.manual
-  state.rateLimitSeconds = options.rateLimit
-  state.rateLimitWait = options.rateLimitWait
-  state.showToken = options.showToken
+  state.config.manualApprove = options.manual
+  state.config.rateLimitSeconds = options.rateLimit
+  state.config.rateLimitWait = options.rateLimitWait
+  state.config.showToken = options.showToken
 
   await ensurePaths()
   await cacheVSCodeVersion()
 
   if (options.githubToken) {
-    state.githubToken = options.githubToken
+    state.auth.githubToken = options.githubToken
     consola.info("Using provided GitHub token")
   } else {
     await setupGitHubToken()
@@ -61,19 +61,19 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   await cacheModels()
 
   consola.info(
-    `Available models: \n${state.models?.data.map((model) => `- ${model.id}`).join("\n")}`,
+    `Available models: \n${state.cache.models?.data.map((model) => `- ${model.id}`).join("\n")}`,
   )
 
   const serverUrl = `http://localhost:${options.port}`
 
   if (options.claudeCode) {
-    invariant(state.models, "Models should be loaded by now")
+    invariant(state.cache.models, "Models should be loaded by now")
 
-    const selectableModels = state.models.data.filter(
+    const selectableModels = state.cache.models.data.filter(
       (model) => model.model_picker_enabled,
     )
     const modelOptions =
-      selectableModels.length > 0 ? selectableModels : state.models.data
+      selectableModels.length > 0 ? selectableModels : state.cache.models.data
 
     const selectedModel = await consola.prompt(
       "Select a model to use with Claude Code",

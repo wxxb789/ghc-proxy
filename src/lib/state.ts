@@ -1,25 +1,42 @@
 import type { ModelsResponse } from "~/services/copilot/get-models"
 
-export interface State {
+export interface AuthState {
   githubToken?: string
   copilotToken?: string
+}
 
+export interface RuntimeConfig {
   accountType: string
-  models?: ModelsResponse
-  vsCodeVersion?: string
-
   manualApprove: boolean
+  rateLimitSeconds?: number
   rateLimitWait: boolean
   showToken: boolean
+}
 
-  // Rate limiting configuration
-  rateLimitSeconds?: number
+export interface CacheState {
+  models?: ModelsResponse
+  vsCodeVersion?: string
+}
+
+export interface RateLimitState {
   lastRequestTimestamp?: number
 }
 
-export const state: State = {
-  accountType: "individual",
-  manualApprove: false,
-  rateLimitWait: false,
-  showToken: false,
+export interface AppState {
+  auth: AuthState
+  config: RuntimeConfig
+  cache: CacheState
+  rateLimit: RateLimitState
+}
+
+export const state: AppState = {
+  auth: {},
+  config: {
+    accountType: "individual",
+    manualApprove: false,
+    rateLimitWait: false,
+    showToken: false,
+  },
+  cache: {},
+  rateLimit: {},
 }

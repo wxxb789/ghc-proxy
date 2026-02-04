@@ -8,7 +8,7 @@ import { state } from "~/lib/state"
 export const createChatCompletions = async (
   payload: ChatCompletionsPayload,
 ) => {
-  if (!state.copilotToken) throw new Error("Copilot token not found")
+  if (!state.auth.copilotToken) throw new Error("Copilot token not found")
 
   const enableVision = payload.messages.some(
     (x) =>

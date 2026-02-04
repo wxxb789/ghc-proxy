@@ -15,12 +15,12 @@ export const isNullish = (value: unknown): value is null | undefined =>
 
 export async function cacheModels(): Promise<void> {
   const models = await getModels()
-  state.models = models
+  state.cache.models = models
 }
 
 export const cacheVSCodeVersion = async () => {
   const response = await getVSCodeVersion()
-  state.vsCodeVersion = response
+  state.cache.vsCodeVersion = response
 
   consola.info(`Using VSCode version: ${response}`)
 }
