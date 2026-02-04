@@ -69,11 +69,17 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   if (options.claudeCode) {
     invariant(state.models, "Models should be loaded by now")
 
+    const selectableModels = state.models.data.filter(
+      (model) => model.model_picker_enabled,
+    )
+    const modelOptions =
+      selectableModels.length > 0 ? selectableModels : state.models.data
+
     const selectedModel = await consola.prompt(
       "Select a model to use with Claude Code",
       {
         type: "select",
-        options: state.models.data.map((model) => model.id),
+        options: modelOptions.map((model) => model.id),
       },
     )
 
@@ -81,7 +87,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
       "Select a small model to use with Claude Code",
       {
         type: "select",
-        options: state.models.data.map((model) => model.id),
+        options: modelOptions.map((model) => model.id),
       },
     )
 
