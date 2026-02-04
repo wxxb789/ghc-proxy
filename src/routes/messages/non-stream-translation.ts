@@ -65,7 +65,7 @@ function translateAnthropicMessagesToOpenAI(
   const otherMessages = anthropicMessages.flatMap((message) =>
     message.role === "user" ?
       handleUserMessage(message)
-      : handleAssistantMessage(message),
+    : handleAssistantMessage(message),
   )
 
   return [...systemMessages, ...otherMessages]
@@ -154,26 +154,26 @@ function handleAssistantMessage(
   ].join("\n\n")
 
   return toolUseBlocks.length > 0 ?
-    [
-      {
-        role: "assistant",
-        content: allTextContent || null,
-        tool_calls: toolUseBlocks.map((toolUse) => ({
-          id: toolUse.id,
-          type: "function",
-          function: {
-            name: toolUse.name,
-            arguments: JSON.stringify(toolUse.input),
-          },
-        })),
-      },
-    ]
+      [
+        {
+          role: "assistant",
+          content: allTextContent || null,
+          tool_calls: toolUseBlocks.map((toolUse) => ({
+            id: toolUse.id,
+            type: "function",
+            function: {
+              name: toolUse.name,
+              arguments: JSON.stringify(toolUse.input),
+            },
+          })),
+        },
+      ]
     : [
-      {
-        role: "assistant",
-        content: mapContent(message.content),
-      },
-    ]
+        {
+          role: "assistant",
+          content: mapContent(message.content),
+        },
+      ]
 }
 
 function mapContent(
