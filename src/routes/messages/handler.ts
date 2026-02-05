@@ -7,6 +7,7 @@ import type { ChatCompletionChunk, ChatCompletionResponse } from "~/types"
 
 import { CopilotClient } from "~/clients"
 import { getClientConfig } from "~/lib/client-config"
+import { setModelMappingInfo } from "~/lib/request-logger"
 import { state } from "~/lib/state"
 import { parseAnthropicMessagesPayload } from "~/lib/validation"
 import { AnthropicTranslator } from "~/translator"
@@ -17,6 +18,10 @@ export async function handleCompletion(c: Context) {
 
   const translator = new AnthropicTranslator()
   const openAIPayload = translator.toOpenAI(anthropicPayload)
+  setModelMappingInfo(c, {
+    originalModel: anthropicPayload.model,
+    mappedModel: openAIPayload.model,
+  })
   consola.debug(
     "Claude Code requested model:",
     anthropicPayload.model,
