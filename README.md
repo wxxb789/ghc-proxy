@@ -1,4 +1,4 @@
-# Copilot API Proxy
+# ghc-proxy
 
 > [!WARNING]
 > This is a reverse-engineered proxy of GitHub Copilot API. It is not supported by GitHub, and may break unexpectedly. Use at your own risk.
@@ -16,8 +16,6 @@
 > - [GitHub Copilot Terms](https://docs.github.com/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot)
 >
 > Use this proxy responsibly to avoid account restrictions.
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/E1E519XS7W)
 
 ---
 
@@ -73,7 +71,7 @@ bun install
 Build image
 
 ```sh
-docker build -t copilot-api .
+docker build -t ghc-proxy .
 ```
 
 Run the container
@@ -85,11 +83,11 @@ mkdir -p ./copilot-data
 # Run the container with a bind mount to persist the token
 # This ensures your authentication survives container restarts
 
-docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/copilot-api copilot-api
+docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy
 ```
 
 > **Note:**
-> The GitHub token and related data will be stored in `copilot-data` on your host. This is mapped to `/root/.local/share/copilot-api` inside the container, ensuring persistence across restarts.
+> The GitHub token and related data will be stored in `copilot-data` on your host. This is mapped to `/root/.local/share/ghc-proxy` inside the container, ensuring persistence across restarts.
 
 ### Docker with Environment Variables
 
@@ -97,13 +95,13 @@ You can pass the GitHub token directly to the container using environment variab
 
 ```sh
 # Build with GitHub token
-docker build --build-arg GH_TOKEN=your_github_token_here -t copilot-api .
+docker build --build-arg GH_TOKEN=your_github_token_here -t ghc-proxy .
 
 # Run with GitHub token
-docker run -p 4141:4141 -e GH_TOKEN=your_github_token_here copilot-api
+docker run -p 4141:4141 -e GH_TOKEN=your_github_token_here ghc-proxy
 
 # Run with additional options
-docker run -p 4141:4141 -e GH_TOKEN=your_token copilot-api start --verbose --port 4141
+docker run -p 4141:4141 -e GH_TOKEN=your_token ghc-proxy start --verbose --port 4141
 ```
 
 ### Docker Compose Example
@@ -111,7 +109,7 @@ docker run -p 4141:4141 -e GH_TOKEN=your_token copilot-api start --verbose --por
 ```yaml
 version: "3.8"
 services:
-  copilot-api:
+  ghc-proxy:
     build: .
     ports:
       - "4141:4141"
@@ -132,19 +130,19 @@ The Docker image includes:
 You can run the project directly using npx:
 
 ```sh
-npx copilot-api@latest start
+npx ghc-proxy@latest start
 ```
 
 With options:
 
 ```sh
-npx copilot-api@latest start --port 8080
+npx ghc-proxy@latest start --port 8080
 ```
 
 For authentication only:
 
 ```sh
-npx copilot-api@latest auth
+npx ghc-proxy@latest auth
 ```
 
 ## Command Structure
@@ -227,46 +225,46 @@ Using with npx:
 
 ```sh
 # Basic usage with start command
-npx copilot-api@latest start
+npx ghc-proxy@latest start
 
 # Run on custom port with verbose logging
-npx copilot-api@latest start --port 8080 --verbose
+npx ghc-proxy@latest start --port 8080 --verbose
 
 # Use with a business plan GitHub account
-npx copilot-api@latest start --account-type business
+npx ghc-proxy@latest start --account-type business
 
 # Use with an enterprise plan GitHub account
-npx copilot-api@latest start --account-type enterprise
+npx ghc-proxy@latest start --account-type enterprise
 
 # Enable manual approval for each request
-npx copilot-api@latest start --manual
+npx ghc-proxy@latest start --manual
 
 # Set rate limit to 30 seconds between requests
-npx copilot-api@latest start --rate-limit 30
+npx ghc-proxy@latest start --rate-limit 30
 
 # Wait instead of error when rate limit is hit
-npx copilot-api@latest start --rate-limit 30 --wait
+npx ghc-proxy@latest start --rate-limit 30 --wait
 
 # Provide GitHub token directly
-npx copilot-api@latest start --github-token ghp_YOUR_TOKEN_HERE
+npx ghc-proxy@latest start --github-token ghp_YOUR_TOKEN_HERE
 
 # Run only the auth flow
-npx copilot-api@latest auth
+npx ghc-proxy@latest auth
 
 # Run auth flow with verbose logging
-npx copilot-api@latest auth --verbose
+npx ghc-proxy@latest auth --verbose
 
 # Show your Copilot usage/quota in the terminal (no server needed)
-npx copilot-api@latest check-usage
+npx ghc-proxy@latest check-usage
 
 # Display debug information for troubleshooting
-npx copilot-api@latest debug
+npx ghc-proxy@latest debug
 
 # Display debug information in JSON format
-npx copilot-api@latest debug --json
+npx ghc-proxy@latest debug --json
 
 # Initialize proxy from environment variables (HTTP_PROXY, HTTPS_PROXY, etc.)
-npx copilot-api@latest start --proxy-env
+npx ghc-proxy@latest start --proxy-env
 ```
 
 ## Using the Usage Viewer
@@ -275,11 +273,10 @@ After starting the server, a URL to the Copilot Usage Dashboard will be displaye
 
 1.  Start the server. For example, using npx:
     ```sh
-    npx copilot-api@latest start
+    npx ghc-proxy@latest start
     ```
-2.  The server will output a URL to the usage viewer. Copy and paste this URL into your browser. It will look something like this:
-    `https://ericc-ch.github.io/copilot-api?endpoint=http://localhost:4141/usage`
-    - If you use the `start.bat` script on Windows, this page will open automatically.
+2.  The server will output a URL to the usage viewer. Copy and paste this URL into your browser in your local server.
+     - If you use the `start.bat` script on Windows, this page will open automatically.
 
 The dashboard provides a user-friendly interface to view your Copilot usage data:
 
@@ -287,8 +284,7 @@ The dashboard provides a user-friendly interface to view your Copilot usage data
 - **Fetch Data**: Click the "Fetch" button to load or refresh the usage data. The dashboard will automatically fetch data on load.
 - **Usage Quotas**: View a summary of your usage quotas for different services like Chat and Completions, displayed with progress bars for a quick overview.
 - **Detailed Information**: See the full JSON response from the API for a detailed breakdown of all available usage statistics.
-- **URL-based Configuration**: You can also specify the API endpoint directly in the URL using a query parameter. This is useful for bookmarks or sharing links. For example:
-  `https://ericc-ch.github.io/copilot-api?endpoint=http://your-api-server/usage`
+- **URL-based Configuration**: You can specify the API endpoint directly for your local server usage.
 
 ## Using with Claude Code
 
@@ -301,7 +297,7 @@ There are two ways to configure Claude Code to use this proxy:
 To get started, run the `start` command with the `--claude-code` flag:
 
 ```sh
-npx copilot-api@latest start --claude-code
+npx ghc-proxy@latest start --claude-code
 ```
 
 You will be prompted to select a primary model and a "small, fast" model for background tasks. After selecting the models, a command will be copied to your clipboard. This command sets the necessary environment variables for Claude Code to use the proxy.
@@ -358,6 +354,6 @@ bun run start
 
 - To avoid hitting GitHub Copilot's rate limits, you can use the following flags:
   - `--manual`: Enables manual approval for each request, giving you full control over when requests are sent.
-  - `--rate-limit <seconds>`: Enforces a minimum time interval between requests. For example, `copilot-api start --rate-limit 30` will ensure there's at least a 30-second gap between requests.
+  - `--rate-limit <seconds>`: Enforces a minimum time interval between requests. For example, `ghc-proxy start --rate-limit 30` will ensure there's at least a 30-second gap between requests.
   - `--wait`: Use this with `--rate-limit`. It makes the server wait for the cooldown period to end instead of rejecting the request with an error. This is useful for clients that don't automatically retry on rate limit errors.
 - If you have a GitHub business or enterprise plan account with Copilot, use the `--account-type` flag (e.g., `--account-type business`). See the [official documentation](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for more details.

@@ -1,22 +1,22 @@
 {
-  "name": "copilot-api",
-  "version": "0.7.0",
-  "description": "Turn GitHub Copilot into OpenAI/Anthropic API compatible server. Usable with Claude Code!",
+  "name": "ghc-proxy",
+  "version": "0.1.0",
+  "description": "GitHub Copilot to OpenAI/Anthropic API proxy - Use Copilot with Claude Code, Cursor, and more",
   "keywords": [
     "proxy",
     "github-copilot",
     "openai-compatible"
   ],
-  "homepage": "https://github.com/ericc-ch/copilot-api",
-  "bugs": "https://github.com/ericc-ch/copilot-api/issues",
+  "homepage": "https://github.com/wxxb789/ghc-proxy",
+  "bugs": "https://github.com/wxxb789/ghc-proxy/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ericc-ch/copilot-api.git"
+    "url": "git+https://github.com/wxxb789/ghc-proxy.git"
   },
-  "author": "Erick Christian <erickchristian48@gmail.com>",
+  "author": "wxxb789 <wxxb789@outlook.com>",
   "type": "module",
   "bin": {
-    "copilot-api": "./dist/main.js"
+    "ghc-proxy": "./dist/main.js"
   },
   "files": [
     "dist"
