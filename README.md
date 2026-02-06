@@ -1,314 +1,63 @@
 # ghc-proxy
 
-> [!WARNING]
-> This is a reverse-engineered proxy of GitHub Copilot API. It is not supported by GitHub, and may break unexpectedly. Use at your own risk.
+[![npm](https://img.shields.io/npm/v/ghc-proxy)](https://www.npmjs.com/package/ghc-proxy)
+[![CI](https://github.com/wxxb789/ghc-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/wxxb789/ghc-proxy/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/wxxb789/ghc-proxy/blob/master/LICENSE)
+
+A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic compatible API. Use it to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://www.cursor.com/), or any tool that speaks the OpenAI Chat Completions or Anthropic Messages protocol.
 
 > [!WARNING]
-> **GitHub Security Notice:**  
-> Excessive automated or scripted use of Copilot (including rapid or bulk requests, such as via automated tools) may trigger GitHub's abuse-detection systems.  
-> You may receive a warning from GitHub Security, and further anomalous activity could result in temporary suspension of your Copilot access.
->
-> GitHub prohibits use of their servers for excessive automated bulk activity or any activity that places undue burden on their infrastructure.
->
-> Please review:
->
-> - [GitHub Acceptable Use Policies](https://docs.github.com/site-policy/acceptable-use-policies/github-acceptable-use-policies#4-spam-and-inauthentic-activity-on-github)
-> - [GitHub Copilot Terms](https://docs.github.com/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot)
->
-> Use this proxy responsibly to avoid account restrictions.
+> Reverse-engineered, unofficial, may break. Excessive use can trigger GitHub abuse detection. Use at your own risk.
 
----
-
-**Note:** If you are using [opencode](https://github.com/sst/opencode), you do not need this project. Opencode supports GitHub Copilot provider out of the box.
-
----
-
-## Project Overview
-
-A reverse-engineered proxy for the GitHub Copilot API that exposes it as an OpenAI and Anthropic compatible service. This allows you to use GitHub Copilot with any tool that supports the OpenAI Chat Completions API or the Anthropic Messages API, including to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview).
-
-## Features
-
-- **OpenAI & Anthropic Compatibility**: Exposes GitHub Copilot as an OpenAI-compatible (`/v1/chat/completions`, `/v1/models`, `/v1/embeddings`) and Anthropic-compatible (`/v1/messages`) API.
-- **Claude Code Integration**: Easily configure and launch [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) to use Copilot as its backend with a simple command-line flag (`--claude-code`).
-- **Usage Dashboard**: A web-based dashboard to monitor your Copilot API usage, view quotas, and see detailed statistics.
-- **Rate Limit Control**: Manage API usage with rate-limiting options (`--rate-limit`) and a waiting mechanism (`--wait`) to prevent errors from rapid requests.
-- **Manual Request Approval**: Manually approve or deny each API request for fine-grained control over usage (`--manual`).
-- **Token Visibility**: Option to display GitHub and Copilot tokens during authentication and refresh for debugging (`--show-token`).
-- **Flexible Authentication**: Authenticate interactively or provide a GitHub token directly, suitable for CI/CD environments.
-- **Support for Different Account Types**: Works with individual, business, and enterprise GitHub Copilot plans.
-
-## Architecture & Code Layout
-
-- `src/main.ts`: CLI entry and subcommand wiring.
-- `src/start.ts`: Server bootstrap, authentication flow, model cache warmup.
-- `src/server.ts`: Hono server and route registration.
-- `src/routes/*`: OpenAI and Anthropic compatible handlers.
-- `src/clients/*`: GitHub/Copilot API clients and shared config/auth types.
-- `src/translator/*`: Anthropic <-> OpenAI translation (streaming and non-streaming).
-- `src/types/*`: Shared API payload/response types.
-- `src/lib/*`: Shared utilities (state, validation, token, tokenizer, config).
-
-## Demo
-
-https://github.com/user-attachments/assets/7654b383-669d-4eb9-b23c-06d7aefee8c5
-
-## Prerequisites
-
-- Bun (>= 1.2.x)
-- GitHub account with Copilot subscription (individual, business, or enterprise)
+**Note:** If you're using [opencode](https://github.com/sst/opencode), you don't need this -- opencode supports GitHub Copilot natively.
 
 ## Installation
 
-To install dependencies, run:
+The quickest way to get started is with `npx`:
 
-```sh
-bun install
-```
-
-## Using with Docker
-
-Build image
-
-```sh
-docker build -t ghc-proxy .
-```
-
-Run the container
-
-```sh
-# Create a directory on your host to persist the GitHub token and related data
-mkdir -p ./copilot-data
-
-# Run the container with a bind mount to persist the token
-# This ensures your authentication survives container restarts
-
-docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy
-```
-
-> **Note:**
-> The GitHub token and related data will be stored in `copilot-data` on your host. This is mapped to `/root/.local/share/ghc-proxy` inside the container, ensuring persistence across restarts.
-
-### Docker with Environment Variables
-
-You can pass the GitHub token directly to the container using environment variables:
-
-```sh
-# Build with GitHub token
-docker build --build-arg GH_TOKEN=your_github_token_here -t ghc-proxy .
-
-# Run with GitHub token
-docker run -p 4141:4141 -e GH_TOKEN=your_github_token_here ghc-proxy
-
-# Run with additional options
-docker run -p 4141:4141 -e GH_TOKEN=your_token ghc-proxy start --verbose --port 4141
-```
-
-### Docker Compose Example
-
-```yaml
-version: "3.8"
-services:
-  ghc-proxy:
-    build: .
-    ports:
-      - "4141:4141"
-    environment:
-      - GH_TOKEN=your_github_token_here
-    restart: unless-stopped
-```
-
-The Docker image includes:
-
-- Multi-stage build for optimized image size
-- Non-root user for enhanced security
-- Health check for container monitoring
-- Pinned base image version for reproducible builds
-
-## Using with npx
-
-You can run the project directly using npx:
-
-```sh
-npx ghc-proxy@latest start
-```
-
-With options:
-
-```sh
-npx ghc-proxy@latest start --port 8080
-```
-
-For authentication only:
-
-```sh
-npx ghc-proxy@latest auth
-```
-
-## Command Structure
-
-Copilot API now uses a subcommand structure with these main commands:
-
-- `start`: Start the Copilot API server. This command will also handle authentication if needed.
-- `auth`: Run GitHub authentication flow without starting the server. This is typically used if you need to generate a token for use with the `--github-token` option, especially in non-interactive environments.
-- `check-usage`: Show your current GitHub Copilot usage and quota information directly in the terminal (no server required).
-- `debug`: Display diagnostic information including version, runtime details, file paths, and authentication status. Useful for troubleshooting and support.
-
-## Command Line Options
-
-### Start Command Options
-
-The following command line options are available for the `start` command:
-
-| Option         | Description                                                                   | Default    | Alias |
-| -------------- | ----------------------------------------------------------------------------- | ---------- | ----- |
-| --port         | Port to listen on                                                             | 4141       | -p    |
-| --verbose      | Enable verbose logging                                                        | false      | -v    |
-| --account-type | Account type to use (individual, business, enterprise)                        | individual | -a    |
-| --manual       | Enable manual request approval                                                | false      | none  |
-| --rate-limit   | Rate limit in seconds between requests                                        | none       | -r    |
-| --wait         | Wait instead of error when rate limit is hit                                  | false      | -w    |
-| --github-token | Provide GitHub token directly (must be generated using the `auth` subcommand) | none       | -g    |
-| --claude-code  | Generate a command to launch Claude Code with Copilot API config              | false      | -c    |
-| --show-token   | Show GitHub and Copilot tokens on fetch and refresh                           | false      | none  |
-| --proxy-env    | Initialize proxy from environment variables                                   | false      | none  |
-| --idle-timeout | Bun server idle timeout in seconds                                            | 120        | none  |
-
-### Auth Command Options
-
-| Option       | Description               | Default | Alias |
-| ------------ | ------------------------- | ------- | ----- |
-| --verbose    | Enable verbose logging    | false   | -v    |
-| --show-token | Show GitHub token on auth | false   | none  |
-
-### Debug Command Options
-
-| Option | Description               | Default | Alias |
-| ------ | ------------------------- | ------- | ----- |
-| --json | Output debug info as JSON | false   | none  |
-
-## API Endpoints
-
-The server exposes several endpoints to interact with the Copilot API. It provides OpenAI-compatible endpoints and now also includes support for Anthropic-compatible endpoints, allowing for greater flexibility with different tools and services.
-
-### OpenAI Compatible Endpoints
-
-These endpoints mimic the OpenAI API structure.
-
-| Endpoint                    | Method | Description                                               |
-| --------------------------- | ------ | --------------------------------------------------------- |
-| `POST /v1/chat/completions` | `POST` | Creates a model response for the given chat conversation. |
-| `GET /v1/models`            | `GET`  | Lists the currently available models.                     |
-| `POST /v1/embeddings`       | `POST` | Creates an embedding vector representing the input text.  |
-
-### Anthropic Compatible Endpoints
-
-These endpoints are designed to be compatible with the Anthropic Messages API.
-
-| Endpoint                         | Method | Description                                                  |
-| -------------------------------- | ------ | ------------------------------------------------------------ |
-| `POST /v1/messages`              | `POST` | Creates a model response for a given conversation.           |
-| `POST /v1/messages/count_tokens` | `POST` | Calculates the number of tokens for a given set of messages. |
-
-### Usage Monitoring Endpoints
-
-New endpoints for monitoring your Copilot usage and quotas.
-
-| Endpoint     | Method | Description                                                  |
-| ------------ | ------ | ------------------------------------------------------------ |
-| `GET /usage` | `GET`  | Get detailed Copilot usage statistics and quota information. |
-| `GET /token` | `GET`  | Get the current Copilot token being used by the API.         |
-
-## Example Usage
-
-Using with npx:
-
-```sh
-# Basic usage with start command
-npx ghc-proxy@latest start
-
-# Run on custom port with verbose logging
-npx ghc-proxy@latest start --port 8080 --verbose
-
-# Use with a business plan GitHub account
-npx ghc-proxy@latest start --account-type business
-
-# Use with an enterprise plan GitHub account
-npx ghc-proxy@latest start --account-type enterprise
-
-# Enable manual approval for each request
-npx ghc-proxy@latest start --manual
-
-# Set rate limit to 30 seconds between requests
-npx ghc-proxy@latest start --rate-limit 30
-
-# Wait instead of error when rate limit is hit
-npx ghc-proxy@latest start --rate-limit 30 --wait
-
-# Provide GitHub token directly
-npx ghc-proxy@latest start --github-token ghp_YOUR_TOKEN_HERE
-
-# Run only the auth flow
-npx ghc-proxy@latest auth
-
-# Run auth flow with verbose logging
-npx ghc-proxy@latest auth --verbose
-
-# Show your Copilot usage/quota in the terminal (no server needed)
-npx ghc-proxy@latest check-usage
-
-# Display debug information for troubleshooting
-npx ghc-proxy@latest debug
-
-# Display debug information in JSON format
-npx ghc-proxy@latest debug --json
-
-# Initialize proxy from environment variables (HTTP_PROXY, HTTPS_PROXY, etc.)
-npx ghc-proxy@latest start --proxy-env
-```
-
-## Using the Usage Viewer
-
-After starting the server, a URL to the Copilot Usage Dashboard will be displayed in your console. This dashboard is a web interface for monitoring your API usage.
-
-1.  Start the server. For example, using npx:
-    ```sh
     npx ghc-proxy@latest start
-    ```
-2.  The server will output a URL to the usage viewer. Copy and paste this URL into your browser in your local server.
-     - If you use the `start.bat` script on Windows, this page will open automatically.
 
-The dashboard provides a user-friendly interface to view your Copilot usage data:
+This starts the proxy on `http://localhost:4141`. It will walk you through GitHub authentication on first run.
 
-- **API Endpoint URL**: The dashboard is pre-configured to fetch data from your local server endpoint via the URL query parameter. You can change this URL to point to any other compatible API endpoint.
-- **Fetch Data**: Click the "Fetch" button to load or refresh the usage data. The dashboard will automatically fetch data on load.
-- **Usage Quotas**: View a summary of your usage quotas for different services like Chat and Completions, displayed with progress bars for a quick overview.
-- **Detailed Information**: See the full JSON response from the API for a detailed breakdown of all available usage statistics.
-- **URL-based Configuration**: You can specify the API endpoint directly for your local server usage.
+You can also install it globally:
+
+    npm install -g ghc-proxy
+
+Or run it from source with [Bun](https://bun.sh/) (>= 1.2):
+
+    git clone https://github.com/wxxb789/ghc-proxy.git
+    cd ghc-proxy
+    bun install
+    bun run dev
+
+## What it does
+
+ghc-proxy sits between your tools and the GitHub Copilot API. It authenticates with GitHub using the device code flow, obtains a Copilot token, and exposes the following endpoints:
+
+**OpenAI compatible:**
+
+- `POST /v1/chat/completions` -- chat completions (streaming and non-streaming)
+- `GET /v1/models` -- list available models
+- `POST /v1/embeddings` -- generate embeddings
+
+**Anthropic compatible:**
+
+- `POST /v1/messages` -- the Anthropic Messages API, with full tool use and streaming support
+- `POST /v1/messages/count_tokens` -- token counting
+
+Anthropic requests are translated to OpenAI format on the fly, sent to Copilot, and the responses are translated back. This means Claude Code thinks it's talking to Anthropic, but it's actually talking to Copilot.
+
+There are also utility endpoints: `GET /usage` for quota monitoring and `GET /token` to inspect the current Copilot token.
 
 ## Using with Claude Code
 
-This proxy can be used to power [Claude Code](https://docs.anthropic.com/en/claude-code), an experimental conversational AI assistant for developers from Anthropic.
+The fastest way to get Claude Code running on Copilot:
 
-There are two ways to configure Claude Code to use this proxy:
+    npx ghc-proxy@latest start --claude-code
 
-### Interactive Setup with `--claude-code` flag
+This starts the proxy, prompts you to pick a model, and copies a ready-to-paste command to your clipboard. Run that command in another terminal to launch Claude Code.
 
-To get started, run the `start` command with the `--claude-code` flag:
-
-```sh
-npx ghc-proxy@latest start --claude-code
-```
-
-You will be prompted to select a primary model and a "small, fast" model for background tasks. After selecting the models, a command will be copied to your clipboard. This command sets the necessary environment variables for Claude Code to use the proxy.
-
-Paste and run this command in a new terminal to launch Claude Code.
-
-### Manual Configuration with `settings.json`
-
-Alternatively, you can configure Claude Code by creating a `.claude/settings.json` file in your project's root directory. This file should contain the environment variables needed by Claude Code. This way you don't need to run the interactive setup every time.
-
-Here is an example `.claude/settings.json` file:
+If you prefer a permanent setup, create `.claude/settings.json` in your project:
 
 ```json
 {
@@ -323,37 +72,100 @@ Here is an example `.claude/settings.json` file:
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   },
   "permissions": {
-    "deny": [
-      "WebSearch"
-    ]
+    "deny": ["WebSearch"]
   }
 }
 ```
 
-You can find more options here: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables)
+See the [Claude Code settings docs](https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables) for more options.
 
-You can also read more about IDE integration here: [Add Claude Code to your IDE](https://docs.anthropic.com/en/docs/claude-code/ide-integrations)
+## CLI commands
 
-## Running from Source
+ghc-proxy uses a subcommand structure:
 
-The project can be run from source in several ways:
+    ghc-proxy start          # start the proxy server
+    ghc-proxy auth           # run the GitHub auth flow without starting the server
+    ghc-proxy check-usage    # show your Copilot usage/quota in the terminal
+    ghc-proxy debug          # print diagnostic info (version, paths, token status)
 
-### Development Mode
+### Start options
 
-```sh
-bun run dev
+| Option | Alias | Default | Description |
+|--------|-------|---------|-------------|
+| `--port` | `-p` | `4141` | Port to listen on |
+| `--verbose` | `-v` | `false` | Enable verbose logging |
+| `--account-type` | `-a` | `individual` | `individual`, `business`, or `enterprise` |
+| `--rate-limit` | `-r` | -- | Minimum seconds between requests |
+| `--wait` | `-w` | `false` | Wait instead of rejecting when rate-limited |
+| `--manual` | -- | `false` | Manually approve each request |
+| `--github-token` | `-g` | -- | Pass a GitHub token directly (from `auth`) |
+| `--claude-code` | `-c` | `false` | Generate a Claude Code launch command |
+| `--show-token` | -- | `false` | Display tokens on auth and refresh |
+| `--proxy-env` | -- | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from env |
+| `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds |
+
+## Rate limiting
+
+If you're worried about hitting Copilot rate limits, you have a few options:
+
+    # Enforce a 30-second cooldown between requests
+    npx ghc-proxy@latest start --rate-limit 30
+
+    # Same, but wait instead of returning a 429 error
+    npx ghc-proxy@latest start --rate-limit 30 --wait
+
+    # Manually approve every request (useful for debugging)
+    npx ghc-proxy@latest start --manual
+
+## Docker
+
+Build and run:
+
+    docker build -t ghc-proxy .
+    mkdir -p ./copilot-data
+    docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy
+
+The token is persisted in `copilot-data/` so authentication survives container restarts.
+
+You can also pass a GitHub token via environment variable:
+
+    docker run -p 4141:4141 -e GH_TOKEN=your_token ghc-proxy
+
+Docker Compose:
+
+```yaml
+services:
+  ghc-proxy:
+    build: .
+    ports:
+      - "4141:4141"
+    environment:
+      - GH_TOKEN=your_github_token_here
+    restart: unless-stopped
 ```
 
-### Production Mode
+## Account types
 
-```sh
-bun run start
-```
+If you have a GitHub business or enterprise Copilot plan, pass the `--account-type` flag:
 
-## Usage Tips
+    npx ghc-proxy@latest start --account-type business
+    npx ghc-proxy@latest start --account-type enterprise
 
-- To avoid hitting GitHub Copilot's rate limits, you can use the following flags:
-  - `--manual`: Enables manual approval for each request, giving you full control over when requests are sent.
-  - `--rate-limit <seconds>`: Enforces a minimum time interval between requests. For example, `ghc-proxy start --rate-limit 30` will ensure there's at least a 30-second gap between requests.
-  - `--wait`: Use this with `--rate-limit`. It makes the server wait for the cooldown period to end instead of rejecting the request with an error. This is useful for clients that don't automatically retry on rate limit errors.
-- If you have a GitHub business or enterprise plan account with Copilot, use the `--account-type` flag (e.g., `--account-type business`). See the [official documentation](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for more details.
+This routes requests to the correct Copilot API endpoint for your plan. See the [GitHub docs on network routing](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for more details.
+
+## How it works
+
+The proxy authenticates with GitHub using the [device code OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow) (the same flow VS Code uses), then exchanges the GitHub token for a short-lived Copilot token that auto-refreshes.
+
+Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests are forwarded directly to `api.githubcopilot.com`. Anthropic-format requests pass through a translation layer (`src/translator/`) that converts the message format, tool schemas, and streaming events between the two protocols -- including full support for tool use, thinking blocks, and image content.
+
+The server spoofs VS Code headers so the Copilot API treats it like a normal editor session.
+
+## Development
+
+    bun install
+    bun run dev          # start with --watch
+    bun run build        # build with tsdown
+    bun run lint         # eslint
+    bun run typecheck    # tsc --noEmit
+    bun test             # run tests
