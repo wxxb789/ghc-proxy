@@ -5,10 +5,12 @@ import path from "node:path"
 const APP_DIR = path.join(os.homedir(), ".local", "share", "ghc-proxy")
 
 const GITHUB_TOKEN_PATH = path.join(APP_DIR, "github_token")
+const CONFIG_PATH = path.join(APP_DIR, "config.json")
 
 export const PATHS = {
   APP_DIR,
   GITHUB_TOKEN_PATH,
+  CONFIG_PATH,
 }
 
 export async function ensurePaths(): Promise<void> {
