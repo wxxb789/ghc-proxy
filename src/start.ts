@@ -9,6 +9,7 @@ import invariant from "tiny-invariant"
 import { CopilotClient } from "~/clients"
 
 import { getClientConfig } from "./lib/client-config"
+import { readConfig } from "./lib/config"
 import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { generateEnvScript } from "./lib/shell"
@@ -124,6 +125,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   state.config.showToken = options.showToken
 
   await ensurePaths()
+  await readConfig()
   await cacheVSCodeVersion()
 
   if (!options.githubToken) {

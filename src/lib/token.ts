@@ -5,14 +5,27 @@ import { GitHubClient } from "~/clients"
 import { PATHS } from "~/lib/paths"
 
 import { getClientConfig } from "./client-config"
+import { getCachedConfig, writeConfigField } from "./config"
 import { HTTPError } from "./error"
 import { state } from "./state"
 import { cacheVSCodeVersion } from "./utils"
 
-const readGithubToken = () => fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
+const readGithubToken = async (): Promise<string> => {
+  // Priority 1: config.json
+  const cachedToken = getCachedConfig().githubToken
+  if (cachedToken && cachedToken.trim()) {
+    return cachedToken.trim()
+  }
 
-const writeGithubToken = (token: string) =>
-  fs.writeFile(PATHS.GITHUB_TOKEN_PATH, token)
+  // Priority 2: old github_token file (fallback)
+  return (await fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")).trim()
+}
+
+const writeGithubToken = async (token: string): Promise<void> => {
+  // Write to BOTH locations for backward compatibility
+  await writeConfigField("githubToken", token)
+  await fs.writeFile(PATHS.GITHUB_TOKEN_PATH, token)
+}
 
 export const setupCopilotToken = async () => {
   await ensureVSCodeVersion()
@@ -55,7 +68,7 @@ export async function setupGitHubToken(
 ): Promise<void> {
   try {
     await ensureVSCodeVersion()
-    const githubToken = (await readGithubToken()).trim()
+    const githubToken = await readGithubToken()
 
     if (githubToken && !options?.force) {
       state.auth.githubToken = githubToken

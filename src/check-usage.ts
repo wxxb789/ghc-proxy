@@ -6,6 +6,7 @@ import type { QuotaDetail } from "~/types"
 import { GitHubClient } from "~/clients"
 
 import { getClientConfig } from "./lib/client-config"
+import { readConfig } from "./lib/config"
 import { ensurePaths } from "./lib/paths"
 import { state } from "./lib/state"
 import { setupGitHubToken } from "./lib/token"
@@ -18,6 +19,7 @@ export const checkUsage = defineCommand({
   },
   async run() {
     await ensurePaths()
+    await readConfig()
     await cacheVSCodeVersion()
     await setupGitHubToken()
     try {

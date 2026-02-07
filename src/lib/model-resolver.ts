@@ -1,3 +1,5 @@
+import { getCachedConfig } from "./config"
+
 export interface ModelFallbackConfig {
   claudeOpus: string
   claudeSonnet: string
@@ -11,14 +13,20 @@ export const DEFAULT_FALLBACKS: ModelFallbackConfig = {
 }
 
 export function getModelFallbackConfig(): ModelFallbackConfig {
+  const cachedConfig = getCachedConfig()
   return {
     claudeOpus:
-      process.env.MODEL_FALLBACK_CLAUDE_OPUS || DEFAULT_FALLBACKS.claudeOpus,
+      process.env.MODEL_FALLBACK_CLAUDE_OPUS
+      || cachedConfig.modelFallback?.claudeOpus
+      || DEFAULT_FALLBACKS.claudeOpus,
     claudeSonnet:
       process.env.MODEL_FALLBACK_CLAUDE_SONNET
+      || cachedConfig.modelFallback?.claudeSonnet
       || DEFAULT_FALLBACKS.claudeSonnet,
     claudeHaiku:
-      process.env.MODEL_FALLBACK_CLAUDE_HAIKU || DEFAULT_FALLBACKS.claudeHaiku,
+      process.env.MODEL_FALLBACK_CLAUDE_HAIKU
+      || cachedConfig.modelFallback?.claudeHaiku
+      || DEFAULT_FALLBACKS.claudeHaiku,
   }
 }
 
