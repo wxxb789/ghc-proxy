@@ -17,8 +17,10 @@ interface DebugInfo {
   }
   paths: {
     APP_DIR: string
+    CONFIG_PATH: string
     GITHUB_TOKEN_PATH: string
   }
+  configExists: boolean
   tokenExists: boolean
 }
 
@@ -63,10 +65,23 @@ async function checkTokenExists(): Promise<boolean> {
   }
 }
 
+async function checkConfigExists(): Promise<boolean> {
+  try {
+    const stats = await fs.stat(PATHS.CONFIG_PATH)
+    if (!stats.isFile()) return false
+
+    const content = await fs.readFile(PATHS.CONFIG_PATH, "utf8")
+    return content.trim().length > 0
+  } catch {
+    return false
+  }
+}
+
 async function getDebugInfo(): Promise<DebugInfo> {
-  const [version, tokenExists] = await Promise.all([
+  const [version, tokenExists, configExists] = await Promise.all([
     getPackageVersion(),
     checkTokenExists(),
+    checkConfigExists(),
   ])
 
   return {
@@ -74,8 +89,10 @@ async function getDebugInfo(): Promise<DebugInfo> {
     runtime: getRuntimeInfo(),
     paths: {
       APP_DIR: PATHS.APP_DIR,
+      CONFIG_PATH: PATHS.CONFIG_PATH,
       GITHUB_TOKEN_PATH: PATHS.GITHUB_TOKEN_PATH,
     },
+    configExists,
     tokenExists,
   }
 }
@@ -88,8 +105,10 @@ Runtime: ${info.runtime.name} ${info.runtime.version} (${info.runtime.platform} 
 
 Paths:
 - APP_DIR: ${info.paths.APP_DIR}
+- CONFIG_PATH: ${info.paths.CONFIG_PATH}
 - GITHUB_TOKEN_PATH: ${info.paths.GITHUB_TOKEN_PATH}
 
+Config exists: ${info.configExists ? "Yes" : "No"}
 Token exists: ${info.tokenExists ? "Yes" : "No"}`)
 }
 
