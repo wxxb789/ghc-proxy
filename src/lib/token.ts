@@ -1,18 +1,16 @@
 import consola from "consola"
-import fs from "node:fs/promises"
 
 import { GitHubClient } from "~/clients"
-import { PATHS } from "~/lib/paths"
 
 import { getClientConfig } from "./client-config"
+import { getCachedConfig, writeConfigField } from "./config"
 import { HTTPError } from "./error"
 import { state } from "./state"
 import { cacheVSCodeVersion } from "./utils"
 
-const readGithubToken = () => fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
-
-const writeGithubToken = (token: string) =>
-  fs.writeFile(PATHS.GITHUB_TOKEN_PATH, token)
+const writeGithubToken = async (token: string): Promise<void> => {
+  await writeConfigField("githubToken", token)
+}
 
 export const setupCopilotToken = async () => {
   await ensureVSCodeVersion()
@@ -55,7 +53,9 @@ export async function setupGitHubToken(
 ): Promise<void> {
   try {
     await ensureVSCodeVersion()
-    const githubToken = (await readGithubToken()).trim()
+
+    const cachedToken = getCachedConfig().githubToken
+    const githubToken = cachedToken?.trim() || ""
 
     if (githubToken && !options?.force) {
       state.auth.githubToken = githubToken

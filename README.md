@@ -125,7 +125,7 @@ Build and run:
     mkdir -p ./copilot-data
     docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy
 
-The token is persisted in `copilot-data/` so authentication survives container restarts.
+The authentication and settings are persisted in `copilot-data/config.json` so authentication survives container restarts.
 
 You can also pass a GitHub token via environment variable:
 
@@ -140,7 +140,7 @@ services:
     ports:
       - "4141:4141"
     environment:
-      - GH_TOKEN=your_github_token_here
+      - GH_TOKEN=your_token_here
     restart: unless-stopped
 ```
 

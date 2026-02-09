@@ -8,6 +8,9 @@ import type {
   ToolCall,
 } from "~/types"
 
+import { getModelFallbackConfig, resolveModel } from "~/lib/model-resolver"
+import { state } from "~/lib/state"
+
 import type {
   AnthropicAssistantContentBlock,
   AnthropicAssistantMessage,
@@ -95,13 +98,12 @@ export class AnthropicTranslator {
   }
 
   private translateModelName(model: string): string {
-    if (model.startsWith("claude-sonnet-4-")) {
-      return model.replace(/^claude-sonnet-4-.*/, "claude-sonnet-4.5")
-    }
-    if (model.startsWith("claude-opus-")) {
-      return model.replace(/^claude-opus-4-.*/, "claude-opus-4.5")
-    }
-    return model
+    const knownModelIds =
+      state.cache.models ?
+        new Set(state.cache.models.data.map((m) => m.id))
+      : undefined
+    const config = getModelFallbackConfig()
+    return resolveModel(model, knownModelIds, config)
   }
 
   private translateAnthropicMessagesToOpenAI(

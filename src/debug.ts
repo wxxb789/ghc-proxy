@@ -5,6 +5,7 @@ import consola from "consola"
 import fs from "node:fs/promises"
 import os from "node:os"
 
+import { getCachedConfig } from "./lib/config"
 import { PATHS } from "./lib/paths"
 
 interface DebugInfo {
@@ -17,8 +18,9 @@ interface DebugInfo {
   }
   paths: {
     APP_DIR: string
-    GITHUB_TOKEN_PATH: string
+    CONFIG_PATH: string
   }
+  configExists: boolean
   tokenExists: boolean
 }
 
@@ -51,12 +53,21 @@ function getRuntimeInfo() {
   }
 }
 
-async function checkTokenExists(): Promise<boolean> {
+function checkTokenExists(): Promise<boolean> {
   try {
-    const stats = await fs.stat(PATHS.GITHUB_TOKEN_PATH)
+    const config = getCachedConfig()
+    return Promise.resolve(Boolean(config.githubToken?.trim()))
+  } catch {
+    return Promise.resolve(false)
+  }
+}
+
+async function checkConfigExists(): Promise<boolean> {
+  try {
+    const stats = await fs.stat(PATHS.CONFIG_PATH)
     if (!stats.isFile()) return false
 
-    const content = await fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
+    const content = await fs.readFile(PATHS.CONFIG_PATH, "utf8")
     return content.trim().length > 0
   } catch {
     return false
@@ -64,9 +75,10 @@ async function checkTokenExists(): Promise<boolean> {
 }
 
 async function getDebugInfo(): Promise<DebugInfo> {
-  const [version, tokenExists] = await Promise.all([
+  const [version, tokenExists, configExists] = await Promise.all([
     getPackageVersion(),
     checkTokenExists(),
+    checkConfigExists(),
   ])
 
   return {
@@ -74,8 +86,9 @@ async function getDebugInfo(): Promise<DebugInfo> {
     runtime: getRuntimeInfo(),
     paths: {
       APP_DIR: PATHS.APP_DIR,
-      GITHUB_TOKEN_PATH: PATHS.GITHUB_TOKEN_PATH,
+      CONFIG_PATH: PATHS.CONFIG_PATH,
     },
+    configExists,
     tokenExists,
   }
 }
@@ -88,8 +101,9 @@ Runtime: ${info.runtime.name} ${info.runtime.version} (${info.runtime.platform} 
 
 Paths:
 - APP_DIR: ${info.paths.APP_DIR}
-- GITHUB_TOKEN_PATH: ${info.paths.GITHUB_TOKEN_PATH}
+- CONFIG_PATH: ${info.paths.CONFIG_PATH}
 
+Config exists: ${info.configExists ? "Yes" : "No"}
 Token exists: ${info.tokenExists ? "Yes" : "No"}`)
 }
 
