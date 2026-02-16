@@ -19,7 +19,9 @@
 - **Pack (dry-run):**
   `bun pm pack --dry-run`
 - **Publish (manual):**
-  `bun publish --access public`
+  `npm publish --access public` (with npm 2FA)
+- **Release (auto bump + commit + tag):**
+  `bun run release:patch` / `bun run release:minor` / `bun run release:major`
 
 ## Code Style Guidelines
 
@@ -62,14 +64,16 @@
 
 ## Release Automation
 
-- **Tag-triggered npm release:**
-  `.github/workflows/release-npm.yml` publishes to npm when a `v*.*.*` tag is pushed.
+- **Tag-triggered release pipeline:**
+  `.github/workflows/release-npm.yml` is the single tag-triggered workflow and handles changelog + npm publish.
 - **Version contract:**
   The workflow validates that `vX.Y.Z` matches `package.json` `version` before publish.
 - **Publishing auth model:**
   Use npm Trusted Publishing (GitHub OIDC). Do not use long-lived npm tokens in repository secrets.
 - **Typical release flow:**
-  Bump version in `package.json` -> commit -> push -> create and push tag like `v0.1.1`.
+  Run `bun run release:patch` (or `:minor` / `:major`) to bump, commit, and tag, then push branch and tag manually.
+- **Version immutability:**
+  npm does not allow republishing an existing version. Always bump to a new version before tagging.
 
 ---
 

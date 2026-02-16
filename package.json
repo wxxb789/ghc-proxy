@@ -29,7 +29,10 @@
     "lint:all": "eslint --cache .",
     "prepack": "bun run build",
     "prepare": "simple-git-hooks",
-    "release": "bumpp && bun publish --access public",
+    "release": "bun run release:patch",
+    "release:patch": "bumpp patch --yes --commit --tag",
+    "release:minor": "bumpp minor --yes --commit --tag",
+    "release:major": "bumpp major --yes --commit --tag",
     "start": "NODE_ENV=production bun run ./src/main.ts",
     "typecheck": "tsc"
   },
