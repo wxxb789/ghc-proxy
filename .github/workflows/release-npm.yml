@@ -33,7 +33,9 @@ jobs:
           bun run lint:all
           bun run typecheck
           bun test
-          bun run build
+
+      - name: Verify npm pack lifecycle (prepack -> tsdown)
+        run: npm pack --dry-run
 
       - name: Validate release tag matches package version
         run: |
