@@ -16,6 +16,10 @@
    `bun test tests/anthropic-request.test.ts`
 - **Start (prod):**
   `bun run start`
+- **Pack (dry-run):**
+  `bun pm pack --dry-run`
+- **Publish (manual):**
+  `bun publish --access public`
 
 ## Code Style Guidelines
 
@@ -53,6 +57,19 @@
   Handle startup promise rejections explicitly and set a non-zero exit code for failures.
 - **Validation Discipline:**
   After non-trivial changes, verify with `bun run lint:all`, `bun run typecheck`, `bun run build`, and `bun test` (when environment permissions allow).
+- **CLI Command Surface:**
+  Keep explicit subcommands. Do not introduce a default command; `start` must remain an explicit subcommand.
+
+## Release Automation
+
+- **Tag-triggered npm release:**
+  `.github/workflows/release-npm.yml` publishes to npm when a `v*.*.*` tag is pushed.
+- **Version contract:**
+  The workflow validates that `vX.Y.Z` matches `package.json` `version` before publish.
+- **Publishing auth model:**
+  Use npm Trusted Publishing (GitHub OIDC). Do not use long-lived npm tokens in repository secrets.
+- **Typical release flow:**
+  Bump version in `package.json` -> commit -> push -> create and push tag like `v0.1.1`.
 
 ---
 

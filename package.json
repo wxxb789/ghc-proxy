@@ -1,7 +1,7 @@
 {
   "name": "ghc-proxy",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "GitHub Copilot to OpenAI/Anthropic API proxy - Use Copilot with Claude Code, Cursor, and more",
   "author": "wxxb789 <wxxb789@outlook.com>",
   "homepage": "https://github.com/wxxb789/ghc-proxy",
