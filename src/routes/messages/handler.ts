@@ -34,10 +34,10 @@ export async function handleCompletion(c: Context) {
     JSON.stringify(openAIPayload),
   )
 
-  const { signal, cleanup } = createUpstreamSignal({
-    clientSignal: c.req.raw.signal,
-    timeoutMs: (state.config.upstreamTimeoutSeconds ?? 300) * 1000,
-  })
+  const { signal, cleanup } = createUpstreamSignal(
+    c.req.raw.signal,
+    (state.config.upstreamTimeoutSeconds ?? 300) * 1000,
+  )
 
   const copilotClient = new CopilotClient(state.auth, getClientConfig(state))
   const response = await copilotClient.createChatCompletions(openAIPayload, {

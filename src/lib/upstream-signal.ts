@@ -1,47 +1,19 @@
-interface UpstreamSignalOptions {
-  clientSignal?: AbortSignal
-  timeoutMs?: number
-}
-
-interface UpstreamSignalResult {
-  signal: AbortSignal
-  cleanup: () => void
-}
-
 const DEFAULT_TIMEOUT_MS = 300_000 // 5 minutes
 
-export function createUpstreamSignal(
-  options?: UpstreamSignalOptions,
-): UpstreamSignalResult {
-  const { clientSignal, timeoutMs = DEFAULT_TIMEOUT_MS } = options ?? {}
-
+export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => {
-    controller.abort()
-  }, timeoutMs)
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
-  let listenerAdded = false
-  let abortListener: (() => void) | undefined
-
-  // Only add listener if clientSignal exists and is not already aborted
+  const onAbort = () => controller.abort()
   if (clientSignal && !clientSignal.aborted) {
-    abortListener = () => {
-      controller.abort()
-    }
-    clientSignal.addEventListener('abort', abortListener)
-    listenerAdded = true
-  }
-
-  const cleanup = () => {
-    clearTimeout(timeout)
-
-    if (listenerAdded && clientSignal && abortListener) {
-      clientSignal.removeEventListener('abort', abortListener)
-    }
+    clientSignal.addEventListener('abort', onAbort)
   }
 
   return {
     signal: controller.signal,
-    cleanup,
+    cleanup: () => {
+      clearTimeout(timeout)
+      clientSignal?.removeEventListener('abort', onAbort)
+    },
   }
 }
