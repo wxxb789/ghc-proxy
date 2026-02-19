@@ -9,6 +9,7 @@ import { CopilotClient } from '~/clients'
 import { getClientConfig } from '~/lib/client-config'
 import { setModelMappingInfo } from '~/lib/request-logger'
 import { state } from '~/lib/state'
+import { createUpstreamSignal } from '~/lib/upstream-signal'
 import { parseAnthropicMessagesPayload } from '~/lib/validation'
 import { AnthropicTranslator } from '~/translator'
 
@@ -33,9 +34,14 @@ export async function handleCompletion(c: Context) {
     JSON.stringify(openAIPayload),
   )
 
+  const { signal, cleanup } = createUpstreamSignal({
+    clientSignal: c.req.raw.signal,
+    timeoutMs: (state.config.upstreamTimeoutSeconds ?? 300) * 1000,
+  })
+
   const copilotClient = new CopilotClient(state.auth, getClientConfig(state))
   const response = await copilotClient.createChatCompletions(openAIPayload, {
-    signal: c.req.raw.signal,
+    signal,
   })
 
   if (isNonStreaming(response)) {
@@ -48,6 +54,7 @@ export async function handleCompletion(c: Context) {
       'Translated Anthropic response:',
       JSON.stringify(anthropicResponse),
     )
+    cleanup()
     return c.json(anthropicResponse)
   }
 
@@ -92,6 +99,9 @@ export async function handleCompletion(c: Context) {
           data: JSON.stringify(event),
         })
       }
+    }
+    finally {
+      cleanup()
     }
   })
 }
