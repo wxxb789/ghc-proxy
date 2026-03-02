@@ -11,6 +11,7 @@ export interface RuntimeConfig {
   rateLimitSeconds?: number
   rateLimitWait: boolean
   showToken: boolean
+  upstreamTimeoutSeconds?: number
 }
 
 export interface CacheState {

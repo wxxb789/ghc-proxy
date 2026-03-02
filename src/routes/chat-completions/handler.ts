@@ -10,6 +10,7 @@ import { CopilotClient } from '~/clients'
 import { getClientConfig } from '~/lib/client-config'
 import { state } from '~/lib/state'
 import { getTokenCount } from '~/lib/tokenizer'
+import { createUpstreamSignal } from '~/lib/upstream-signal'
 import { isNullish } from '~/lib/utils'
 import { parseOpenAIChatPayload } from '~/lib/validation'
 
@@ -44,13 +45,19 @@ export async function handleCompletion(c: Context) {
     consola.debug('Set max_tokens to:', JSON.stringify(payload.max_tokens))
   }
 
+  const { signal, cleanup } = createUpstreamSignal(
+    c.req.raw.signal,
+    (state.config.upstreamTimeoutSeconds ?? 300) * 1000,
+  )
+
   const copilotClient = new CopilotClient(state.auth, getClientConfig(state))
   const response = await copilotClient.createChatCompletions(payload, {
-    signal: c.req.raw.signal,
+    signal,
   })
 
   if (isNonStreaming(response)) {
     consola.debug('Non-streaming response:', JSON.stringify(response))
+    cleanup()
     return c.json(response)
   }
 
@@ -63,7 +70,7 @@ export async function handleCompletion(c: Context) {
       }
     }
     finally {
-      // No cleanup needed without keepalive.
+      cleanup()
     }
   })
 }

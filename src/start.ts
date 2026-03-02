@@ -31,6 +31,7 @@ interface RunServerOptions {
   showToken: boolean
   proxyEnv: boolean
   idleTimeoutSeconds?: number
+  upstreamTimeoutSeconds?: number
 }
 
 async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
@@ -125,6 +126,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   state.config.rateLimitSeconds = options.rateLimit
   state.config.rateLimitWait = options.rateLimitWait
   state.config.showToken = options.showToken
+  state.config.upstreamTimeoutSeconds = options.upstreamTimeoutSeconds
 
   await ensurePaths()
   await readConfig()
@@ -233,6 +235,11 @@ export const start = defineCommand({
       default: '120',
       description: 'Bun server idle timeout in seconds',
     },
+    'upstream-timeout': {
+      type: 'string',
+      default: '300',
+      description: 'Upstream request timeout in seconds (0 to disable)',
+    },
   },
   run({ args }) {
     const rateLimitRaw = args['rate-limit']
@@ -255,6 +262,21 @@ export const start = defineCommand({
       idleTimeoutSeconds = undefined
     }
 
+    const upstreamTimeoutRaw = args['upstream-timeout']
+    let upstreamTimeoutSeconds
+      = upstreamTimeoutRaw === undefined
+        ? undefined
+        : Number.parseInt(upstreamTimeoutRaw, 10)
+    if (
+      upstreamTimeoutSeconds !== undefined
+      && (Number.isNaN(upstreamTimeoutSeconds) || upstreamTimeoutSeconds < 0)
+    ) {
+      consola.warn(
+        `Invalid --upstream-timeout value "${upstreamTimeoutRaw}". Falling back to default (300s).`,
+      )
+      upstreamTimeoutSeconds = undefined
+    }
+
     return runServer({
       port: Number.parseInt(args.port, 10),
       verbose: args.verbose,
@@ -267,6 +289,7 @@ export const start = defineCommand({
       showToken: args['show-token'],
       proxyEnv: args['proxy-env'],
       idleTimeoutSeconds,
+      upstreamTimeoutSeconds,
     })
   },
 })

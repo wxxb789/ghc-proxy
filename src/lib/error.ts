@@ -36,6 +36,10 @@ export async function forwardError(c: Context, error: unknown) {
     )
   }
 
+  if (error instanceof Error && error.name === 'AbortError') {
+    return c.json({ error: { message: 'Upstream request was aborted', type: 'timeout_error' } }, 504)
+  }
+
   return c.json(
     {
       error: {
