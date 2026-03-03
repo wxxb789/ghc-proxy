@@ -9,6 +9,12 @@ A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic
 > [!WARNING]
 > Reverse-engineered, unofficial, may break at any time. Excessive use can trigger GitHub abuse detection. **Use at your own risk.**
 
+**TL;DR** — Install [Bun](https://bun.com/docs/installation), then run:
+
+```bash
+bunx ghc-proxy@latest start --wait
+```
+
 ## Prerequisites
 
 Before you start, make sure you have:
