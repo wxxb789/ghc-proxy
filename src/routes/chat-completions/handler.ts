@@ -1,17 +1,14 @@
 import type { Context } from 'hono'
 
 import type { SSEMessage } from 'hono/streaming'
-import type { ChatCompletionResponse } from '~/types'
 
 import consola from 'consola'
 import { streamSSE } from 'hono/streaming'
 
-import { CopilotClient } from '~/clients'
-import { getClientConfig } from '~/lib/client-config'
-import { state } from '~/lib/state'
+import { CopilotClient, isNonStreamingResponse } from '~/clients'
+import { getClientConfig, state } from '~/lib/state'
 import { getTokenCount } from '~/lib/tokenizer'
 import { createUpstreamSignal } from '~/lib/upstream-signal'
-import { isNullish } from '~/lib/utils'
 import { parseOpenAIChatPayload } from '~/lib/validation'
 
 export async function handleCompletion(c: Context) {
@@ -37,7 +34,7 @@ export async function handleCompletion(c: Context) {
     consola.warn('Failed to calculate token count:', error)
   }
 
-  if (isNullish(payload.max_tokens)) {
+  if (payload.max_tokens == null) {
     payload = {
       ...payload,
       max_tokens: selectedModel?.capabilities.limits.max_output_tokens,
@@ -47,15 +44,17 @@ export async function handleCompletion(c: Context) {
 
   const { signal, cleanup } = createUpstreamSignal(
     c.req.raw.signal,
-    (state.config.upstreamTimeoutSeconds ?? 300) * 1000,
+    state.config.upstreamTimeoutSeconds !== undefined
+      ? state.config.upstreamTimeoutSeconds * 1000
+      : undefined,
   )
 
-  const copilotClient = new CopilotClient(state.auth, getClientConfig(state))
+  const copilotClient = new CopilotClient(state.auth, getClientConfig())
   const response = await copilotClient.createChatCompletions(payload, {
     signal,
   })
 
-  if (isNonStreaming(response)) {
+  if (isNonStreamingResponse(response)) {
     consola.debug('Non-streaming response:', JSON.stringify(response))
     cleanup()
     return c.json(response)
@@ -73,8 +72,4 @@ export async function handleCompletion(c: Context) {
       cleanup()
     }
   })
-}
-
-function isNonStreaming(response: Awaited<ReturnType<CopilotClient['createChatCompletions']>>): response is ChatCompletionResponse {
-  return Object.hasOwn(response, 'choices')
 }

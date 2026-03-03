@@ -26,16 +26,32 @@ interface Encoder {
 // Cache loaded encoders to avoid repeated imports
 const encodingCache = new Map<string, Encoder>()
 
+// Token counting constants
+const TOKENS_PER_MESSAGE = 3
+const TOKENS_PER_NAME = 1
+const REPLY_PRIMING_TOKENS = 3
+
+// Model-specific constants for tool token calculation
+const BASE_CONSTANTS = {
+  propertyInitOverhead: 3,
+  propertyKeyOverhead: 3,
+  enumOverhead: -3,
+  enumItemCost: 3,
+  functionEndOverhead: 12,
+}
+
+type ModelConstants = typeof BASE_CONSTANTS & { functionInitOverhead: number }
+
 /**
  * Calculate tokens for tool calls
  */
-function calculateToolCallsTokens(toolCalls: Array<ToolCall>, encoder: Encoder, constants: ReturnType<typeof getModelConstants>): number {
+function calculateToolCallsTokens(toolCalls: Array<ToolCall>, encoder: Encoder, constants: ModelConstants): number {
   let tokens = 0
   for (const toolCall of toolCalls) {
-    tokens += constants.funcInit
+    tokens += constants.functionInitOverhead
     tokens += encoder.encode(JSON.stringify(toolCall)).length
   }
-  tokens += constants.funcEnd
+  tokens += constants.functionEndOverhead
   return tokens
 }
 
@@ -58,16 +74,14 @@ function calculateContentPartsTokens(contentParts: Array<ContentPart>, encoder: 
 /**
  * Calculate tokens for a single message
  */
-function calculateMessageTokens(message: Message, encoder: Encoder, constants: ReturnType<typeof getModelConstants>): number {
-  const tokensPerMessage = 3
-  const tokensPerName = 1
-  let tokens = tokensPerMessage
+function calculateMessageTokens(message: Message, encoder: Encoder, constants: ModelConstants): number {
+  let tokens = TOKENS_PER_MESSAGE
   for (const [key, value] of Object.entries(message)) {
     if (typeof value === 'string') {
       tokens += encoder.encode(value).length
     }
     if (key === 'name') {
-      tokens += tokensPerName
+      tokens += TOKENS_PER_NAME
     }
     if (key === 'tool_calls') {
       tokens += calculateToolCallsTokens(
@@ -89,7 +103,7 @@ function calculateMessageTokens(message: Message, encoder: Encoder, constants: R
 /**
  * Calculate tokens using custom algorithm
  */
-function calculateTokens(messages: Array<Message>, encoder: Encoder, constants: ReturnType<typeof getModelConstants>): number {
+function calculateTokens(messages: Array<Message>, encoder: Encoder, constants: ModelConstants): number {
   if (messages.length === 0) {
     return 0
   }
@@ -98,20 +112,17 @@ function calculateTokens(messages: Array<Message>, encoder: Encoder, constants: 
     numTokens += calculateMessageTokens(message, encoder, constants)
   }
   // every reply is primed with <|start|>assistant<|message|>
-  numTokens += 3
+  numTokens += REPLY_PRIMING_TOKENS
   return numTokens
 }
 
 /**
  * Get the corresponding encoder module based on encoding type
  */
-async function getEncodeChatFunction(encoding: string): Promise<Encoder> {
-  if (encodingCache.has(encoding)) {
-    const cached = encodingCache.get(encoding)
-    if (cached) {
-      return cached
-    }
-  }
+async function getEncoder(encoding: string): Promise<Encoder> {
+  const cached = encodingCache.get(encoding)
+  if (cached)
+    return cached
 
   const supportedEncoding = encoding as SupportedEncoding
   if (!(supportedEncoding in ENCODING_MAP)) {
@@ -135,24 +146,9 @@ export function getTokenizerFromModel(model: Model): string {
 /**
  * Get model-specific constants for token calculation
  */
-function getModelConstants(model: Model) {
-  return model.id === 'gpt-3.5-turbo' || model.id === 'gpt-4'
-    ? {
-        funcInit: 10,
-        propInit: 3,
-        propKey: 3,
-        enumInit: -3,
-        enumItem: 3,
-        funcEnd: 12,
-      }
-    : {
-        funcInit: 7,
-        propInit: 3,
-        propKey: 3,
-        enumInit: -3,
-        enumItem: 3,
-        funcEnd: 12,
-      }
+function getModelConstants(model: Model): ModelConstants {
+  const isLegacy = model.id === 'gpt-3.5-turbo' || model.id === 'gpt-4'
+  return { ...BASE_CONSTANTS, functionInitOverhead: isLegacy ? 10 : 7 }
 }
 
 /**
@@ -160,10 +156,10 @@ function getModelConstants(model: Model) {
  */
 function calculateParameterTokens(key: string, prop: unknown, context: {
   encoder: Encoder
-  constants: ReturnType<typeof getModelConstants>
+  constants: ModelConstants
 }): number {
   const { encoder, constants } = context
-  let tokens = constants.propKey
+  let tokens = constants.propertyKeyOverhead
 
   // Early return if prop is not an object
   if (typeof prop !== 'object' || prop === null) {
@@ -184,9 +180,9 @@ function calculateParameterTokens(key: string, prop: unknown, context: {
 
   // Handle enum values
   if (param.enum && Array.isArray(param.enum)) {
-    tokens += constants.enumInit
+    tokens += constants.enumOverhead
     for (const item of param.enum) {
-      tokens += constants.enumItem
+      tokens += constants.enumItemCost
       tokens += encoder.encode(String(item)).length
     }
   }
@@ -221,7 +217,7 @@ function calculateParameterTokens(key: string, prop: unknown, context: {
 /**
  * Calculate tokens for function parameters
  */
-function calculateParametersTokens(parameters: unknown, encoder: Encoder, constants: ReturnType<typeof getModelConstants>): number {
+function calculateParametersTokens(parameters: unknown, encoder: Encoder, constants: ModelConstants): number {
   if (!parameters || typeof parameters !== 'object') {
     return 0
   }
@@ -233,7 +229,7 @@ function calculateParametersTokens(parameters: unknown, encoder: Encoder, consta
     if (key === 'properties') {
       const properties = value as Record<string, unknown>
       if (Object.keys(properties).length > 0) {
-        tokens += constants.propInit
+        tokens += constants.propertyInitOverhead
         for (const propKey of Object.keys(properties)) {
           tokens += calculateParameterTokens(propKey, properties[propKey], {
             encoder,
@@ -255,15 +251,15 @@ function calculateParametersTokens(parameters: unknown, encoder: Encoder, consta
 /**
  * Calculate tokens for a single tool
  */
-function calculateToolTokens(tool: Tool, encoder: Encoder, constants: ReturnType<typeof getModelConstants>): number {
-  let tokens = constants.funcInit
+function calculateToolTokens(tool: Tool, encoder: Encoder, constants: ModelConstants): number {
+  let tokens = constants.functionInitOverhead
   const func = tool.function
-  const fName = func.name
-  let fDesc = func.description || ''
-  if (fDesc.endsWith('.')) {
-    fDesc = fDesc.slice(0, -1)
+  const functionName = func.name
+  let functionDescription = func.description || ''
+  if (functionDescription.endsWith('.')) {
+    functionDescription = functionDescription.slice(0, -1)
   }
-  const line = `${fName}:${fDesc}`
+  const line = `${functionName}:${functionDescription}`
   tokens += encoder.encode(line).length
   if (
     typeof func.parameters === 'object'
@@ -277,13 +273,13 @@ function calculateToolTokens(tool: Tool, encoder: Encoder, constants: ReturnType
 /**
  * Calculate token count for tools based on model
  */
-export function numTokensForTools(tools: Array<Tool>, encoder: Encoder, constants: ReturnType<typeof getModelConstants>): number {
-  let funcTokenCount = 0
+export function numTokensForTools(tools: Array<Tool>, encoder: Encoder, constants: ModelConstants): number {
+  let toolTokenCount = 0
   for (const tool of tools) {
-    funcTokenCount += calculateToolTokens(tool, encoder, constants)
+    toolTokenCount += calculateToolTokens(tool, encoder, constants)
   }
-  funcTokenCount += constants.funcEnd
-  return funcTokenCount
+  toolTokenCount += constants.functionEndOverhead
+  return toolTokenCount
 }
 
 /**
@@ -294,13 +290,12 @@ export async function getTokenCount(payload: ChatCompletionsPayload, model: Mode
   const tokenizer = getTokenizerFromModel(model)
 
   // Get corresponding encoder module
-  const encoder = await getEncodeChatFunction(tokenizer)
+  const encoder = await getEncoder(tokenizer)
 
-  const simplifiedMessages = payload.messages
-  const inputMessages = simplifiedMessages.filter(
+  const inputMessages = payload.messages.filter(
     msg => msg.role !== 'assistant',
   )
-  const outputMessages = simplifiedMessages.filter(
+  const outputMessages = payload.messages.filter(
     msg => msg.role === 'assistant',
   )
 

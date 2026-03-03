@@ -27,7 +27,7 @@ import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { state } from '~/lib/state'
 
 import { AnthropicStreamTranslator } from './anthropic-stream-translator'
-import { mapOpenAIStopReasonToAnthropic } from './shared'
+import { mapOpenAIStopReasonToAnthropic, mapOpenAIUsageToAnthropic } from './shared'
 
 export class AnthropicTranslator {
   toOpenAI(payload: AnthropicMessagesPayload): ChatCompletionsPayload {
@@ -83,17 +83,7 @@ export class AnthropicTranslator {
       content: [...allTextBlocks, ...allToolUseBlocks],
       stop_reason: mapOpenAIStopReasonToAnthropic(stopReason),
       stop_sequence: null,
-      usage: {
-        input_tokens:
-          (response.usage?.prompt_tokens ?? 0)
-          - (response.usage?.prompt_tokens_details?.cached_tokens ?? 0),
-        output_tokens: response.usage?.completion_tokens ?? 0,
-        ...(response.usage?.prompt_tokens_details?.cached_tokens
-          !== undefined && {
-          cache_read_input_tokens:
-            response.usage.prompt_tokens_details.cached_tokens,
-        }),
-      },
+      usage: mapOpenAIUsageToAnthropic(response.usage),
     }
   }
 

@@ -2,7 +2,7 @@ import type { AnthropicStreamEventData, AnthropicStreamState } from './types'
 
 import type { ChatCompletionChunk } from '~/types'
 
-import { mapOpenAIStopReasonToAnthropic } from './shared'
+import { mapOpenAIStopReasonToAnthropic, mapOpenAIUsageToAnthropic } from './shared'
 
 export class AnthropicStreamTranslator {
   private state: AnthropicStreamState
@@ -96,15 +96,8 @@ export class AnthropicStreamTranslator {
         stop_reason: null,
         stop_sequence: null,
         usage: {
-          input_tokens:
-            (chunk.usage?.prompt_tokens ?? 0)
-            - (chunk.usage?.prompt_tokens_details?.cached_tokens ?? 0),
+          ...mapOpenAIUsageToAnthropic(chunk.usage),
           output_tokens: 0,
-          ...(chunk.usage?.prompt_tokens_details?.cached_tokens
-            !== undefined && {
-            cache_read_input_tokens:
-              chunk.usage.prompt_tokens_details.cached_tokens,
-          }),
         },
       },
     })
@@ -296,17 +289,7 @@ export class AnthropicStreamTranslator {
           stop_reason: mapOpenAIStopReasonToAnthropic(finishReason),
           stop_sequence: null,
         },
-        usage: {
-          input_tokens:
-            (chunk.usage?.prompt_tokens ?? 0)
-            - (chunk.usage?.prompt_tokens_details?.cached_tokens ?? 0),
-          output_tokens: chunk.usage?.completion_tokens ?? 0,
-          ...(chunk.usage?.prompt_tokens_details?.cached_tokens
-            !== undefined && {
-            cache_read_input_tokens:
-              chunk.usage.prompt_tokens_details.cached_tokens,
-          }),
-        },
+        usage: mapOpenAIUsageToAnthropic(chunk.usage),
       },
       {
         type: 'message_stop',

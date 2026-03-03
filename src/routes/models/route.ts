@@ -1,16 +1,14 @@
 import { Hono } from 'hono'
 
 import { CopilotClient } from '~/clients'
-import { getClientConfig } from '~/lib/client-config'
-import { state } from '~/lib/state'
-import { cacheModels } from '~/lib/utils'
+import { cacheModels, getClientConfig, state } from '~/lib/state'
 
 export const modelRoutes = new Hono()
 
 modelRoutes.get('/', async (c) => {
   if (!state.cache.models) {
     // This should be handled by startup logic, but as a fallback.
-    const copilotClient = new CopilotClient(state.auth, getClientConfig(state))
+    const copilotClient = new CopilotClient(state.auth, getClientConfig())
     await cacheModels(copilotClient)
   }
 

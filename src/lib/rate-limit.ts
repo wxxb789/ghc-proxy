@@ -3,7 +3,7 @@ import type { AppState } from './state'
 import consola from 'consola'
 
 import { HTTPError } from './error'
-import { sleep } from './utils'
+import { sleep } from './sleep'
 
 export async function checkRateLimit(state: AppState) {
   if (state.config.rateLimitSeconds === undefined)
