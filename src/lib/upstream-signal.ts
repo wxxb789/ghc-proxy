@@ -2,7 +2,9 @@ const DEFAULT_TIMEOUT_MS = 300_000 // 5 minutes
 
 export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  const timeout = timeoutMs > 0
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : undefined
 
   const onAbort = () => controller.abort()
   if (clientSignal && !clientSignal.aborted) {
@@ -12,7 +14,8 @@ export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEF
   return {
     signal: controller.signal,
     cleanup: () => {
-      clearTimeout(timeout)
+      if (timeout)
+        clearTimeout(timeout)
       clientSignal?.removeEventListener('abort', onAbort)
     },
   }

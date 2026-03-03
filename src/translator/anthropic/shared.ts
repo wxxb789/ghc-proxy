@@ -14,3 +14,23 @@ export function mapOpenAIStopReasonToAnthropic(
   } as const
   return stopReasonMap[finishReason]
 }
+
+interface OpenAIUsage {
+  prompt_tokens?: number
+  completion_tokens?: number
+  prompt_tokens_details?: {
+    cached_tokens?: number
+  }
+}
+
+export function mapOpenAIUsageToAnthropic(usage?: OpenAIUsage) {
+  return {
+    input_tokens:
+      (usage?.prompt_tokens ?? 0)
+      - (usage?.prompt_tokens_details?.cached_tokens ?? 0),
+    output_tokens: usage?.completion_tokens ?? 0,
+    ...(usage?.prompt_tokens_details?.cached_tokens !== undefined && {
+      cache_read_input_tokens: usage.prompt_tokens_details.cached_tokens,
+    }),
+  }
+}

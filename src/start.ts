@@ -1,22 +1,21 @@
 #!/usr/bin/env node
 
 import type { ServerHandler } from 'srvx'
+import type { RuntimeConfig } from './lib/state'
 import { defineCommand } from 'citty'
 import clipboard from 'clipboardy'
 import consola from 'consola'
+
 import { serve } from 'srvx'
 import invariant from 'tiny-invariant'
 
 import { CopilotClient } from '~/clients'
-
-import { getClientConfig } from './lib/client-config'
 import { readConfig } from './lib/config'
 import { ensurePaths } from './lib/paths'
 import { initProxyFromEnv } from './lib/proxy'
 import { generateEnvScript } from './lib/shell'
-import { state } from './lib/state'
+import { cacheModels, cacheVSCodeVersion, getClientConfig, state } from './lib/state'
 import { setupCopilotToken, setupGitHubToken } from './lib/token'
-import { cacheModels, cacheVSCodeVersion } from './lib/utils'
 import { server } from './server'
 
 interface RunServerOptions {
@@ -88,7 +87,7 @@ async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
 }
 
 export async function runServer(options: RunServerOptions): Promise<void> {
-  const accountType: ReturnType<typeof getClientConfig>['accountType']
+  const accountType: RuntimeConfig['accountType']
     = (
       options.accountType === 'individual'
       || options.accountType === 'business'
@@ -138,11 +137,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
 
   await setupCopilotToken()
 
-  const clientConfig: ReturnType<typeof getClientConfig> = {
-    ...getClientConfig(state),
-    accountType,
-  }
-  const copilotClient = new CopilotClient(state.auth, clientConfig)
+  const copilotClient = new CopilotClient(state.auth, getClientConfig())
   await cacheModels(copilotClient)
 
   consola.info(
@@ -164,6 +159,17 @@ export async function runServer(options: RunServerOptions): Promise<void> {
         ? undefined
         : { idleTimeout: options.idleTimeoutSeconds },
   })
+}
+
+function parseIntArg(raw: string | undefined, name: string, fallbackMsg: string): number | undefined {
+  if (raw === undefined)
+    return undefined
+  const n = Number.parseInt(raw, 10)
+  if (Number.isNaN(n) || n < 0) {
+    consola.warn(`Invalid --${name} value "${raw}". ${fallbackMsg}`)
+    return undefined
+  }
+  return n
 }
 
 export const start = defineCommand({
@@ -242,40 +248,9 @@ export const start = defineCommand({
     },
   },
   run({ args }) {
-    const rateLimitRaw = args['rate-limit']
-    const rateLimit
-      = rateLimitRaw === undefined ? undefined : Number.parseInt(rateLimitRaw, 10)
-    const idleTimeoutRaw = args['idle-timeout']
-    let idleTimeoutSeconds
-      = idleTimeoutRaw === undefined
-        ? undefined
-        : (
-            Number.parseInt(idleTimeoutRaw, 10)
-          )
-    if (
-      idleTimeoutSeconds !== undefined
-      && (Number.isNaN(idleTimeoutSeconds) || idleTimeoutSeconds < 0)
-    ) {
-      consola.warn(
-        `Invalid --idle-timeout value "${idleTimeoutRaw}". Falling back to Bun default.`,
-      )
-      idleTimeoutSeconds = undefined
-    }
-
-    const upstreamTimeoutRaw = args['upstream-timeout']
-    let upstreamTimeoutSeconds
-      = upstreamTimeoutRaw === undefined
-        ? undefined
-        : Number.parseInt(upstreamTimeoutRaw, 10)
-    if (
-      upstreamTimeoutSeconds !== undefined
-      && (Number.isNaN(upstreamTimeoutSeconds) || upstreamTimeoutSeconds < 0)
-    ) {
-      consola.warn(
-        `Invalid --upstream-timeout value "${upstreamTimeoutRaw}". Falling back to default (300s).`,
-      )
-      upstreamTimeoutSeconds = undefined
-    }
+    const rateLimit = parseIntArg(args['rate-limit'], 'rate-limit', 'Rate limiting disabled.')
+    const idleTimeoutSeconds = parseIntArg(args['idle-timeout'], 'idle-timeout', 'Falling back to Bun default.')
+    const upstreamTimeoutSeconds = parseIntArg(args['upstream-timeout'], 'upstream-timeout', 'Falling back to default (300s).')
 
     return runServer({
       port: Number.parseInt(args.port, 10),

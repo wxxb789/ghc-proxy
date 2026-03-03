@@ -1,14 +1,13 @@
 import type { Context } from 'hono'
 
-import type { ChatCompletionChunk, ChatCompletionResponse } from '~/types'
+import type { ChatCompletionChunk } from '~/types'
 import consola from 'consola'
 
 import { streamSSE } from 'hono/streaming'
 
-import { CopilotClient } from '~/clients'
-import { getClientConfig } from '~/lib/client-config'
+import { CopilotClient, isNonStreamingResponse } from '~/clients'
 import { setModelMappingInfo } from '~/lib/request-logger'
-import { state } from '~/lib/state'
+import { getClientConfig, state } from '~/lib/state'
 import { createUpstreamSignal } from '~/lib/upstream-signal'
 import { parseAnthropicMessagesPayload } from '~/lib/validation'
 import { AnthropicTranslator } from '~/translator'
@@ -36,18 +35,20 @@ export async function handleCompletion(c: Context) {
 
   const { signal, cleanup } = createUpstreamSignal(
     c.req.raw.signal,
-    (state.config.upstreamTimeoutSeconds ?? 300) * 1000,
+    state.config.upstreamTimeoutSeconds !== undefined
+      ? state.config.upstreamTimeoutSeconds * 1000
+      : undefined,
   )
 
-  const copilotClient = new CopilotClient(state.auth, getClientConfig(state))
+  const copilotClient = new CopilotClient(state.auth, getClientConfig())
   const response = await copilotClient.createChatCompletions(openAIPayload, {
     signal,
   })
 
-  if (isNonStreaming(response)) {
+  if (isNonStreamingResponse(response)) {
     consola.debug(
-      'Non-streaming response from Copilot:',
-      JSON.stringify(response).slice(-400),
+      'Non-streaming response from Copilot (full):',
+      JSON.stringify(response, null, 2),
     )
     const anthropicResponse = translator.fromOpenAI(response)
     consola.debug(
@@ -104,8 +105,4 @@ export async function handleCompletion(c: Context) {
       cleanup()
     }
   })
-}
-
-function isNonStreaming(response: Awaited<ReturnType<CopilotClient['createChatCompletions']>>): response is ChatCompletionResponse {
-  return Object.hasOwn(response, 'choices')
 }

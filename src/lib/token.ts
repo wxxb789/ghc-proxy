@@ -2,11 +2,9 @@ import consola from 'consola'
 
 import { GitHubClient } from '~/clients'
 
-import { getClientConfig } from './client-config'
 import { getCachedConfig, writeConfigField } from './config'
 import { HTTPError } from './error'
-import { state } from './state'
-import { cacheVSCodeVersion } from './utils'
+import { cacheVSCodeVersion, getClientConfig, state } from './state'
 
 async function writeGithubToken(token: string): Promise<void> {
   await writeConfigField('githubToken', token)
@@ -24,7 +22,8 @@ export async function setupCopilotToken() {
     consola.info('Copilot token:', token)
   }
 
-  const refreshInterval = (refresh_in - 60) * 1000
+  const REFRESH_BUFFER_SECONDS = 60
+  const refreshInterval = (refresh_in - REFRESH_BUFFER_SECONDS) * 1000
   const refreshCopilotToken = async () => {
     consola.debug('Refreshing Copilot token')
     try {
@@ -120,7 +119,7 @@ async function logUser() {
 }
 
 function createGitHubClient() {
-  return new GitHubClient(state.auth, getClientConfig(state))
+  return new GitHubClient(state.auth, getClientConfig())
 }
 
 async function ensureVSCodeVersion() {

@@ -3,7 +3,7 @@ import type { ChatCompletionsPayload } from '~/types'
 import { expect, mock, test } from 'bun:test'
 
 import { CopilotClient } from '../src/clients/copilot-client'
-import { state } from '../src/lib/state'
+import { getClientConfig, state } from '../src/lib/state'
 
 // Mock state
 state.auth.copilotToken = 'test-token'
@@ -30,10 +30,7 @@ test('sets X-Initiator to agent if tool/assistant present', async () => {
   }
   const client = new CopilotClient(
     state.auth,
-    {
-      accountType: state.config.accountType,
-      vsCodeVersion: state.cache.vsCodeVersion,
-    },
+    getClientConfig(),
     { fetch: fetchMock as unknown as typeof fetch },
   )
   await client.createChatCompletions(payload)
@@ -54,10 +51,7 @@ test('sets X-Initiator to user if only user present', async () => {
   }
   const client = new CopilotClient(
     state.auth,
-    {
-      accountType: state.config.accountType,
-      vsCodeVersion: state.cache.vsCodeVersion,
-    },
+    getClientConfig(),
     { fetch: fetchMock as unknown as typeof fetch },
   )
   await client.createChatCompletions(payload)

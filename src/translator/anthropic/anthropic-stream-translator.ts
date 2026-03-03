@@ -2,7 +2,7 @@ import type { AnthropicStreamEventData, AnthropicStreamState } from './types'
 
 import type { ChatCompletionChunk } from '~/types'
 
-import { mapOpenAIStopReasonToAnthropic } from './shared'
+import { mapOpenAIStopReasonToAnthropic, mapOpenAIUsageToAnthropic } from './shared'
 
 export class AnthropicStreamTranslator {
   private state: AnthropicStreamState
@@ -12,6 +12,7 @@ export class AnthropicStreamTranslator {
       messageStartSent: false,
       contentBlockIndex: 0,
       contentBlockOpen: false,
+      thinkingBlockOpen: false,
       toolCalls: {},
     }
   }
@@ -26,6 +27,7 @@ export class AnthropicStreamTranslator {
     const { delta } = choice
 
     this.appendMessageStart(events, chunk)
+    this.appendThinkingDelta(events, delta.reasoning_text)
     this.appendContentDelta(events, delta.content)
     this.appendToolCalls(events, delta.tool_calls)
     this.appendFinish(events, chunk, choice.finish_reason)
@@ -94,19 +96,54 @@ export class AnthropicStreamTranslator {
         stop_reason: null,
         stop_sequence: null,
         usage: {
-          input_tokens:
-            (chunk.usage?.prompt_tokens ?? 0)
-            - (chunk.usage?.prompt_tokens_details?.cached_tokens ?? 0),
+          ...mapOpenAIUsageToAnthropic(chunk.usage),
           output_tokens: 0,
-          ...(chunk.usage?.prompt_tokens_details?.cached_tokens
-            !== undefined && {
-            cache_read_input_tokens:
-              chunk.usage.prompt_tokens_details.cached_tokens,
-          }),
         },
       },
     })
     this.state.messageStartSent = true
+  }
+
+  private appendThinkingDelta(
+    events: Array<AnthropicStreamEventData>,
+    reasoningText: string | null | undefined,
+  ) {
+    if (!reasoningText) {
+      return
+    }
+
+    // Defensively close a non-thinking content block if one is open
+    if (this.state.contentBlockOpen && !this.state.thinkingBlockOpen) {
+      events.push({
+        type: 'content_block_stop',
+        index: this.state.contentBlockIndex,
+      })
+      this.state.contentBlockIndex++
+      this.state.contentBlockOpen = false
+    }
+
+    // Open a thinking block if not already open
+    if (!this.state.thinkingBlockOpen) {
+      events.push({
+        type: 'content_block_start',
+        index: this.state.contentBlockIndex,
+        content_block: {
+          type: 'thinking',
+          thinking: '',
+        },
+      })
+      this.state.contentBlockOpen = true
+      this.state.thinkingBlockOpen = true
+    }
+
+    events.push({
+      type: 'content_block_delta',
+      index: this.state.contentBlockIndex,
+      delta: {
+        type: 'thinking_delta',
+        thinking: reasoningText,
+      },
+    })
   }
 
   private appendContentDelta(
@@ -115,6 +152,17 @@ export class AnthropicStreamTranslator {
   ) {
     if (!content) {
       return
+    }
+
+    // Close thinking block when transitioning to text content
+    if (this.state.thinkingBlockOpen) {
+      events.push({
+        type: 'content_block_stop',
+        index: this.state.contentBlockIndex,
+      })
+      this.state.contentBlockIndex++
+      this.state.contentBlockOpen = false
+      this.state.thinkingBlockOpen = false
     }
 
     if (this.isToolBlockOpen()) {
@@ -175,6 +223,7 @@ export class AnthropicStreamTranslator {
           })
           this.state.contentBlockIndex++
           this.state.contentBlockOpen = false
+          this.state.thinkingBlockOpen = false
         }
 
         const anthropicBlockIndex = this.state.contentBlockIndex
@@ -230,6 +279,7 @@ export class AnthropicStreamTranslator {
         index: this.state.contentBlockIndex,
       })
       this.state.contentBlockOpen = false
+      this.state.thinkingBlockOpen = false
     }
 
     events.push(
@@ -239,17 +289,7 @@ export class AnthropicStreamTranslator {
           stop_reason: mapOpenAIStopReasonToAnthropic(finishReason),
           stop_sequence: null,
         },
-        usage: {
-          input_tokens:
-            (chunk.usage?.prompt_tokens ?? 0)
-            - (chunk.usage?.prompt_tokens_details?.cached_tokens ?? 0),
-          output_tokens: chunk.usage?.completion_tokens ?? 0,
-          ...(chunk.usage?.prompt_tokens_details?.cached_tokens
-            !== undefined && {
-            cache_read_input_tokens:
-              chunk.usage.prompt_tokens_details.cached_tokens,
-          }),
-        },
+        usage: mapOpenAIUsageToAnthropic(chunk.usage),
       },
       {
         type: 'message_stop',

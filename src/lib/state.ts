@@ -1,4 +1,9 @@
+import type { ClientConfig } from '~/clients'
 import type { ModelsResponse } from '~/types'
+
+import consola from 'consola'
+
+import { CopilotClient, getVSCodeVersion } from '~/clients'
 
 export interface AuthState {
   githubToken?: string
@@ -40,4 +45,27 @@ export const state: AppState = {
   },
   cache: {},
   rateLimit: {},
+}
+
+export function getClientConfig(): ClientConfig {
+  return {
+    accountType: state.config.accountType,
+    vsCodeVersion: state.cache.vsCodeVersion,
+  }
+}
+
+export async function cacheModels(client?: CopilotClient): Promise<void> {
+  const copilotClient
+    = client ?? new CopilotClient(state.auth, getClientConfig())
+
+  const models = await copilotClient.getModels()
+
+  state.cache.models = models
+}
+
+export async function cacheVSCodeVersion() {
+  const response = await getVSCodeVersion()
+  state.cache.vsCodeVersion = response
+
+  consola.info(`Using VSCode version: ${response}`)
 }

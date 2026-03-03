@@ -6,12 +6,10 @@ import consola from 'consola'
 
 import { GitHubClient } from '~/clients'
 
-import { getClientConfig } from './lib/client-config'
 import { readConfig } from './lib/config'
 import { ensurePaths } from './lib/paths'
-import { state } from './lib/state'
+import { cacheVSCodeVersion, getClientConfig, state } from './lib/state'
 import { setupGitHubToken } from './lib/token'
-import { cacheVSCodeVersion } from './lib/utils'
 
 export const checkUsage = defineCommand({
   meta: {
@@ -24,7 +22,7 @@ export const checkUsage = defineCommand({
     await cacheVSCodeVersion()
     await setupGitHubToken()
     try {
-      const githubClient = new GitHubClient(state.auth, getClientConfig(state))
+      const githubClient = new GitHubClient(state.auth, getClientConfig())
       const usage = await githubClient.getCopilotUsage()
       const premium = usage.quota_snapshots.premium_interactions
       const premiumTotal = premium.entitlement

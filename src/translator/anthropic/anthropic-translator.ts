@@ -27,10 +27,13 @@ import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { state } from '~/lib/state'
 
 import { AnthropicStreamTranslator } from './anthropic-stream-translator'
-import { mapOpenAIStopReasonToAnthropic } from './shared'
+import { mapOpenAIStopReasonToAnthropic, mapOpenAIUsageToAnthropic } from './shared'
 
 export class AnthropicTranslator {
   toOpenAI(payload: AnthropicMessagesPayload): ChatCompletionsPayload {
+    const thinkingParams = this.translateThinking(payload.thinking, payload.model)
+    const isThinkingActive = payload.thinking?.type === 'enabled' || payload.thinking?.type === 'adaptive'
+
     return {
       model: this.translateModelName(payload.model),
       messages: this.translateAnthropicMessagesToOpenAI(
@@ -40,13 +43,14 @@ export class AnthropicTranslator {
       max_tokens: payload.max_tokens,
       stop: payload.stop_sequences,
       stream: payload.stream,
-      temperature: payload.temperature,
-      top_p: payload.top_p,
+      temperature: isThinkingActive ? undefined : payload.temperature,
+      top_p: isThinkingActive ? undefined : payload.top_p,
       user: payload.metadata?.user_id,
       tools: this.translateAnthropicToolsToOpenAI(payload.tools),
       tool_choice: this.translateAnthropicToolChoiceToOpenAI(
         payload.tool_choice,
       ),
+      ...thinkingParams,
     }
   }
 
@@ -79,17 +83,7 @@ export class AnthropicTranslator {
       content: [...allTextBlocks, ...allToolUseBlocks],
       stop_reason: mapOpenAIStopReasonToAnthropic(stopReason),
       stop_sequence: null,
-      usage: {
-        input_tokens:
-          (response.usage?.prompt_tokens ?? 0)
-          - (response.usage?.prompt_tokens_details?.cached_tokens ?? 0),
-        output_tokens: response.usage?.completion_tokens ?? 0,
-        ...(response.usage?.prompt_tokens_details?.cached_tokens
-          !== undefined && {
-          cache_read_input_tokens:
-            response.usage.prompt_tokens_details.cached_tokens,
-        }),
-      },
+      usage: mapOpenAIUsageToAnthropic(response.usage),
     }
   }
 
@@ -104,6 +98,43 @@ export class AnthropicTranslator {
         : undefined
     const config = getModelFallbackConfig()
     return resolveModel(model, knownModelIds, config)
+  }
+
+  private translateThinking(
+    thinking: AnthropicMessagesPayload['thinking'],
+    model: string,
+  ): Pick<ChatCompletionsPayload, 'reasoning_effort' | 'thinking_budget'> {
+    if (!thinking || thinking.type === 'disabled') {
+      return {}
+    }
+
+    const isClaude = model.startsWith('claude')
+
+    if (thinking.type === 'adaptive') {
+      return {
+        reasoning_effort: 'medium',
+        ...(isClaude && { thinking_budget: 24000 }),
+      }
+    }
+
+    // type === 'enabled'
+    const budgetTokens = thinking.budget_tokens
+    const reasoningEffort = this.budgetToReasoningEffort(budgetTokens)
+
+    return {
+      reasoning_effort: reasoningEffort,
+      ...(isClaude && { thinking_budget: budgetTokens }),
+    }
+  }
+
+  private budgetToReasoningEffort(
+    budgetTokens: number,
+  ): 'low' | 'medium' | 'high' {
+    if (budgetTokens <= 8000)
+      return 'low'
+    if (budgetTokens <= 24000)
+      return 'medium'
+    return 'high'
   }
 
   private translateAnthropicMessagesToOpenAI(

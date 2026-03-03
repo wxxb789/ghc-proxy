@@ -18,7 +18,7 @@ import {
 } from '~/lib/api-config'
 import { HTTPError } from '~/lib/error'
 
-import { sleep } from '~/lib/utils'
+import { sleep } from '~/lib/sleep'
 
 export class GitHubClient {
   private auth: ClientAuth
@@ -82,10 +82,11 @@ export class GitHubClient {
   }
 
   async pollAccessToken(deviceCode: DeviceCodeResponse): Promise<string> {
+    const MAX_POLL_ATTEMPTS = 60 // ~5 minutes at 5s intervals
     const sleepDuration = (deviceCode.interval + 1) * 1000
     consola.debug(`Polling access token with interval of ${sleepDuration}ms`)
 
-    while (true) {
+    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
       const response = await this.fetchImpl(
         `${GITHUB_BASE_URL}/login/oauth/access_token`,
         {
@@ -114,6 +115,8 @@ export class GitHubClient {
 
       await sleep(sleepDuration)
     }
+
+    throw new Error('Device code authorization timed out')
   }
 
   async getGitHubUser(): Promise<GithubUserResponse> {

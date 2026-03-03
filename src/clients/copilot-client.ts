@@ -106,3 +106,9 @@ export class CopilotClient {
     return (await response.json()) as ModelsResponse
   }
 }
+
+export function isNonStreamingResponse(
+  response: Awaited<ReturnType<CopilotClient['createChatCompletions']>>,
+): response is ChatCompletionResponse {
+  return Object.hasOwn(response, 'choices')
+}
