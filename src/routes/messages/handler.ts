@@ -46,8 +46,8 @@ export async function handleCompletion(c: Context) {
 
   if (isNonStreaming(response)) {
     consola.debug(
-      'Non-streaming response from Copilot:',
-      JSON.stringify(response).slice(-400),
+      'Non-streaming response from Copilot (full):',
+      JSON.stringify(response, null, 2),
     )
     const anthropicResponse = translator.fromOpenAI(response)
     consola.debug(

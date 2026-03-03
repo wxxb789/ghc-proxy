@@ -50,6 +50,8 @@ const chatCompletionRequestSchema = z.object({
   tools: z.array(z.any()).optional(),
   tool_choice: z.union([z.string(), z.object({})]).optional(),
   user: z.string().optional(),
+  reasoning_effort: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+  thinking_budget: z.number().optional(),
 })
 
 /**
@@ -201,6 +203,159 @@ describe('Anthropic to OpenAI translation logic', () => {
     )
     expect(assistantMessage?.tool_calls).toHaveLength(1)
     expect(assistantMessage?.tool_calls?.[0].function.name).toBe('get_weather')
+  })
+})
+
+describe('Thinking parameter translation', () => {
+  test('Claude model + thinking enabled with low budget → reasoning_effort: low + thinking_budget', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      thinking: { type: 'enabled', budget_tokens: 5000 },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.reasoning_effort).toBe('low')
+    expect(result.thinking_budget).toBe(5000)
+  })
+
+  test('Claude model + thinking enabled with medium budget → reasoning_effort: medium + thinking_budget', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      thinking: { type: 'enabled', budget_tokens: 16000 },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.reasoning_effort).toBe('medium')
+    expect(result.thinking_budget).toBe(16000)
+  })
+
+  test('Claude model + thinking enabled with high budget → reasoning_effort: high + thinking_budget', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      thinking: { type: 'enabled', budget_tokens: 30000 },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.reasoning_effort).toBe('high')
+    expect(result.thinking_budget).toBe(30000)
+  })
+
+  test('Claude model + thinking adaptive → reasoning_effort: medium + thinking_budget: 24000', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      thinking: { type: 'adaptive' },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.reasoning_effort).toBe('medium')
+    expect(result.thinking_budget).toBe(24000)
+  })
+
+  test('Claude model + thinking disabled → no reasoning_effort, no thinking_budget', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      thinking: { type: 'disabled' },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.reasoning_effort).toBeUndefined()
+    expect(result.thinking_budget).toBeUndefined()
+  })
+
+  test('Non-Claude model + thinking enabled → reasoning_effort only, no thinking_budget', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      thinking: { type: 'enabled', budget_tokens: 16000 },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.reasoning_effort).toBe('medium')
+    expect(result.thinking_budget).toBeUndefined()
+  })
+
+  test('No thinking parameter → no reasoning_effort, no thinking_budget', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.reasoning_effort).toBeUndefined()
+    expect(result.thinking_budget).toBeUndefined()
+  })
+
+  test('Thinking enabled → temperature and top_p are dropped from output', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      temperature: 0.7,
+      top_p: 0.9,
+      thinking: { type: 'enabled', budget_tokens: 16000 },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.temperature).toBeUndefined()
+    expect(result.top_p).toBeUndefined()
+    expect(result.reasoning_effort).toBe('medium')
+  })
+
+  test('Thinking adaptive → temperature and top_p are dropped from output', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      temperature: 0.5,
+      top_p: 0.8,
+      thinking: { type: 'adaptive' },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.temperature).toBeUndefined()
+    expect(result.top_p).toBeUndefined()
+    expect(result.reasoning_effort).toBe('medium')
+  })
+
+  test('Thinking enabled → fields absent from serialized JSON', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      temperature: 0.7,
+      top_p: 0.9,
+      thinking: { type: 'enabled', budget_tokens: 16000 },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    const json = JSON.stringify(result)
+    expect(json).not.toContain('"temperature"')
+    expect(json).not.toContain('"top_p"')
+  })
+
+  test('Thinking disabled → temperature is preserved', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      temperature: 0.7,
+      thinking: { type: 'disabled' },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(result.temperature).toBe(0.7)
+  })
+
+  test('Thinking enabled output passes validation schema', () => {
+    const payload: AnthropicMessagesPayload = {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      thinking: { type: 'enabled', budget_tokens: 16000 },
+    }
+    const result = new AnthropicTranslator().toOpenAI(payload)
+    expect(isValidChatCompletionRequest(result)).toBe(true)
   })
 })
 

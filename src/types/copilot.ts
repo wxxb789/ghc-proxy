@@ -22,6 +22,7 @@ export interface ChatCompletionChunk {
 
 interface Delta {
   content?: string | null
+  reasoning_text?: string | null
   role?: 'user' | 'assistant' | 'system' | 'tool'
   tool_calls?: Array<{
     index: number
@@ -97,6 +98,8 @@ export interface ChatCompletionsPayload {
     | { type: 'function', function: { name: string } }
     | null
   user?: string | null
+  reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high' | null
+  thinking_budget?: number | null
 }
 
 export interface Tool {

@@ -18,10 +18,10 @@ export interface AnthropicMessagesPayload {
     type: 'auto' | 'any' | 'tool' | 'none'
     name?: string
   }
-  thinking?: {
-    type: 'enabled'
-    budget_tokens?: number
-  }
+  thinking?:
+    | { type: 'enabled', budget_tokens: number }
+    | { type: 'disabled' }
+    | { type: 'adaptive' }
   service_tier?: 'auto' | 'standard_only'
 }
 
@@ -203,6 +203,7 @@ export interface AnthropicStreamState {
   messageStartSent: boolean
   contentBlockIndex: number
   contentBlockOpen: boolean
+  thinkingBlockOpen: boolean
   toolCalls: {
     [openAIToolIndex: number]:
       | {
