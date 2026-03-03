@@ -97,7 +97,7 @@ See the [Claude Code settings docs](https://docs.anthropic.com/en/docs/claude-co
 
 ghc-proxy sits between your tools and the GitHub Copilot API:
 
-```
+```text
 ┌─────────────┐      ┌───────────┐      ┌──────────────────────┐
 │ Claude Code  │──────│ ghc-proxy │──────│ api.githubcopilot.com│
 │ Cursor       │      │ :4141     │      │                      │

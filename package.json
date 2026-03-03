@@ -16,7 +16,7 @@
     "openai-compatible"
   ],
   "bin": {
-    "ghc-proxy": "./dist/main.js"
+    "ghc-proxy": "./dist/main.mjs"
   },
   "files": [
     "dist"
@@ -37,29 +37,28 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "citty": "^0.1.6",
-    "clipboardy": "^5.0.0",
+    "citty": "^0.2.1",
+    "clipboardy": "^5.3.1",
     "consola": "^3.4.2",
-    "fetch-event-stream": "^0.1.5",
-    "gpt-tokenizer": "^3.0.1",
-    "hono": "^4.9.9",
-    "proxy-from-env": "^1.1.0",
-    "srvx": "^0.8.9",
+    "fetch-event-stream": "^0.1.6",
+    "gpt-tokenizer": "^3.4.0",
+    "hono": "^4.12.3",
+    "proxy-from-env": "^2.0.0",
+    "srvx": "^0.11.8",
     "tiny-invariant": "^1.3.3",
-    "undici": "^7.16.0",
-    "zod": "^4.1.11"
+    "undici": "^7.22.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^7.4.3",
-    "@types/bun": "^1.2.23",
+    "@antfu/eslint-config": "^7.6.1",
+    "@types/bun": "^1.3.10",
     "@types/proxy-from-env": "^1.0.4",
-    "baseline-browser-mapping": "^2.9.19",
-    "bumpp": "^10.2.3",
-    "eslint": "^9.39.2",
-    "knip": "^5.64.1",
-    "lint-staged": "^16.2.3",
+    "bumpp": "^10.4.1",
+    "eslint": "^10.0.2",
+    "knip": "^5.85.0",
+    "lint-staged": "^16.3.1",
     "simple-git-hooks": "^2.13.1",
-    "tsdown": "^0.15.6",
+    "tsdown": "^0.20.3",
     "typescript": "^5.9.3"
   },
   "simple-git-hooks": {
