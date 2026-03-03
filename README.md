@@ -7,67 +7,61 @@
 A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic compatible API. Use it to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://www.cursor.com/), or any tool that speaks the OpenAI Chat Completions or Anthropic Messages protocol.
 
 > [!WARNING]
-> Reverse-engineered, unofficial, may break. Excessive use can trigger GitHub abuse detection. Use at your own risk.
+> Reverse-engineered, unofficial, may break at any time. Excessive use can trigger GitHub abuse detection. **Use at your own risk.**
 
-**Note:** If you're using [opencode](https://github.com/sst/opencode), you don't need this -- opencode supports GitHub Copilot natively.
+**TL;DR** — Install [Bun](https://bun.com/docs/installation), then run:
 
-## Installation
+```bash
+bunx ghc-proxy@latest start --wait
+```
 
-The quickest way to get started is with `npx`:
+## Prerequisites
 
-    npx ghc-proxy@latest start
+Before you start, make sure you have:
 
-This starts the proxy on `http://localhost:4141`. It will walk you through GitHub authentication on first run.
+1. **Bun** (>= 1.2) -- a fast JavaScript runtime used to run the proxy
+   - **Windows:** `winget install --id Oven-sh.Bun`
+   - **Other platforms:** see the [official installation guide](https://bun.com/docs/installation)
+2. **A GitHub Copilot subscription** -- individual, business, or enterprise
 
-You can also install it globally:
+## Quick Start
 
-    npm install -g ghc-proxy
+1. Start the proxy:
 
-Or run it from source with [Bun](https://bun.sh/) (>= 1.2):
+       bunx ghc-proxy@latest start --wait
 
-    git clone https://github.com/wxxb789/ghc-proxy.git
-    cd ghc-proxy
-    bun install
-    bun run dev
+   > **Recommended:** The `--wait` flag queues requests instead of rejecting them with a 429 error when you hit Copilot rate limits. This is the simplest way to run the proxy for daily use.
 
-## What it does
+2. On the first run, you will be guided through GitHub's device-code authentication flow. Follow the prompts to authorize the proxy.
 
-ghc-proxy sits between your tools and the GitHub Copilot API. It authenticates with GitHub using the device code flow, obtains a Copilot token, and exposes the following endpoints:
+3. Once authenticated, the proxy starts on **`http://localhost:4141`** and is ready to accept requests.
 
-**OpenAI compatible:**
-
-- `POST /v1/chat/completions` -- chat completions (streaming and non-streaming)
-- `GET /v1/models` -- list available models
-- `POST /v1/embeddings` -- generate embeddings
-
-**Anthropic compatible:**
-
-- `POST /v1/messages` -- the Anthropic Messages API, with full tool use and streaming support
-- `POST /v1/messages/count_tokens` -- token counting
-
-Anthropic requests are translated to OpenAI format on the fly, sent to Copilot, and the responses are translated back. This means Claude Code thinks it's talking to Anthropic, but it's actually talking to Copilot.
-
-There are also utility endpoints: `GET /usage` for quota monitoring and `GET /token` to inspect the current Copilot token.
+That's it. Any tool that supports the OpenAI or Anthropic API can now point to `http://localhost:4141`.
 
 ## Using with Claude Code
 
-The fastest way to get Claude Code running on Copilot:
+This is the most common use case. There are two ways to set it up:
 
-    npx ghc-proxy@latest start --claude-code
+### Option A: One-command launch
 
-This starts the proxy, prompts you to pick a model, and copies a ready-to-paste command to your clipboard. Run that command in another terminal to launch Claude Code.
+```bash
+bunx ghc-proxy@latest start --claude-code
+```
 
-If you prefer a permanent setup, create `.claude/settings.json` in your project:
+This starts the proxy, opens an interactive model picker, and copies a ready-to-paste environment command to your clipboard. Run that command in another terminal to launch Claude Code with the correct configuration.
+
+### Option B: Permanent config (Recommended)
+
+Create or edit `~/.claude/settings.json` (this applies globally to all projects):
 
 ```json
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4141",
-    "ANTHROPIC_AUTH_TOKEN": "dummy",
-    "ANTHROPIC_MODEL": "gpt-4.1",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-4.1",
-    "ANTHROPIC_SMALL_FAST_MODEL": "gpt-4.1",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-4.1",
+    "ANTHROPIC_AUTH_TOKEN": "dummy-token",
+    "ANTHROPIC_MODEL": "claude-opus-4.6",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4.6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
     "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   },
@@ -77,18 +71,85 @@ If you prefer a permanent setup, create `.claude/settings.json` in your project:
 }
 ```
 
+Then simply start the proxy and use Claude Code as usual:
+
+```bash
+bunx ghc-proxy@latest start --wait
+```
+
+**What each environment variable does:**
+
+| Variable | Purpose |
+|----------|---------|
+| `ANTHROPIC_BASE_URL` | Points Claude Code to the proxy instead of Anthropic's servers |
+| `ANTHROPIC_AUTH_TOKEN` | Any non-empty string; the proxy handles real authentication |
+| `ANTHROPIC_MODEL` | The model Claude Code uses for primary/Opus tasks |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | The model used for Sonnet-tier tasks |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | The model used for Haiku-tier (fast/cheap) tasks |
+| `DISABLE_NON_ESSENTIAL_MODEL_CALLS` | Prevents Claude Code from making extra API calls |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | Disables telemetry and non-essential network traffic |
+
+> **Tip:** The model names above (e.g. `claude-opus-4.6`) are mapped to actual Copilot models by the proxy. See [Model Mapping](#model-mapping) below for details.
+
 See the [Claude Code settings docs](https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables) for more options.
 
-## CLI commands
+## What it Does
+
+ghc-proxy sits between your tools and the GitHub Copilot API:
+
+```
+┌─────────────┐      ┌───────────┐      ┌──────────────────────┐
+│ Claude Code  │──────│ ghc-proxy │──────│ api.githubcopilot.com│
+│ Cursor       │      │ :4141     │      │                      │
+│ Any client   │      │           │      │                      │
+└─────────────┘      └───────────┘      └──────────────────────┘
+   OpenAI or            Translates          GitHub Copilot
+   Anthropic            between              API
+   format               formats
+```
+
+The proxy authenticates with GitHub using the [device code OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow) (the same flow VS Code uses), then exchanges the GitHub token for a short-lived Copilot token that auto-refreshes.
+
+Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests are forwarded directly to Copilot. Anthropic-format requests pass through a translation layer that converts message formats, tool schemas, and streaming events between the two protocols -- including full support for tool use, thinking blocks, and image content.
+
+### Endpoints
+
+**OpenAI compatible:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming) |
+| `GET`  | `/v1/models` | List available models |
+| `POST` | `/v1/embeddings` | Generate embeddings |
+
+**Anthropic compatible:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/messages` | Messages API with full tool use and streaming support |
+| `POST` | `/v1/messages/count_tokens` | Token counting |
+
+**Utility:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/usage` | Copilot quota / usage monitoring |
+| `GET`  | `/token` | Inspect the current Copilot token |
+
+> **Note:** The `/v1/` prefix is optional. `/chat/completions`, `/models`, and `/embeddings` also work.
+
+## CLI Reference
 
 ghc-proxy uses a subcommand structure:
 
-    ghc-proxy start          # start the proxy server
-    ghc-proxy auth           # run the GitHub auth flow without starting the server
-    ghc-proxy check-usage    # show your Copilot usage/quota in the terminal
-    ghc-proxy debug          # print diagnostic info (version, paths, token status)
+```bash
+bunx ghc-proxy@latest start          # Start the proxy server
+bunx ghc-proxy@latest auth           # Run GitHub auth flow without starting the server
+bunx ghc-proxy@latest check-usage    # Show your Copilot usage/quota in the terminal
+bunx ghc-proxy@latest debug          # Print diagnostic info (version, paths, token status)
+```
 
-### Start options
+### `start` Options
 
 | Option | Alias | Default | Description |
 |--------|-------|---------|-------------|
@@ -103,33 +164,90 @@ ghc-proxy uses a subcommand structure:
 | `--show-token` | -- | `false` | Display tokens on auth and refresh |
 | `--proxy-env` | -- | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from env |
 | `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds |
+| `--upstream-timeout` | -- | `300` | Upstream request timeout in seconds (0 to disable) |
 
-## Rate limiting
+## Rate Limiting
 
-If you're worried about hitting Copilot rate limits, you have a few options:
+If you are worried about hitting Copilot rate limits:
 
-    # Enforce a 30-second cooldown between requests
-    npx ghc-proxy@latest start --rate-limit 30
+```bash
+# Enforce a 30-second cooldown between requests
+bunx ghc-proxy@latest start --rate-limit 30
 
-    # Same, but wait instead of returning a 429 error
-    npx ghc-proxy@latest start --rate-limit 30 --wait
+# Same, but queue requests instead of returning 429
+bunx ghc-proxy@latest start --rate-limit 30 --wait
 
-    # Manually approve every request (useful for debugging)
-    npx ghc-proxy@latest start --manual
+# Manually approve every request (useful for debugging)
+bunx ghc-proxy@latest start --manual
+```
+
+## Account Types
+
+If you have a GitHub Business or Enterprise Copilot plan, pass `--account-type`:
+
+```bash
+bunx ghc-proxy@latest start --account-type business
+bunx ghc-proxy@latest start --account-type enterprise
+```
+
+This routes requests to the correct Copilot API endpoint for your plan. See the [GitHub docs on network routing](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for details.
+
+## Model Mapping
+
+When Claude Code sends a request for a model like `claude-sonnet-4.6`, the proxy maps it to an actual model available on Copilot. The mapping logic works as follows:
+
+1. If the requested model ID is known to Copilot (e.g. `gpt-4.1`, `claude-sonnet-4.5`), it is used as-is.
+2. If the model starts with `claude-opus-`, `claude-sonnet-`, or `claude-haiku-`, it falls back to a configured model.
+
+### Default Fallbacks
+
+| Prefix | Default Fallback |
+|--------|-----------------|
+| `claude-opus-*` | `claude-opus-4.6` |
+| `claude-sonnet-*` | `claude-sonnet-4.5` |
+| `claude-haiku-*` | `claude-haiku-4.5` |
+
+### Customizing Fallbacks
+
+You can override the defaults with **environment variables**:
+
+```bash
+MODEL_FALLBACK_CLAUDE_OPUS=claude-opus-4.6
+MODEL_FALLBACK_CLAUDE_SONNET=claude-sonnet-4.5
+MODEL_FALLBACK_CLAUDE_HAIKU=claude-haiku-4.5
+```
+
+Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
+
+```json
+{
+  "modelFallback": {
+    "claudeOpus": "claude-opus-4.6",
+    "claudeSonnet": "claude-sonnet-4.5",
+    "claudeHaiku": "claude-haiku-4.5"
+  }
+}
+```
+
+**Priority order:** environment variable > config.json > built-in default.
 
 ## Docker
 
 Build and run:
 
-    docker build -t ghc-proxy .
-    mkdir -p ./copilot-data
-    docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy
+```bash
+docker build -t ghc-proxy .
+mkdir -p ./copilot-data
+docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy
+```
 
-The authentication and settings are persisted in `copilot-data/config.json` so authentication survives container restarts.
+Authentication and settings are persisted in `copilot-data/config.json` so they survive container restarts.
 
 You can also pass a GitHub token via environment variable:
 
-    docker run -p 4141:4141 -e GH_TOKEN=your_token ghc-proxy
+```bash
+docker run -p 4141:4141 -e GH_TOKEN=your_token ghc-proxy
+```
 
 Docker Compose:
 
@@ -144,28 +262,22 @@ services:
     restart: unless-stopped
 ```
 
-## Account types
+## Running from Source
 
-If you have a GitHub business or enterprise Copilot plan, pass the `--account-type` flag:
-
-    npx ghc-proxy@latest start --account-type business
-    npx ghc-proxy@latest start --account-type enterprise
-
-This routes requests to the correct Copilot API endpoint for your plan. See the [GitHub docs on network routing](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for more details.
-
-## How it works
-
-The proxy authenticates with GitHub using the [device code OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow) (the same flow VS Code uses), then exchanges the GitHub token for a short-lived Copilot token that auto-refreshes.
-
-Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests are forwarded directly to `api.githubcopilot.com`. Anthropic-format requests pass through a translation layer (`src/translator/`) that converts the message format, tool schemas, and streaming events between the two protocols -- including full support for tool use, thinking blocks, and image content.
-
-The server spoofs VS Code headers so the Copilot API treats it like a normal editor session.
+```bash
+git clone https://github.com/wxxb789/ghc-proxy.git
+cd ghc-proxy
+bun install
+bun run dev
+```
 
 ## Development
 
-    bun install
-    bun run dev          # start with --watch
-    bun run build        # build with tsdown
-    bun run lint         # eslint
-    bun run typecheck    # tsc --noEmit
-    bun test             # run tests
+```bash
+bun install              # Install dependencies
+bun run dev              # Start with --watch
+bun run build            # Build with tsdown
+bun run lint             # ESLint
+bun run typecheck        # tsc --noEmit
+bun test                 # Run tests
+```
