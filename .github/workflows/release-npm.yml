@@ -32,6 +32,8 @@ jobs:
           bun run lint:all
           bun run typecheck
           bun test
+          bun run build
+          bun run smoke:packaged
 
       - name: Verify npm pack lifecycle (prepack -> tsdown)
         run: npm pack --dry-run

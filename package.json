@@ -33,8 +33,9 @@
     "release:patch": "bumpp patch --yes --commit --tag",
     "release:minor": "bumpp minor --yes --commit --tag",
     "release:major": "bumpp major --yes --commit --tag",
+    "smoke:packaged": "bun run scripts/packaged-smoke-test.ts",
     "start": "NODE_ENV=production bun run ./src/main.ts",
-    "typecheck": "tsc"
+    "typecheck": "npx tsc --project tsconfig.json"
   },
   "dependencies": {
     "citty": "^0.2.1",
