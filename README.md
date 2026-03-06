@@ -110,7 +110,7 @@ ghc-proxy sits between your tools and the GitHub Copilot API:
 
 The proxy authenticates with GitHub using the [device code OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow) (the same flow VS Code uses), then exchanges the GitHub token for a short-lived Copilot token that auto-refreshes.
 
-Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests are forwarded directly to Copilot. Anthropic-format requests pass through a translation layer that converts message formats, tool schemas, and streaming events between the two protocols -- including full support for tool use, thinking blocks, and image content.
+Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests are forwarded directly to Copilot. Anthropic-format requests pass through a translation layer that converts message formats, tool schemas, and streaming events between the two protocols. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
 
 ### Endpoints
 
@@ -126,7 +126,7 @@ Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/v1/messages` | Messages API with full tool use and streaming support |
+| `POST` | `/v1/messages` | Messages API with documented tool/thinking/stream translation behavior |
 | `POST` | `/v1/messages/count_tokens` | Token counting |
 
 **Utility:**

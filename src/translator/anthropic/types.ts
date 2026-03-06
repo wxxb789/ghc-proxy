@@ -49,7 +49,7 @@ export interface AnthropicImageBlock {
 export interface AnthropicToolResultBlock {
   type: 'tool_result'
   tool_use_id: string
-  content: string
+  content: string | Array<AnthropicToolResultContentBlock>
   is_error?: boolean
 }
 
@@ -63,7 +63,12 @@ export interface AnthropicToolUseBlock {
 export interface AnthropicThinkingBlock {
   type: 'thinking'
   thinking: string
+  signature?: string
 }
+
+export type AnthropicToolResultContentBlock
+  = | AnthropicTextBlock
+    | AnthropicImageBlock
 
 export type AnthropicUserContentBlock
   = | AnthropicTextBlock
@@ -201,16 +206,35 @@ export type AnthropicStreamEventData
 // State for streaming translation
 export interface AnthropicStreamState {
   messageStartSent: boolean
-  contentBlockIndex: number
-  contentBlockOpen: boolean
-  thinkingBlockOpen: boolean
-  toolCalls: {
-    [openAIToolIndex: number]:
-      | {
-        id: string
-        name: string
-        anthropicBlockIndex: number
-      }
-      | undefined
+  nextContentBlockIndex: number
+  openTextBlockIndex: number | null
+  openThinkingBlockIndex: number | null
+  toolCalls: Record<number, AnthropicStreamToolCallState>
+  lastUsage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    prompt_tokens_details?: {
+      cached_tokens: number
+    }
+    completion_tokens_details?: {
+      accepted_prediction_tokens: number
+      rejected_prediction_tokens: number
+    }
   }
+  pendingStopReason?:
+    | 'stop'
+    | 'length'
+    | 'tool_calls'
+    | 'content_filter'
+    | null
+  messageStopSent: boolean
+}
+
+export interface AnthropicStreamToolCallState {
+  id?: string
+  name?: string
+  anthropicBlockIndex?: number
+  started: boolean
+  closed: boolean
 }
