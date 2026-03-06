@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import process from 'node:process'
 import consola from 'consola'
 
 import { PATHS } from './paths'
@@ -87,12 +88,27 @@ export async function writeConfigField(
       JSON.stringify(merged, null, 2),
       'utf8',
     )
-    await fs.chmod(PATHS.CONFIG_PATH, 0o600)
+    await applyConfigFilePermissions(PATHS.CONFIG_PATH)
 
     cachedConfig = merged
   }
   catch (error: unknown) {
     consola.error(`Failed to write config.json: ${(error as Error).message}`)
     throw error
+  }
+}
+
+async function applyConfigFilePermissions(filePath: string): Promise<void> {
+  if (process.platform === 'win32') {
+    return
+  }
+
+  try {
+    await fs.chmod(filePath, 0o600)
+  }
+  catch (error) {
+    consola.warn(
+      `Could not set config.json permissions to 0600: ${(error as Error).message}`,
+    )
   }
 }

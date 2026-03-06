@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import process from 'node:process'
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import {
@@ -77,15 +78,17 @@ describe('config module', () => {
     expect(config).toEqual({})
   })
 
-  test('7. writeConfigField() — file doesn\'t exist → creates file, sets 0o600', async () => {
+  test('7. writeConfigField() — file doesn\'t exist → creates file, keeps platform-appropriate permissions', async () => {
     await writeConfigField('githubToken', 'new-token')
 
     const content = await fs.readFile(tempConfigPath)
     const parsed = JSON.parse(content.toString()) as unknown
     expect(parsed).toEqual({ githubToken: 'new-token' })
 
-    const stats = await fs.stat(tempConfigPath)
-    expect(stats.mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      const stats = await fs.stat(tempConfigPath)
+      expect(stats.mode & 0o777).toBe(0o600)
+    }
   })
 
   test('8. writeConfigField() — merges with existing fields', async () => {

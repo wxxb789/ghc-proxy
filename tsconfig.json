@@ -21,5 +21,6 @@
     "erasableSyntaxOnly": true,
     "skipLibCheck": true,
     "noUncheckedSideEffectImports": true
-  }
+  },
+  "exclude": ["dist", "node_modules"]
 }
