@@ -6,18 +6,53 @@ import consola from 'consola'
 import { streamSSE } from 'hono/streaming'
 
 import { CopilotClient, isNonStreamingResponse } from '~/clients'
+import { HTTPError } from '~/lib/error'
+import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { setModelMappingInfo } from '~/lib/request-logger'
 import { getClientConfig, state } from '~/lib/state'
 import { createUpstreamSignal } from '~/lib/upstream-signal'
 import { parseAnthropicMessagesPayload } from '~/lib/validation'
 import { AnthropicTranslator } from '~/translator'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
+
+function createAnthropicTranslator() {
+  const knownModelIds = state.cache.models
+    ? new Set(state.cache.models.data.map(model => model.id))
+    : undefined
+  const fallbackConfig = getModelFallbackConfig()
+
+  return new AnthropicTranslator({
+    modelResolver: model => resolveModel(model, knownModelIds, fallbackConfig),
+    getModelCapabilities: model => ({
+      supportsThinkingBudget: model.startsWith('claude'),
+    }),
+  })
+}
+
+function toHTTPError(error: TranslationFailure): HTTPError {
+  return new HTTPError(
+    error.message,
+    new Response(error.message, {
+      status: error.status,
+    }),
+  )
+}
 
 export async function handleCompletion(c: Context) {
   const anthropicPayload = parseAnthropicMessagesPayload(await c.req.json())
   consola.debug('Anthropic request payload:', JSON.stringify(anthropicPayload))
 
-  const translator = new AnthropicTranslator()
-  const openAIPayload = translator.toOpenAI(anthropicPayload)
+  const translator = createAnthropicTranslator()
+  let openAIPayload
+  try {
+    openAIPayload = translator.toOpenAI(anthropicPayload)
+  }
+  catch (error) {
+    if (error instanceof TranslationFailure) {
+      throw toHTTPError(error)
+    }
+    throw error
+  }
   setModelMappingInfo(c, {
     originalModel: anthropicPayload.model,
     mappedModel: openAIPayload.model,
@@ -50,7 +85,17 @@ export async function handleCompletion(c: Context) {
       'Non-streaming response from Copilot (full):',
       JSON.stringify(response, null, 2),
     )
-    const anthropicResponse = translator.fromOpenAI(response)
+    let anthropicResponse
+    try {
+      anthropicResponse = translator.fromOpenAI(response)
+    }
+    catch (error) {
+      cleanup()
+      if (error instanceof TranslationFailure) {
+        throw toHTTPError(error)
+      }
+      throw error
+    }
     consola.debug(
       'Translated Anthropic response:',
       JSON.stringify(anthropicResponse),
@@ -67,6 +112,13 @@ export async function handleCompletion(c: Context) {
       for await (const rawEvent of response) {
         consola.debug('Copilot raw stream event:', JSON.stringify(rawEvent))
         if (rawEvent.data === '[DONE]') {
+          const finalEvents = streamTranslator.onDone()
+          for (const event of finalEvents) {
+            await stream.writeSSE({
+              event: event.type,
+              data: JSON.stringify(event),
+            })
+          }
           break
         }
 

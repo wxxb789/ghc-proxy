@@ -3,10 +3,12 @@ import type { Context } from 'hono'
 import consola from 'consola'
 
 import { HTTPError } from '~/lib/error'
+import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { state } from '~/lib/state'
 import { getTokenCount } from '~/lib/tokenizer'
 import { parseAnthropicCountTokensPayload } from '~/lib/validation'
 import { AnthropicTranslator } from '~/translator'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 
 // Token estimation constants
 const CLAUDE_TOOL_OVERHEAD_TOKENS = 346
@@ -20,13 +22,31 @@ const GROK_ESTIMATION_FACTOR = 1.03
 export async function handleCountTokens(c: Context) {
   const anthropicBeta = c.req.header('anthropic-beta')
   const anthropicPayload = parseAnthropicCountTokensPayload(await c.req.json())
-  const normalizedPayload = {
-    ...anthropicPayload,
-    max_tokens: anthropicPayload.max_tokens ?? 0,
-  }
 
-  const translator = new AnthropicTranslator()
-  const openAIPayload = translator.toOpenAI(normalizedPayload)
+  const knownModelIds = state.cache.models
+    ? new Set(state.cache.models.data.map(model => model.id))
+    : undefined
+  const fallbackConfig = getModelFallbackConfig()
+  const translator = new AnthropicTranslator({
+    modelResolver: model => resolveModel(model, knownModelIds, fallbackConfig),
+    getModelCapabilities: model => ({
+      supportsThinkingBudget: model.startsWith('claude'),
+    }),
+  })
+
+  let openAIPayload
+  try {
+    openAIPayload = translator.toOpenAI(anthropicPayload)
+  }
+  catch (error) {
+    if (error instanceof TranslationFailure) {
+      throw new HTTPError(
+        error.message,
+        new Response(error.message, { status: error.status }),
+      )
+    }
+    throw error
+  }
 
   const selectedModel = state.cache.models?.data.find(
     model => model.id === openAIPayload.model,
