@@ -1,29 +1,30 @@
 import type { Context } from 'hono'
 
-import type { ChatCompletionChunk } from '~/types'
+import type { CapiChatCompletionChunk } from '~/core/capi'
 import consola from 'consola'
 
 import { streamSSE } from 'hono/streaming'
 
+import { AnthropicMessagesAdapter, CopilotTransport } from '~/adapters'
 import { CopilotClient, isNonStreamingResponse } from '~/clients'
+import { readCapiRequestContext } from '~/core/capi'
 import { HTTPError } from '~/lib/error'
 import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { setModelMappingInfo } from '~/lib/request-logger'
 import { getClientConfig, state } from '~/lib/state'
 import { createUpstreamSignal } from '~/lib/upstream-signal'
 import { parseAnthropicMessagesPayload } from '~/lib/validation'
-import { AnthropicTranslator } from '~/translator'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 
-function createAnthropicTranslator() {
+function createAnthropicAdapter() {
   const knownModelIds = state.cache.models
     ? new Set(state.cache.models.data.map(model => model.id))
     : undefined
   const fallbackConfig = getModelFallbackConfig()
 
-  return new AnthropicTranslator({
-    modelResolver: model => resolveModel(model, knownModelIds, fallbackConfig),
-    getModelCapabilities: model => ({
+  return new AnthropicMessagesAdapter({
+    modelResolver: (model: string) => resolveModel(model, knownModelIds, fallbackConfig),
+    getModelCapabilities: (model: string) => ({
       supportsThinkingBudget: model.startsWith('claude'),
     }),
   })
@@ -42,10 +43,12 @@ export async function handleCompletion(c: Context) {
   const anthropicPayload = parseAnthropicMessagesPayload(await c.req.json())
   consola.debug('Anthropic request payload:', JSON.stringify(anthropicPayload))
 
-  const translator = createAnthropicTranslator()
-  let openAIPayload
+  const adapter = createAnthropicAdapter()
+  let plan
   try {
-    openAIPayload = translator.toOpenAI(anthropicPayload)
+    plan = adapter.toCapiPlan(anthropicPayload, {
+      requestContext: readCapiRequestContext(c.req.raw.headers),
+    })
   }
   catch (error) {
     if (error instanceof TranslationFailure) {
@@ -55,17 +58,17 @@ export async function handleCompletion(c: Context) {
   }
   setModelMappingInfo(c, {
     originalModel: anthropicPayload.model,
-    mappedModel: openAIPayload.model,
+    mappedModel: plan.resolvedModel,
   })
   consola.debug(
     'Claude Code requested model:',
     anthropicPayload.model,
     '-> Copilot model:',
-    openAIPayload.model,
+    plan.resolvedModel,
   )
   consola.debug(
-    'Translated OpenAI request payload:',
-    JSON.stringify(openAIPayload),
+    'Planned Copilot request payload:',
+    JSON.stringify(plan.payload),
   )
 
   const { signal, cleanup } = createUpstreamSignal(
@@ -76,7 +79,8 @@ export async function handleCompletion(c: Context) {
   )
 
   const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.createChatCompletions(openAIPayload, {
+  const transport = new CopilotTransport(copilotClient)
+  const response = await transport.execute(plan, {
     signal,
   })
 
@@ -87,7 +91,7 @@ export async function handleCompletion(c: Context) {
     )
     let anthropicResponse
     try {
-      anthropicResponse = translator.fromOpenAI(response)
+      anthropicResponse = adapter.fromCapiResponse(response)
     }
     catch (error) {
       cleanup()
@@ -106,7 +110,7 @@ export async function handleCompletion(c: Context) {
 
   consola.debug('Streaming response from Copilot')
   return streamSSE(c, async (stream) => {
-    const streamTranslator = translator.createStreamTranslator()
+    const streamTranslator = adapter.createStreamSerializer()
 
     try {
       for await (const rawEvent of response) {
@@ -126,7 +130,7 @@ export async function handleCompletion(c: Context) {
           continue
         }
 
-        const chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
+        const chunk = JSON.parse(rawEvent.data) as CapiChatCompletionChunk
         const events = streamTranslator.onChunk(chunk)
 
         for (const event of events) {

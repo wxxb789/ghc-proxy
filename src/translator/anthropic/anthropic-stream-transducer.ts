@@ -6,7 +6,8 @@ import type {
   AnthropicStreamState,
 } from './types'
 
-import type { ChatCompletionChunk } from '~/types'
+import type { CapiChatCompletionChunk } from '~/core/capi'
+import type { ConversationDelta } from '~/core/conversation'
 
 import { mapOpenAIStopReasonToAnthropic, mapOpenAIUsageToAnthropic } from './shared'
 
@@ -117,7 +118,7 @@ class ToolUseBlockWriter {
 
   append(
     events: Array<AnthropicStreamEventData>,
-    toolCall: NonNullable<ChatCompletionChunk['choices'][number]['delta']['tool_calls']>[number],
+    toolCall: NonNullable<CapiChatCompletionChunk['choices'][number]['delta']['tool_calls']>[number],
   ) {
     const lane = this.state.toolCalls[toolCall.index] ?? {
       started: false,
@@ -199,39 +200,61 @@ export class AnthropicStreamTranslator {
     this.toolWriter = new ToolUseBlockWriter(this.state)
   }
 
-  onChunk(chunk: ChatCompletionChunk): Array<AnthropicStreamEventData> {
-    if (chunk.choices.length === 0) {
+  onChunk(chunk: CapiChatCompletionChunk): Array<AnthropicStreamEventData> {
+    const deltas = this.toConversationDeltas(chunk)
+    if (deltas.length === 0) {
       return []
     }
 
-    const sortedChoices = [...chunk.choices].sort((left, right) => left.index - right.index)
-    const choice = sortedChoices[0]
     const events: Array<AnthropicStreamEventData> = []
 
     this.appendMessageStart(events, chunk)
     this.state.lastUsage = chunk.usage
 
-    if (choice.delta.reasoning_text) {
-      this.textWriter.close(events)
-      this.thinkingWriter.append(events, choice.delta.reasoning_text)
-    }
-
-    if (choice.delta.content) {
-      this.thinkingWriter.close(events)
-      this.textWriter.append(events, choice.delta.content)
-    }
-
-    if (choice.delta.tool_calls?.length) {
-      this.thinkingWriter.close(events)
-      this.textWriter.close(events)
-      for (const toolCall of choice.delta.tool_calls) {
-        this.toolWriter.append(events, toolCall)
+    for (const delta of deltas) {
+      switch (delta.kind) {
+        case 'message_start':
+          break
+        case 'thinking_delta':
+          this.state.lastMetadata = {
+            ...this.state.lastMetadata,
+            ...delta.metadata,
+          }
+          this.textWriter.close(events)
+          this.thinkingWriter.append(events, delta.text)
+          break
+        case 'text_delta':
+          this.thinkingWriter.close(events)
+          this.textWriter.append(events, delta.text)
+          break
+        case 'tool_use_delta':
+          this.thinkingWriter.close(events)
+          this.textWriter.close(events)
+          this.toolWriter.append(events, {
+            index: delta.toolIndex,
+            ...(delta.id ? { id: delta.id } : {}),
+            ...(delta.name || delta.argumentsText
+              ? {
+                  function: {
+                    ...(delta.name ? { name: delta.name } : {}),
+                    ...(delta.argumentsText ? { arguments: delta.argumentsText } : {}),
+                  },
+                }
+              : {}),
+          })
+          break
+        case 'message_stop':
+          this.state.lastMetadata = {
+            ...this.state.lastMetadata,
+            ...delta.metadata,
+          }
+          this.state.pendingStopReason = delta.stopReason
+          if (delta.usage) {
+            this.state.lastUsage = delta.usage
+          }
+          events.push(...this.onDone())
+          break
       }
-    }
-
-    if (choice.finish_reason) {
-      this.state.pendingStopReason = choice.finish_reason
-      events.push(...this.onDone())
     }
 
     return events
@@ -280,7 +303,7 @@ export class AnthropicStreamTranslator {
 
   private appendMessageStart(
     events: Array<AnthropicStreamEventData>,
-    chunk: ChatCompletionChunk,
+    chunk: CapiChatCompletionChunk,
   ) {
     if (this.state.messageStartSent) {
       return
@@ -320,5 +343,74 @@ export class AnthropicStreamTranslator {
       return error.name === 'TimeoutError'
     }
     return false
+  }
+
+  private toConversationDeltas(
+    chunk: CapiChatCompletionChunk,
+  ): Array<ConversationDelta> {
+    if (chunk.choices.length === 0) {
+      return []
+    }
+
+    const sortedChoices = [...chunk.choices].sort((left, right) => left.index - right.index)
+    const choice = sortedChoices[0]
+    const deltas: Array<ConversationDelta> = []
+
+    if (!this.state.messageStartSent) {
+      deltas.push({
+        kind: 'message_start',
+        id: chunk.id,
+        model: chunk.model,
+        usage: chunk.usage,
+      })
+    }
+
+    if (choice.delta.reasoning_text) {
+      deltas.push({
+        kind: 'thinking_delta',
+        text: choice.delta.reasoning_text,
+        metadata: {
+          reasoningOpaque: choice.delta.reasoning_opaque,
+          encryptedContent: choice.delta.encrypted_content,
+          phase: choice.delta.phase,
+          copilotAnnotations: choice.delta.copilot_annotations,
+        },
+      })
+    }
+
+    if (choice.delta.content) {
+      deltas.push({
+        kind: 'text_delta',
+        text: choice.delta.content,
+      })
+    }
+
+    if (choice.delta.tool_calls?.length) {
+      for (const toolCall of choice.delta.tool_calls) {
+        deltas.push({
+          kind: 'tool_use_delta',
+          toolIndex: toolCall.index,
+          id: toolCall.id,
+          name: toolCall.function?.name,
+          argumentsText: toolCall.function?.arguments,
+        })
+      }
+    }
+
+    if (choice.finish_reason) {
+      deltas.push({
+        kind: 'message_stop',
+        stopReason: choice.finish_reason,
+        usage: chunk.usage,
+        metadata: {
+          reasoningOpaque: choice.delta.reasoning_opaque,
+          encryptedContent: choice.delta.encrypted_content,
+          phase: choice.delta.phase,
+          copilotAnnotations: choice.delta.copilot_annotations,
+        },
+      })
+    }
+
+    return deltas
   }
 }

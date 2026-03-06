@@ -1,7 +1,10 @@
 import type { ClientAuth, ClientConfig, ClientDeps } from './types'
 import type {
-  ChatCompletionResponse,
-  ChatCompletionsPayload,
+  CapiChatCompletionResponse,
+  CapiChatCompletionsPayload,
+  CapiRequestContext,
+} from '~/core/capi'
+import type {
   EmbeddingRequest,
   EmbeddingResponse,
   ModelsResponse,
@@ -26,8 +29,12 @@ export class CopilotClient {
   }
 
   async createChatCompletions(
-    payload: ChatCompletionsPayload,
-    options?: { signal?: AbortSignal },
+    payload: CapiChatCompletionsPayload,
+    options?: {
+      signal?: AbortSignal
+      initiator?: 'user' | 'agent'
+      requestContext?: CapiRequestContext
+    },
   ) {
     if (!this.auth.copilotToken)
       throw new Error('Copilot token not found')
@@ -38,15 +45,16 @@ export class CopilotClient {
         && x.content?.some(content => content.type === 'image_url'),
     )
 
-    // Agent/user check for X-Initiator header
-    const isAgentCall = payload.messages.some(msg =>
-      ['assistant', 'tool'].includes(msg.role),
-    )
+    const initiator = options?.initiator
+      ?? (payload.messages.some(msg => ['assistant', 'tool'].includes(msg.role))
+        ? 'agent'
+        : 'user')
 
-    const headers: Record<string, string> = {
-      ...copilotHeaders(this.auth, this.config, enableVision),
-      'X-Initiator': isAgentCall ? 'agent' : 'user',
-    }
+    const headers = copilotHeaders(this.auth, this.config, {
+      vision: enableVision,
+      initiator,
+      requestContext: options?.requestContext,
+    })
 
     const response = await this.fetchImpl(
       `${copilotBaseUrl(this.config)}/chat/completions`,
@@ -67,7 +75,7 @@ export class CopilotClient {
       return events(response)
     }
 
-    return (await response.json()) as ChatCompletionResponse
+    return (await response.json()) as CapiChatCompletionResponse
   }
 
   async createEmbeddings(
@@ -109,6 +117,6 @@ export class CopilotClient {
 
 export function isNonStreamingResponse(
   response: Awaited<ReturnType<CopilotClient['createChatCompletions']>>,
-): response is ChatCompletionResponse {
+): response is CapiChatCompletionResponse {
   return Object.hasOwn(response, 'choices')
 }

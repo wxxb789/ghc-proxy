@@ -2,12 +2,12 @@ import type { Context } from 'hono'
 
 import consola from 'consola'
 
+import { AnthropicMessagesAdapter } from '~/adapters'
 import { HTTPError } from '~/lib/error'
 import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { state } from '~/lib/state'
 import { getTokenCount } from '~/lib/tokenizer'
 import { parseAnthropicCountTokensPayload } from '~/lib/validation'
-import { AnthropicTranslator } from '~/translator'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 
 // Token estimation constants
@@ -27,16 +27,16 @@ export async function handleCountTokens(c: Context) {
     ? new Set(state.cache.models.data.map(model => model.id))
     : undefined
   const fallbackConfig = getModelFallbackConfig()
-  const translator = new AnthropicTranslator({
-    modelResolver: model => resolveModel(model, knownModelIds, fallbackConfig),
-    getModelCapabilities: model => ({
+  const adapter = new AnthropicMessagesAdapter({
+    modelResolver: (model: string) => resolveModel(model, knownModelIds, fallbackConfig),
+    getModelCapabilities: (model: string) => ({
       supportsThinkingBudget: model.startsWith('claude'),
     }),
   })
 
   let openAIPayload
   try {
-    openAIPayload = translator.toOpenAI(anthropicPayload)
+    openAIPayload = adapter.toTokenCountPayload(anthropicPayload)
   }
   catch (error) {
     if (error instanceof TranslationFailure) {
