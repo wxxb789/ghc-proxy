@@ -1,4 +1,4 @@
-const DEFAULT_TIMEOUT_MS = 300_000 // 5 minutes
+const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 minutes
 
 export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController()

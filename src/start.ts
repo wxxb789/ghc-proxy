@@ -243,7 +243,7 @@ export const start = defineCommand({
     },
     'upstream-timeout': {
       type: 'string',
-      default: '300',
+      default: '1800',
       description: 'Upstream request timeout in seconds (0 to disable)',
     },
   },
