@@ -7,9 +7,28 @@ import type { ChatCompletionsPayload, EmbeddingRequest } from '~/types'
 import consola from 'consola'
 import { z } from 'zod'
 
+import { REASONING_EFFORT_VALUES } from '~/types'
+
 import { HTTPError } from './error'
 
 const jsonObjectSchema = z.object({}).catchall(z.unknown())
+const finiteNumberSchema = z.number().finite()
+const nonNegativeIntegerSchema = z.number().int().nonnegative()
+const openAIPenaltySchema = finiteNumberSchema.min(-2).max(2)
+const openAILogitBiasKeySchema = z.string().regex(/^\d+$/)
+const openAILogitBiasValueSchema = finiteNumberSchema.min(-100).max(100)
+
+function createObjectSchemaDefinitionSchema(message: string) {
+  return jsonObjectSchema.superRefine((schema, ctx) => {
+    const typeValue = schema.type
+    if (typeValue !== undefined && typeValue !== 'object') {
+      ctx.addIssue({
+        code: 'custom',
+        message,
+      })
+    }
+  })
+}
 
 const openAITextPartSchema = z.object({
   type: z.literal('text'),
@@ -63,10 +82,67 @@ const openAIMessageSchema = z.object({
   }
 })
 
+const openAIToolSchema = z.object({
+  type: z.literal('function'),
+  function: z.object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    parameters: createObjectSchemaDefinitionSchema('tool function.parameters must describe an object'),
+  }).loose(),
+}).loose()
+
+const openAIToolChoiceSchema = z.union([
+  z.literal('none'),
+  z.literal('auto'),
+  z.literal('required'),
+  z.object({
+    type: z.literal('function'),
+    function: z.object({
+      name: z.string().min(1),
+    }).loose(),
+  }).loose(),
+])
+
+const openAIResponseFormatSchema = z.object({
+  type: z.literal('json_object'),
+})
+
 const openAIChatPayloadSchema = z.object({
   model: z.string().min(1),
   messages: z.array(openAIMessageSchema).min(1),
-}).loose()
+  temperature: finiteNumberSchema.min(0).max(2).nullable().optional(),
+  top_p: finiteNumberSchema.min(0).max(1).nullable().optional(),
+  max_tokens: nonNegativeIntegerSchema.nullable().optional(),
+  stop: z.union([z.string(), z.array(z.string())]).nullable().optional(),
+  n: z.number().int().positive().nullable().optional(),
+  stream: z.boolean().nullable().optional(),
+  frequency_penalty: openAIPenaltySchema.nullable().optional(),
+  presence_penalty: openAIPenaltySchema.nullable().optional(),
+  logit_bias: z.record(openAILogitBiasKeySchema, openAILogitBiasValueSchema).nullable().optional(),
+  logprobs: z.boolean().nullable().optional(),
+  response_format: openAIResponseFormatSchema.nullable().optional(),
+  seed: z.number().int().nullable().optional(),
+  tools: z.array(openAIToolSchema).nullable().optional(),
+  tool_choice: openAIToolChoiceSchema.nullable().optional(),
+  user: z.string().nullable().optional(),
+  reasoning_effort: z.enum(REASONING_EFFORT_VALUES).nullable().optional(),
+  thinking_budget: z.number().int().positive().nullable().optional(),
+}).loose().superRefine((payload, ctx) => {
+  const toolChoice = payload.tool_choice
+
+  if (
+    toolChoice
+    && typeof toolChoice === 'object'
+    && 'function' in toolChoice
+    && !payload.tools?.some(tool => tool.function.name === toolChoice.function.name)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'tool_choice.function.name must reference a declared tool',
+      path: ['tool_choice', 'function', 'name'],
+    })
+  }
+})
 
 const anthropicTextBlockSchema = z.object({
   type: z.literal('text'),
@@ -142,15 +218,7 @@ const anthropicMessageSchema = z.union([
 const anthropicToolSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
-  input_schema: jsonObjectSchema.superRefine((schema, ctx) => {
-    const typeValue = schema.type
-    if (typeValue !== undefined && typeValue !== 'object') {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'tool input_schema must describe an object',
-      })
-    }
-  }),
+  input_schema: createObjectSchemaDefinitionSchema('tool input_schema must describe an object'),
 }).loose()
 
 const anthropicToolChoiceSchema = z.union([

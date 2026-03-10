@@ -2,11 +2,8 @@ import type { NormalizedOpenAIResponse } from './ir'
 
 import type { AnthropicAssistantContentBlock, AnthropicResponse } from './types'
 
+import { assertNever } from '~/lib/assert-never'
 import { mapOpenAIStopReasonToAnthropic, mapOpenAIUsageToAnthropic } from './shared'
-
-function assertNever(value: never): never {
-  throw new Error(`Unexpected normalized value: ${JSON.stringify(value)}`)
-}
 
 function mapBlocks(
   response: NormalizedOpenAIResponse,

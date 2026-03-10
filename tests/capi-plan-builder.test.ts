@@ -90,4 +90,84 @@ describe('CAPI planning', () => {
     expect(JSON.stringify(firstPlan.payload)).toBe(JSON.stringify(secondPlan.payload))
     expect(firstPlan.requestContext.interactionId).not.toBe(secondPlan.requestContext.interactionId)
   })
+
+  test('forwards all completion options to CAPI payload', () => {
+    const adapter = new OpenAIChatAdapter()
+    const plan = adapter.toCapiPlan({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Hello' }],
+      n: 2,
+      frequency_penalty: 0.5,
+      presence_penalty: 0.3,
+      logit_bias: { 123: 1, 456: -1 },
+      logprobs: true,
+      response_format: { type: 'json_object' },
+      seed: 42,
+    })
+
+    expect(plan.payload.n).toBe(2)
+    expect(plan.payload.frequency_penalty).toBe(0.5)
+    expect(plan.payload.presence_penalty).toBe(0.3)
+    expect(plan.payload.logit_bias).toEqual({ 123: 1, 456: -1 })
+    expect(plan.payload.logprobs).toBe(true)
+    expect(plan.payload.response_format).toEqual({ type: 'json_object' })
+    expect(plan.payload.seed).toBe(42)
+  })
+
+  test('response_format survives the pipeline', () => {
+    const adapter = new OpenAIChatAdapter()
+    const plan = adapter.toCapiPlan({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Return JSON' }],
+      response_format: { type: 'json_object' },
+    })
+
+    expect(plan.payload.response_format).toEqual({ type: 'json_object' })
+  })
+
+  test('explicit reasoning_effort overrides inferred value', () => {
+    const adapter = new OpenAIChatAdapter()
+    const plan = adapter.toCapiPlan({
+      model: 'claude-sonnet-4.5',
+      messages: [{ role: 'user', content: 'Think hard' }],
+      thinking_budget: 4000,
+      reasoning_effort: 'high',
+    })
+
+    // thinking_budget 4000 would infer "low", but explicit "high" should win
+    expect(plan.payload.reasoning_effort).toBe('high')
+  })
+
+  test('null values are treated as unset', () => {
+    const adapter = new OpenAIChatAdapter()
+    const plan = adapter.toCapiPlan({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Hello' }],
+      n: null,
+      frequency_penalty: null,
+      response_format: null,
+      seed: null,
+    })
+
+    expect('n' in plan.payload).toBe(false)
+    expect('frequency_penalty' in plan.payload).toBe(false)
+    expect('response_format' in plan.payload).toBe(false)
+    expect('seed' in plan.payload).toBe(false)
+  })
+
+  test('omits completion options when not provided', () => {
+    const adapter = new OpenAIChatAdapter()
+    const plan = adapter.toCapiPlan({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Hello' }],
+    })
+
+    expect('n' in plan.payload).toBe(false)
+    expect('frequency_penalty' in plan.payload).toBe(false)
+    expect('presence_penalty' in plan.payload).toBe(false)
+    expect('logit_bias' in plan.payload).toBe(false)
+    expect('logprobs' in plan.payload).toBe(false)
+    expect('response_format' in plan.payload).toBe(false)
+    expect('seed' in plan.payload).toBe(false)
+  })
 })

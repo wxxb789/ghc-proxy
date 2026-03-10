@@ -482,6 +482,9 @@ describe('API smoke', () => {
       body: JSON.stringify({
         model: 'claude-sonnet-4.5',
         thinking_budget: 12000,
+        reasoning_effort: 'high',
+        response_format: { type: 'json_object' },
+        seed: 7,
         messages: [
           { role: 'developer', content: 'Follow repo conventions.' },
           { role: 'user', content: 'Open src/main.ts' },
@@ -508,8 +511,10 @@ describe('API smoke', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]?.payload.max_tokens).toBe(8192)
-    expect(calls[0]?.payload.reasoning_effort).toBe('medium')
+    expect(calls[0]?.payload.reasoning_effort).toBe('high')
     expect(calls[0]?.payload.thinking_budget).toBe(12000)
+    expect(calls[0]?.payload.response_format).toEqual({ type: 'json_object' })
+    expect(calls[0]?.payload.seed).toBe(7)
     expect(calls[0]?.options?.initiator).toBe('user')
     expect(calls[0]?.options?.requestContext).toMatchObject({
       interactionType: 'conversation-user',
@@ -533,6 +538,36 @@ describe('API smoke', () => {
     expect(Object.hasOwn(json.choices[0]!.message as object, 'reasoning_opaque')).toBe(false)
     expect(Object.hasOwn(json.choices[0]!.message as object, 'encrypted_content')).toBe(false)
     expect(Object.hasOwn(json.choices[0]!.message as object, 'copilot_annotations')).toBe(false)
+  })
+
+  test('OpenAI route rejects malformed completion options before upstream call', async () => {
+    const app = createApp()
+    const calls: Array<CapturedChatCall> = []
+
+    CopilotClient.prototype.createChatCompletions = mockNonStreamingResponse({
+      id: 'chatcmpl_unused',
+      object: 'chat.completion',
+      created: 1,
+      model: 'claude-sonnet-4.5',
+      choices: [],
+    }, calls)
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4.5',
+        messages: [{ role: 'user', content: 'Open src/main.ts' }],
+        n: '2',
+        response_format: { type: 'json_schema' },
+      }),
+    })
+
+    expect(response.status).toBe(400)
+    expect(await response.text()).toContain('Invalid request payload')
+    expect(calls).toHaveLength(0)
   })
 
   test('OpenAI streaming preserves public reasoning_text but does not leak Copilot-private fields', async () => {

@@ -5,6 +5,7 @@ export type {
   ConversationUsage,
 } from './delta'
 export type {
+  CompletionOptions,
   ConversationBlock,
   ConversationImageBlock,
   ConversationRequest,

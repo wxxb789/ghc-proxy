@@ -1,5 +1,6 @@
 import type { CapiChatCompletionsPayload } from './types'
 import type { ConversationRequest } from '~/core/conversation'
+import type { ReasoningEffort } from '~/types'
 
 export interface CapiProfile {
   id: 'base' | 'claude'
@@ -11,7 +12,7 @@ export interface CapiProfile {
   ) => Pick<CapiChatCompletionsPayload, 'reasoning_effort' | 'thinking_budget'>
 }
 
-function inferReasoningEffort(budgetTokens: number): NonNullable<CapiChatCompletionsPayload['reasoning_effort']> {
+function inferReasoningEffort(budgetTokens: number): ReasoningEffort {
   if (budgetTokens <= 8000) {
     return 'low'
   }

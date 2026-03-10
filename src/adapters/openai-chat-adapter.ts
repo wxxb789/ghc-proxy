@@ -5,6 +5,7 @@ import type {
   CapiRequestContext,
 } from '~/core/capi'
 import type {
+  CompletionOptions,
   ConversationBlock,
   ConversationRequest,
   ConversationTurn,
@@ -142,6 +143,21 @@ function sanitizeChunk(chunk: CapiChatCompletionChunk): ChatCompletionChunk {
   }
 }
 
+function buildCompletionOptions(payload: ChatCompletionsPayload): CompletionOptions | undefined {
+  const opts: CompletionOptions = {
+    ...(payload.n != null ? { n: payload.n } : {}),
+    ...(payload.frequency_penalty != null ? { frequencyPenalty: payload.frequency_penalty } : {}),
+    ...(payload.presence_penalty != null ? { presencePenalty: payload.presence_penalty } : {}),
+    ...(payload.logit_bias != null ? { logitBias: payload.logit_bias } : {}),
+    ...(payload.logprobs != null ? { logprobs: payload.logprobs } : {}),
+    ...(payload.response_format != null ? { responseFormat: payload.response_format } : {}),
+    ...(payload.seed != null ? { seed: payload.seed } : {}),
+    ...(payload.reasoning_effort != null ? { reasoningEffort: payload.reasoning_effort } : {}),
+  }
+
+  return Object.keys(opts).length > 0 ? opts : undefined
+}
+
 export class OpenAIChatAdapter {
   toConversation(payload: ChatCompletionsPayload): ConversationRequest {
     return {
@@ -177,6 +193,7 @@ export class OpenAIChatAdapter {
         payload.thinking_budget != null
           ? { type: 'enabled', budgetTokens: payload.thinking_budget }
           : undefined,
+      completionOptions: buildCompletionOptions(payload),
     }
   }
 

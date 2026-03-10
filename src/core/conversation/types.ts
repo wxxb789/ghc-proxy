@@ -1,3 +1,5 @@
+import type { ReasoningEffort } from '~/types'
+
 export type ConversationRole
   = | 'system'
     | 'developer'
@@ -73,6 +75,24 @@ export type ConversationThinkingConfig
     | { type: 'adaptive' }
     | { type: 'enabled', budgetTokens: number }
 
+/**
+ * Caller-supplied completion parameters preserved across the adapter pipeline.
+ * Values reaching this layer must already satisfy the ingress request schema.
+ * These are forwarded to the upstream CAPI by default. If a field is known to
+ * cause provider-specific errors, filter it in the plan-builder's outbound phase.
+ */
+export interface CompletionOptions {
+  n?: number
+  frequencyPenalty?: number
+  presencePenalty?: number
+  logitBias?: Record<string, number>
+  logprobs?: boolean
+  responseFormat?: { type: 'json_object' }
+  seed?: number
+  /** Explicit reasoning effort. Overrides value inferred from thinking.budgetTokens. */
+  reasoningEffort?: ReasoningEffort
+}
+
 export interface ConversationRequest {
   model: string
   turns: Array<ConversationTurn>
@@ -85,4 +105,5 @@ export interface ConversationRequest {
   tools?: Array<ConversationTool>
   toolChoice?: ConversationToolChoice
   thinking?: ConversationThinkingConfig
+  completionOptions?: CompletionOptions
 }

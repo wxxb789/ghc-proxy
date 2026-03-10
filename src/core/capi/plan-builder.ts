@@ -7,6 +7,7 @@ import type {
   CopilotCacheControl,
 } from './types'
 import type {
+  CompletionOptions,
   ConversationImageBlock,
   ConversationRequest,
   ConversationTextBlock,
@@ -18,15 +19,12 @@ import type {
   Message,
 } from '~/types'
 
+import { assertNever } from '~/lib/assert-never'
 import { selectCapiProfile } from './profile'
 import { buildCapiRequestContext, inferInitiator } from './request-context'
 
 const EPHEMERAL_CACHE_CONTROL: CopilotCacheControl = {
   type: 'ephemeral',
-}
-
-function assertNever(value: never): never {
-  throw new Error(`Unexpected conversation turn role: ${JSON.stringify(value)}`)
 }
 
 function asContentPart(
@@ -222,6 +220,25 @@ function serializeToolChoice(
   }
 }
 
+function serializeCompletionOptions(
+  opts: CompletionOptions | undefined,
+): Partial<CapiChatCompletionsPayload> {
+  if (!opts) {
+    return {}
+  }
+
+  return {
+    ...(opts.n != null ? { n: opts.n } : {}),
+    ...(opts.frequencyPenalty != null ? { frequency_penalty: opts.frequencyPenalty } : {}),
+    ...(opts.presencePenalty != null ? { presence_penalty: opts.presencePenalty } : {}),
+    ...(opts.logitBias != null ? { logit_bias: opts.logitBias } : {}),
+    ...(opts.logprobs != null ? { logprobs: opts.logprobs } : {}),
+    ...(opts.responseFormat != null ? { response_format: opts.responseFormat } : {}),
+    ...(opts.seed != null ? { seed: opts.seed } : {}),
+    ...(opts.reasoningEffort != null ? { reasoning_effort: opts.reasoningEffort } : {}),
+  }
+}
+
 function applyCacheCheckpoints(
   payload: CapiChatCompletionsPayload,
 ) {
@@ -290,6 +307,7 @@ export function buildCapiExecutionPlan(
     tools: serializeTools(request.tools),
     tool_choice: serializeToolChoice(request.toolChoice),
     ...profile.applyThinking(request),
+    ...serializeCompletionOptions(request.completionOptions),
     ...(request.stream && profile.includeUsageOnStream
       ? { stream_options: { include_usage: true } }
       : {}),

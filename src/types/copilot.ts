@@ -73,6 +73,9 @@ interface ChoiceNonStreaming {
   finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter'
 }
 
+export const REASONING_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high'] as const
+export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
+
 // Payload types
 export interface ChatCompletionsPayload {
   messages: Array<Message>
@@ -98,7 +101,7 @@ export interface ChatCompletionsPayload {
     | { type: 'function', function: { name: string } }
     | null
   user?: string | null
-  reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high' | null
+  reasoning_effort?: ReasoningEffort | null
   thinking_budget?: number | null
 }
 
