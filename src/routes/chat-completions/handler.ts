@@ -6,6 +6,7 @@ import { CopilotTransport, OpenAIChatAdapter } from '~/adapters'
 import { CopilotClient } from '~/clients'
 import { readCapiRequestContext } from '~/core/capi'
 import { executeStrategy } from '~/lib/execution-strategy'
+import { findModelById } from '~/lib/model-capabilities'
 import { getClientConfig, state } from '~/lib/state'
 import { getTokenCount } from '~/lib/tokenizer'
 import { createUpstreamSignal } from '~/lib/upstream-signal'
@@ -18,9 +19,7 @@ export async function handleCompletion(c: Context) {
   let payload = parseOpenAIChatPayload(await c.req.json())
   consola.debug('Request payload:', JSON.stringify(payload).slice(-400))
 
-  const selectedModel = state.cache.models?.data.find(
-    model => model.id === payload.model,
-  )
+  const selectedModel = findModelById(payload.model)
 
   try {
     if (selectedModel) {

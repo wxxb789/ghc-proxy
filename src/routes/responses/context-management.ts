@@ -6,6 +6,11 @@ import type {
 
 import { isResponsesApiContextManagementModel } from '~/lib/config'
 
+/** Default token threshold when model limits are unknown. */
+const DEFAULT_COMPACT_THRESHOLD = 50_000
+/** Fraction of max prompt tokens to use as compact threshold. */
+const COMPACT_THRESHOLD_RATIO = 0.9
+
 export function getResponsesRequestOptions(
   payload: ResponsesPayload,
 ): { vision: boolean, initiator: 'user' | 'agent' } {
@@ -34,9 +39,9 @@ export function resolveResponsesCompactThreshold(
   maxPromptTokens?: number,
 ): number {
   if (typeof maxPromptTokens === 'number' && maxPromptTokens > 0) {
-    return Math.floor(maxPromptTokens * 0.9)
+    return Math.floor(maxPromptTokens * COMPACT_THRESHOLD_RATIO)
   }
-  return 50000
+  return DEFAULT_COMPACT_THRESHOLD
 }
 
 function createCompactionContextManagement(

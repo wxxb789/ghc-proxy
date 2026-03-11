@@ -10,6 +10,14 @@ export interface SSEOutput {
   retry?: number
 }
 
+export interface SSEStreamChunk {
+  id?: number | string
+  event?: string
+  data?: string
+  comment?: string
+  retry?: number
+}
+
 export interface ExecutionStrategy<TResult, TChunk> {
   execute: () => Promise<TResult>
   isStream: (result: TResult) => result is TResult & AsyncIterable<TChunk>

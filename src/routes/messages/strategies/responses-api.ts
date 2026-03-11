@@ -1,6 +1,6 @@
 import type { CopilotClient } from '~/clients'
 import type { CapiRequestContext } from '~/core/capi'
-import type { ExecutionStrategy, SSEOutput } from '~/lib/execution-strategy'
+import type { ExecutionStrategy, SSEOutput, SSEStreamChunk } from '~/lib/execution-strategy'
 import type { ResponsesPayload, ResponsesResult, ResponseStreamEvent } from '~/types'
 
 import consola from 'consola'
@@ -8,15 +8,7 @@ import { isAsyncIterable } from '~/lib/async-iterable'
 import { ResponsesStreamTranslator } from '~/translator/responses/responses-stream-translator'
 import { translateResponsesToAnthropic } from '~/translator/responses/responses-to-anthropic'
 
-interface ResponsesStreamChunk {
-  id?: number | string
-  event?: string
-  data?: string
-  comment?: string
-  retry?: number
-}
-
-type ResponsesApiResult = ResponsesResult | AsyncIterable<ResponsesStreamChunk>
+type ResponsesApiResult = ResponsesResult | AsyncIterable<SSEStreamChunk>
 
 export function createMessagesViaResponsesStrategy(
   copilotClient: CopilotClient,
@@ -27,7 +19,7 @@ export function createMessagesViaResponsesStrategy(
     signal: AbortSignal
     requestContext: Partial<CapiRequestContext>
   },
-): ExecutionStrategy<ResponsesApiResult, ResponsesStreamChunk> {
+): ExecutionStrategy<ResponsesApiResult, SSEStreamChunk> {
   const translator = new ResponsesStreamTranslator()
 
   return {
@@ -35,7 +27,7 @@ export function createMessagesViaResponsesStrategy(
       return copilotClient.createResponses(responsesPayload, options) as Promise<ResponsesApiResult>
     },
 
-    isStream(result): result is AsyncIterable<ResponsesStreamChunk> {
+    isStream(result): result is AsyncIterable<SSEStreamChunk> {
       return Boolean(responsesPayload.stream) && isAsyncIterable(result)
     },
 

@@ -1,18 +1,9 @@
 import type { AnthropicMessagesAdapter, CopilotTransport } from '~/adapters'
 import type { CapiChatCompletionChunk, CapiExecutionPlan } from '~/core/capi'
-import type { ExecutionStrategy, SSEOutput } from '~/lib/execution-strategy'
+import type { ExecutionStrategy, SSEOutput, SSEStreamChunk } from '~/lib/execution-strategy'
 
 import consola from 'consola'
 import { isNonStreamingResponse } from '~/clients'
-import { TranslationFailure } from '~/translator/anthropic/translation-issue'
-
-interface StreamChunk {
-  id?: number | string
-  event?: string
-  data?: string
-  comment?: string
-  retry?: number
-}
 
 type ChatCompletionsResult = Awaited<ReturnType<CopilotTransport['execute']>>
 
@@ -21,7 +12,7 @@ export function createMessagesViaChatCompletionsStrategy(
   adapter: AnthropicMessagesAdapter,
   plan: CapiExecutionPlan,
   signal: AbortSignal,
-): ExecutionStrategy<ChatCompletionsResult, StreamChunk> {
+): ExecutionStrategy<ChatCompletionsResult, SSEStreamChunk> {
   let streamTranslator: ReturnType<AnthropicMessagesAdapter['createStreamSerializer']>
   let done = false
 
@@ -30,7 +21,7 @@ export function createMessagesViaChatCompletionsStrategy(
       return transport.execute(plan, { signal })
     },
 
-    isStream(result): result is ChatCompletionsResult & AsyncIterable<StreamChunk> {
+    isStream(result): result is ChatCompletionsResult & AsyncIterable<SSEStreamChunk> {
       return !isNonStreamingResponse(result)
     },
 
@@ -39,22 +30,14 @@ export function createMessagesViaChatCompletionsStrategy(
         'Non-streaming response from Copilot (full):',
         JSON.stringify(result, null, 2),
       )
-      try {
-        const anthropicResponse = adapter.fromCapiResponse(
-          result as Exclude<ChatCompletionsResult, AsyncIterable<StreamChunk>>,
-        )
-        consola.debug(
-          'Translated Anthropic response:',
-          JSON.stringify(anthropicResponse),
-        )
-        return anthropicResponse
-      }
-      catch (error) {
-        if (error instanceof TranslationFailure) {
-          throw error
-        }
-        throw error
-      }
+      const anthropicResponse = adapter.fromCapiResponse(
+        result as Exclude<ChatCompletionsResult, AsyncIterable<SSEStreamChunk>>,
+      )
+      consola.debug(
+        'Translated Anthropic response:',
+        JSON.stringify(anthropicResponse),
+      )
+      return anthropicResponse
     },
 
     translateStreamChunk(chunk): SSEOutput | SSEOutput[] | null {

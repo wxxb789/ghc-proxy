@@ -1,4 +1,4 @@
-import type { ResponsesStreamState } from './types'
+import type { FunctionCallStreamState, ResponsesStreamState } from './types'
 import type { AnthropicStreamEventData } from '~/translator'
 import type {
   ResponseCompletedEvent,
@@ -589,18 +589,21 @@ export class ResponsesStreamTranslator {
   private closeAllOpenBlocks(events: Array<AnthropicStreamEventData>) {
     this.closeActiveScalarBlock(events)
 
-    const functionBlocks = [...this.state.functionCallStateByOutputIndex.entries()]
-      .map(([, state]) => state)
-      .filter(state => state.started && !state.closed)
-      .sort((left, right) => left.blockIndex - right.blockIndex)
+    const openBlocks: Array<FunctionCallStreamState> = []
+    for (const fnState of this.state.functionCallStateByOutputIndex.values()) {
+      if (fnState.started && !fnState.closed) {
+        openBlocks.push(fnState)
+      }
+    }
+    openBlocks.sort((left, right) => left.blockIndex - right.blockIndex)
 
-    for (const state of functionBlocks) {
+    for (const fnState of openBlocks) {
       events.push({
         type: 'content_block_stop',
-        index: state.blockIndex,
+        index: fnState.blockIndex,
       })
-      this.state.blockHasDelta.delete(state.blockIndex)
-      state.closed = true
+      this.state.blockHasDelta.delete(fnState.blockIndex)
+      fnState.closed = true
     }
   }
 }

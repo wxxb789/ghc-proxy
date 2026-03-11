@@ -1,12 +1,12 @@
 import type { Context } from 'hono'
-import type { Model, ResponsesPayload } from '~/types'
+import type { ResponsesPayload } from '~/types'
 
 import { CopilotClient } from '~/clients'
 import { readCapiRequestContext } from '~/core/capi'
 import { shouldUseFunctionApplyPatch } from '~/lib/config'
-import { HTTPError } from '~/lib/error'
+import { throwInvalidRequestError } from '~/lib/error'
 import { executeStrategy } from '~/lib/execution-strategy'
-import { modelSupportsEndpoint } from '~/lib/model-capabilities'
+import { findModelById, modelSupportsEndpoint } from '~/lib/model-capabilities'
 import { getClientConfig, state } from '~/lib/state'
 import { createUpstreamSignal } from '~/lib/upstream-signal'
 import { parseResponsesPayload } from '~/lib/validation'
@@ -23,33 +23,17 @@ export async function handleResponses(c: Context) {
   applyResponsesInputPolicies(payload)
   compactInputByLatestCompaction(payload)
 
-  const selectedModel = findSelectedModel(payload.model)
-  if (!modelSupportsEndpoint(selectedModel, RESPONSES_ENDPOINT)) {
-    throw new HTTPError(
-      'The selected model does not support the responses endpoint.',
-      Response.json(
-        {
-          error: {
-            message: 'The selected model does not support the responses endpoint.',
-            type: 'invalid_request_error',
-          },
-        },
-        { status: 400 },
-      ),
+  const selectedModel = findModelById(payload.model)
+  if (!selectedModel) {
+    throwInvalidRequestError(
+      'The selected model could not be resolved.',
+      'model',
     )
   }
-  if (!selectedModel) {
-    throw new HTTPError(
-      'The selected model could not be resolved.',
-      Response.json(
-        {
-          error: {
-            message: 'The selected model could not be resolved.',
-            type: 'invalid_request_error',
-          },
-        },
-        { status: 400 },
-      ),
+  if (!modelSupportsEndpoint(selectedModel, RESPONSES_ENDPOINT)) {
+    throwInvalidRequestError(
+      'The selected model does not support the responses endpoint.',
+      'model',
     )
   }
 
@@ -75,10 +59,6 @@ export async function handleResponses(c: Context) {
   })
 
   return executeStrategy(c, strategy, upstreamSignal)
-}
-
-function findSelectedModel(modelId: string): Model | undefined {
-  return state.cache.models?.data.find(model => model.id === modelId)
 }
 
 function applyResponsesToolTransforms(payload: ResponsesPayload): void {
@@ -172,25 +152,4 @@ function containsRemoteImageUrl(value: unknown): boolean {
   }
 
   return Object.values(record).some(entry => containsRemoteImageUrl(entry))
-}
-
-function throwInvalidRequestError(
-  message: string,
-  param: string,
-  code?: string,
-): never {
-  throw new HTTPError(
-    message,
-    Response.json(
-      {
-        error: {
-          message,
-          type: 'invalid_request_error',
-          param,
-          ...(code ? { code } : {}),
-        },
-      },
-      { status: 400 },
-    ),
-  )
 }

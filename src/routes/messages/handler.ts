@@ -10,6 +10,7 @@ import { getReasoningEffortForModel } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
 import { executeStrategy } from '~/lib/execution-strategy'
 import {
+  findModelById,
   modelSupportsAdaptiveThinking,
   modelSupportsEndpoint,
 } from '~/lib/model-capabilities'
@@ -75,9 +76,7 @@ export async function handleCompletion(c: Context) {
     )
   }
 
-  const selectedModel = state.cache.models?.data.find(
-    model => model.id === anthropicPayload.model,
-  )
+  const selectedModel = findModelById(anthropicPayload.model)
 
   const upstreamSignal = createUpstreamSignal(
     c.req.raw.signal,

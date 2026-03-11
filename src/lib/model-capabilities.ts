@@ -1,5 +1,13 @@
 import type { Model } from '~/types'
 
+import { state } from './state'
+
+export function findModelById(
+  modelId: string,
+): Model | undefined {
+  return state.cache.models?.data.find(model => model.id === modelId)
+}
+
 export function modelSupportsEndpoint(
   model: Model | undefined,
   endpoint: string,

@@ -3,11 +3,11 @@ import type { Model } from '~/types'
 
 import { getSmallModel, shouldCompactUseSmallModel, shouldWarmupUseSmallModel } from './config'
 import {
+  findModelById,
   modelSupportsAdaptiveThinking,
   modelSupportsToolCalls,
   modelSupportsVision,
 } from './model-capabilities'
-import { state } from './state'
 
 const COMPACT_SYSTEM_PROMPT_START
   = 'You are a helpful AI assistant tasked with summarizing conversations'
@@ -29,8 +29,8 @@ export function applyMessagesModelPolicy(
     return { originalModel, routedModel: originalModel }
   }
 
-  const originalSelection = findModel(originalModel)
-  const smallSelection = findModel(smallModel)
+  const originalSelection = findModelById(originalModel)
+  const smallSelection = findModelById(smallModel)
 
   if (
     shouldCompactUseSmallModel()
@@ -154,10 +154,6 @@ function hasSingleShortUserTextMessage(payload: AnthropicMessagesPayload): boole
 
   const text = message.content[0].text.trim()
   return text.length > 0 && text.length <= 64
-}
-
-function findModel(modelId: string): Model | undefined {
-  return state.cache.models?.data.find(model => model.id === modelId)
 }
 
 function hasVisionInput(payload: AnthropicMessagesPayload): boolean {

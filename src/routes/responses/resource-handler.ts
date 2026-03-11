@@ -7,7 +7,7 @@ import type {
 
 import { CopilotClient } from '~/clients'
 import { readCapiRequestContext } from '~/core/capi'
-import { HTTPError } from '~/lib/error'
+import { throwInvalidRequestError } from '~/lib/error'
 import { getClientConfig, state } from '~/lib/state'
 import { parseResponsesInputTokensPayload } from '~/lib/validation'
 
@@ -156,23 +156,4 @@ function parseBooleanParam(value: string): boolean | undefined {
     return false
   }
   return undefined
-}
-
-function throwInvalidRequestError(
-  message: string,
-  param: string,
-): never {
-  throw new HTTPError(
-    message,
-    Response.json(
-      {
-        error: {
-          message,
-          type: 'invalid_request_error',
-          param,
-        },
-      },
-      { status: 400 },
-    ),
-  )
 }

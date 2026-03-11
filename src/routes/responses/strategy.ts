@@ -1,17 +1,9 @@
 import type { CopilotClient } from '~/clients'
 import type { CapiRequestContext } from '~/core/capi'
-import type { ExecutionStrategy } from '~/lib/execution-strategy'
+import type { ExecutionStrategy, SSEStreamChunk } from '~/lib/execution-strategy'
 import type { ResponsesPayload, ResponsesResult } from '~/types'
 
 import { isAsyncIterable } from '~/lib/async-iterable'
-
-interface ResponsesStreamChunk {
-  id?: number | string
-  event?: string
-  data?: string
-  comment?: string
-  retry?: number
-}
 
 interface StreamIdState {
   responseId?: string
@@ -90,15 +82,15 @@ export function createResponsesPassthroughStrategy(
     requestContext: Partial<CapiRequestContext>
     signal: AbortSignal
   },
-): ExecutionStrategy<ResponsesResult | AsyncIterable<ResponsesStreamChunk>, ResponsesStreamChunk> {
+): ExecutionStrategy<ResponsesResult | AsyncIterable<SSEStreamChunk>, SSEStreamChunk> {
   const tracker = createStreamIdTracker()
 
   return {
     execute() {
-      return copilotClient.createResponses(payload, options) as Promise<ResponsesResult | AsyncIterable<ResponsesStreamChunk>>
+      return copilotClient.createResponses(payload, options) as Promise<ResponsesResult | AsyncIterable<SSEStreamChunk>>
     },
 
-    isStream(result): result is AsyncIterable<ResponsesStreamChunk> {
+    isStream(result): result is AsyncIterable<SSEStreamChunk> {
       return Boolean(payload.stream) && isAsyncIterable(result)
     },
 

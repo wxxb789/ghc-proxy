@@ -33,6 +33,9 @@ import { SignatureCodec } from './signature-codec'
 
 const MESSAGE_TYPE = 'message'
 
+const USER_ID_ACCOUNT_RE = /user_([^_]+)_account/
+const USER_ID_SESSION_RE = /_session_(.+)$/
+
 export const THINKING_TEXT = 'Thinking...'
 
 export interface AnthropicToResponsesOptions {
@@ -231,13 +234,21 @@ function resolveAssistantPhase(
     return undefined
   }
 
-  const hasText = content.some(block => block.type === 'text')
+  let hasText = false
+  let hasToolUse = false
+  for (const block of content) {
+    if (block.type === 'text')
+      hasText = true
+    else if (block.type === 'tool_use')
+      hasToolUse = true
+    if (hasText && hasToolUse)
+      break
+  }
+
   if (!hasText) {
     return undefined
   }
-  return content.some(block => block.type === 'tool_use')
-    ? 'commentary'
-    : 'final_answer'
+  return hasToolUse ? 'commentary' : 'final_answer'
 }
 
 function createTextContent(text: string): ResponseInputText {
@@ -440,8 +451,8 @@ function parseUserId(
     return { safetyIdentifier: null, promptCacheKey: null }
   }
 
-  const userMatch = userId.match(/user_([^_]+)_account/)
-  const sessionMatch = userId.match(/_session_(.+)$/)
+  const userMatch = userId.match(USER_ID_ACCOUNT_RE)
+  const sessionMatch = userId.match(USER_ID_SESSION_RE)
 
   return {
     safetyIdentifier: userMatch ? userMatch[1] : null,

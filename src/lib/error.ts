@@ -57,6 +57,27 @@ export async function forwardError(c: Context, error: unknown) {
   )
 }
 
+export function throwInvalidRequestError(
+  message: string,
+  param: string,
+  code?: string,
+): never {
+  throw new HTTPError(
+    message,
+    Response.json(
+      {
+        error: {
+          message,
+          type: 'invalid_request_error',
+          param,
+          ...(code ? { code } : {}),
+        },
+      },
+      { status: 400 },
+    ),
+  )
+}
+
 function isStructuredErrorPayload(
   value: unknown,
 ): value is { error: Record<string, unknown> } {
