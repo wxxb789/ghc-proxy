@@ -15,7 +15,8 @@ import type {
 
 import consola from 'consola'
 
-import { encodeCompactionCarrierSignature, THINKING_TEXT } from './anthropic-to-responses'
+import { THINKING_TEXT } from './anthropic-to-responses'
+import { SignatureCodec } from './signature-codec'
 
 export function translateResponsesToAnthropic(
   response: ResponsesResult,
@@ -46,7 +47,7 @@ function mapOutputToAnthropicContent(
           blocks.push({
             type: 'thinking',
             thinking,
-            signature: `${item.encrypted_content ?? ''}@${item.id}`,
+            signature: SignatureCodec.encodeReasoning(item),
           })
         }
         break
@@ -70,7 +71,7 @@ function mapOutputToAnthropicContent(
           blocks.push({
             type: 'thinking',
             thinking: THINKING_TEXT,
-            signature: encodeCompactionCarrierSignature({
+            signature: SignatureCodec.encodeCompaction({
               id: item.id,
               encrypted_content: item.encrypted_content,
             }),

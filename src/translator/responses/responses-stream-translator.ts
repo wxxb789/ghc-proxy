@@ -16,8 +16,9 @@ import type {
   ResponseTextDeltaEvent,
   ResponseTextDoneEvent,
 } from '~/types'
-import { encodeCompactionCarrierSignature, THINKING_TEXT } from './anthropic-to-responses'
+import { THINKING_TEXT } from './anthropic-to-responses'
 import { translateResponsesToAnthropic } from './responses-to-anthropic'
+import { SignatureCodec } from './signature-codec'
 
 const MAX_CONSECUTIVE_FUNCTION_CALL_WHITESPACE = 20
 
@@ -191,7 +192,7 @@ export class ResponsesStreamTranslator {
         index: blockIndex,
         delta: {
           type: 'signature_delta',
-          signature: encodeCompactionCarrierSignature({
+          signature: SignatureCodec.encodeCompaction({
             id: rawEvent.item.id,
             encrypted_content: rawEvent.item.encrypted_content,
           }),
@@ -219,7 +220,7 @@ export class ResponsesStreamTranslator {
         index: blockIndex,
         delta: {
           type: 'signature_delta',
-          signature: `${rawEvent.item.encrypted_content ?? ''}@${rawEvent.item.id}`,
+          signature: SignatureCodec.encodeReasoning(rawEvent.item),
         },
       })
       this.state.blockHasDelta.add(blockIndex)

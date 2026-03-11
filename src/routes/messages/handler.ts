@@ -1,15 +1,14 @@
 import type { Context } from 'hono'
 
-import type { CapiChatCompletionChunk } from '~/core/capi'
-import type { Model, ResponseStreamEvent } from '~/types'
+import type { Model } from '~/types'
 import consola from 'consola'
-import { streamSSE } from 'hono/streaming'
 
 import { AnthropicMessagesAdapter, CopilotTransport } from '~/adapters'
-import { CopilotClient, isNonStreamingResponse } from '~/clients'
+import { CopilotClient } from '~/clients'
 import { readCapiRequestContext } from '~/core/capi'
 import { getReasoningEffortForModel } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
+import { executeStrategy } from '~/lib/execution-strategy'
 import {
   modelSupportsAdaptiveThinking,
   modelSupportsEndpoint,
@@ -22,10 +21,12 @@ import { createUpstreamSignal } from '~/lib/upstream-signal'
 import { parseAnthropicMessagesPayload } from '~/lib/validation'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
-import { ResponsesStreamTranslator } from '~/translator/responses/responses-stream-translator'
-import { translateResponsesToAnthropic } from '~/translator/responses/responses-to-anthropic'
+import { SignatureCodec } from '~/translator/responses/signature-codec'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '../responses/context-management'
+import { createMessagesViaChatCompletionsStrategy } from './strategies/chat-completions'
+import { createNativeMessagesStrategy } from './strategies/native-messages'
+import { createMessagesViaResponsesStrategy } from './strategies/responses-api'
 
 const RESPONSES_ENDPOINT = '/responses'
 const MESSAGES_ENDPOINT = '/v1/messages'
@@ -78,32 +79,81 @@ export async function handleCompletion(c: Context) {
     model => model.id === anthropicPayload.model,
   )
 
+  const upstreamSignal = createUpstreamSignal(
+    c.req.raw.signal,
+    state.config.upstreamTimeoutSeconds !== undefined
+      ? state.config.upstreamTimeoutSeconds * 1000
+      : undefined,
+  )
+
+  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+
   if (shouldUseMessagesApi(selectedModel)) {
-    return handleWithMessagesApi(
-      c,
+    filterThinkingBlocksForNativeMessages(anthropicPayload)
+
+    if (modelSupportsAdaptiveThinking(selectedModel)) {
+      if (!anthropicPayload.thinking) {
+        anthropicPayload.thinking = { type: 'adaptive' }
+      }
+
+      if (anthropicPayload.thinking.type !== 'disabled' && !anthropicPayload.output_config?.effort) {
+        anthropicPayload.output_config = {
+          ...anthropicPayload.output_config,
+          effort: getAnthropicEffortForModel(anthropicPayload.model),
+        }
+      }
+    }
+
+    const strategy = createNativeMessagesStrategy(
+      copilotClient,
       anthropicPayload,
       anthropicBetaHeader,
-      selectedModel,
+      {
+        signal: upstreamSignal.signal,
+        requestContext: readCapiRequestContext(c.req.raw.headers),
+      },
     )
+    return executeStrategy(c, strategy, upstreamSignal)
   }
 
   if (shouldUseResponsesApi(selectedModel)) {
-    return handleWithResponsesApi(
-      c,
-      anthropicPayload,
-      modelRouting.originalModel,
-      selectedModel,
+    let responsesPayload
+    try {
+      responsesPayload = translateAnthropicToResponsesPayload(anthropicPayload, {
+        reasoningEffortResolver: getReasoningEffortForModel,
+      })
+    }
+    catch (error) {
+      if (error instanceof TranslationFailure) {
+        throw toHTTPError(error)
+      }
+      throw error
+    }
+    setModelMappingInfo(c, {
+      originalModel: modelRouting.originalModel,
+      mappedModel: responsesPayload.model,
+    })
+
+    applyContextManagement(
+      responsesPayload,
+      selectedModel?.capabilities.limits.max_prompt_tokens,
     )
+    compactInputByLatestCompaction(responsesPayload)
+
+    const { vision, initiator } = getResponsesRequestOptions(responsesPayload)
+    const strategy = createMessagesViaResponsesStrategy(
+      copilotClient,
+      responsesPayload,
+      {
+        vision,
+        initiator,
+        signal: upstreamSignal.signal,
+        requestContext: readCapiRequestContext(c.req.raw.headers),
+      },
+    )
+    return executeStrategy(c, strategy, upstreamSignal)
   }
 
-  return handleWithChatCompletions(c, anthropicPayload, modelRouting.originalModel)
-}
-
-async function handleWithChatCompletions(
-  c: Context,
-  anthropicPayload: ReturnType<typeof parseAnthropicMessagesPayload>,
-  originalRequestedModel = anthropicPayload.model,
-) {
   const adapter = createAnthropicAdapter()
   let plan
   try {
@@ -119,7 +169,7 @@ async function handleWithChatCompletions(
   }
 
   setModelMappingInfo(c, {
-    originalModel: originalRequestedModel,
+    originalModel: modelRouting.originalModel,
     mappedModel: plan.resolvedModel,
   })
   consola.debug(
@@ -133,281 +183,14 @@ async function handleWithChatCompletions(
     JSON.stringify(plan.payload),
   )
 
-  const { signal, cleanup } = createUpstreamSignal(
-    c.req.raw.signal,
-    state.config.upstreamTimeoutSeconds !== undefined
-      ? state.config.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
-
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
   const transport = new CopilotTransport(copilotClient)
-  const response = await transport.execute(plan, { signal })
-
-  if (isNonStreamingResponse(response)) {
-    consola.debug(
-      'Non-streaming response from Copilot (full):',
-      JSON.stringify(response, null, 2),
-    )
-    try {
-      const anthropicResponse = adapter.fromCapiResponse(response)
-      consola.debug(
-        'Translated Anthropic response:',
-        JSON.stringify(anthropicResponse),
-      )
-      return c.json(anthropicResponse)
-    }
-    catch (error) {
-      if (error instanceof TranslationFailure) {
-        throw toHTTPError(error)
-      }
-      throw error
-    }
-    finally {
-      cleanup()
-    }
-  }
-
-  consola.debug('Streaming response from Copilot')
-  return streamSSE(c, async (stream) => {
-    const streamTranslator = adapter.createStreamSerializer()
-
-    try {
-      for await (const rawEvent of response) {
-        consola.debug('Copilot raw stream event:', JSON.stringify(rawEvent))
-        if (rawEvent.data === '[DONE]') {
-          const finalEvents = streamTranslator.onDone()
-          for (const event of finalEvents) {
-            await stream.writeSSE({
-              event: event.type,
-              data: JSON.stringify(event),
-            })
-          }
-          break
-        }
-
-        if (!rawEvent.data) {
-          continue
-        }
-
-        const chunk = JSON.parse(rawEvent.data) as CapiChatCompletionChunk
-        const events = streamTranslator.onChunk(chunk)
-
-        for (const event of events) {
-          await stream.writeSSE({
-            event: event.type,
-            data: JSON.stringify(event),
-          })
-        }
-      }
-    }
-    catch (error) {
-      if (c.req.raw.signal.aborted) {
-        consola.debug('Client disconnected during Anthropic stream')
-        return
-      }
-
-      consola.error('Error streaming Anthropic response:', error)
-      const errorEvents = streamTranslator.onError(error)
-      for (const event of errorEvents) {
-        await stream.writeSSE({
-          event: event.type,
-          data: JSON.stringify(event),
-        })
-      }
-    }
-    finally {
-      cleanup()
-    }
-  })
-}
-
-async function handleWithResponsesApi(
-  c: Context,
-  anthropicPayload: ReturnType<typeof parseAnthropicMessagesPayload>,
-  originalRequestedModel = anthropicPayload.model,
-  selectedModel = state.cache.models?.data.find(
-    model => model.id === anthropicPayload.model,
-  ),
-) {
-  let responsesPayload
-  try {
-    responsesPayload = translateAnthropicToResponsesPayload(anthropicPayload)
-  }
-  catch (error) {
-    if (error instanceof TranslationFailure) {
-      throw toHTTPError(error)
-    }
-    throw error
-  }
-  setModelMappingInfo(c, {
-    originalModel: originalRequestedModel,
-    mappedModel: responsesPayload.model,
-  })
-
-  applyContextManagement(
-    responsesPayload,
-    selectedModel?.capabilities.limits.max_prompt_tokens,
+  const strategy = createMessagesViaChatCompletionsStrategy(
+    transport,
+    adapter,
+    plan,
+    upstreamSignal.signal,
   )
-  compactInputByLatestCompaction(responsesPayload)
-
-  const { signal, cleanup } = createUpstreamSignal(
-    c.req.raw.signal,
-    state.config.upstreamTimeoutSeconds !== undefined
-      ? state.config.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
-
-  const { vision, initiator } = getResponsesRequestOptions(responsesPayload)
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.createResponses(responsesPayload, {
-    signal,
-    initiator,
-    vision,
-    requestContext: readCapiRequestContext(c.req.raw.headers),
-  })
-
-  if (responsesPayload.stream && isAsyncIterable(response)) {
-    return streamSSE(c, async (stream) => {
-      const translator = new ResponsesStreamTranslator()
-
-      try {
-        for await (const rawEvent of response) {
-          if (rawEvent.event === 'ping') {
-            await stream.writeSSE({
-              event: 'ping',
-              data: '{"type":"ping"}',
-            })
-            continue
-          }
-
-          if (!rawEvent.data) {
-            continue
-          }
-
-          const events = translator.onEvent(
-            JSON.parse(rawEvent.data) as ResponseStreamEvent,
-          )
-          for (const event of events) {
-            await stream.writeSSE({
-              event: event.type,
-              data: JSON.stringify(event),
-            })
-          }
-
-          if (translator.isCompleted) {
-            break
-          }
-        }
-
-        if (!translator.isCompleted) {
-          for (const event of translator.onDone()) {
-            await stream.writeSSE({
-              event: event.type,
-              data: JSON.stringify(event),
-            })
-          }
-        }
-      }
-      catch (error) {
-        if (c.req.raw.signal.aborted) {
-          consola.debug('Client disconnected during Responses stream')
-          return
-        }
-
-        consola.error('Error streaming Anthropic response via Responses API:', error)
-        for (const event of translator.onError(error)) {
-          await stream.writeSSE({
-            event: event.type,
-            data: JSON.stringify(event),
-          })
-        }
-      }
-      finally {
-        cleanup()
-      }
-    })
-  }
-
-  try {
-    return c.json(translateResponsesToAnthropic(response as import('~/types').ResponsesResult))
-  }
-  catch (error) {
-    if (error instanceof TranslationFailure) {
-      throw toHTTPError(error)
-    }
-    throw error
-  }
-  finally {
-    cleanup()
-  }
-}
-
-async function handleWithMessagesApi(
-  c: Context,
-  anthropicPayload: ReturnType<typeof parseAnthropicMessagesPayload>,
-  anthropicBetaHeader: string | undefined,
-  selectedModel = state.cache.models?.data.find(
-    model => model.id === anthropicPayload.model,
-  ),
-) {
-  filterThinkingBlocksForNativeMessages(anthropicPayload)
-
-  if (modelSupportsAdaptiveThinking(selectedModel)) {
-    if (!anthropicPayload.thinking) {
-      anthropicPayload.thinking = { type: 'adaptive' }
-    }
-
-    if (anthropicPayload.thinking.type !== 'disabled' && !anthropicPayload.output_config?.effort) {
-      anthropicPayload.output_config = {
-        ...anthropicPayload.output_config,
-        effort: getAnthropicEffortForModel(anthropicPayload.model),
-      }
-    }
-  }
-
-  const { signal, cleanup } = createUpstreamSignal(
-    c.req.raw.signal,
-    state.config.upstreamTimeoutSeconds !== undefined
-      ? state.config.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
-
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.createMessages(
-    anthropicPayload,
-    anthropicBetaHeader,
-    {
-      signal,
-      requestContext: readCapiRequestContext(c.req.raw.headers),
-    },
-  )
-
-  if (isAsyncIterable(response)) {
-    return streamSSE(c, async (stream) => {
-      try {
-        for await (const event of response as AsyncIterable<{
-          event?: string
-          data?: string
-        }>) {
-          await stream.writeSSE({
-            ...(event.event ? { event: event.event } : {}),
-            data: event.data ?? '',
-          })
-        }
-      }
-      finally {
-        cleanup()
-      }
-    })
-  }
-
-  try {
-    return c.json(response)
-  }
-  finally {
-    cleanup()
-  }
+  return executeStrategy(c, strategy, upstreamSignal)
 }
 
 function filterThinkingBlocksForNativeMessages(
@@ -425,7 +208,8 @@ function filterThinkingBlocksForNativeMessages(
         block.thinking
         && block.thinking !== 'Thinking...'
         && block.signature
-        && !block.signature.includes('@'),
+        && !SignatureCodec.isReasoningSignature(block.signature)
+        && !SignatureCodec.isCompactionSignature(block.signature),
       )
     })
   }
@@ -454,9 +238,4 @@ function shouldUseMessagesApi(
   selectedModel: Model | undefined,
 ): boolean {
   return modelSupportsEndpoint(selectedModel, MESSAGES_ENDPOINT)
-}
-
-function isAsyncIterable<T>(value: unknown): value is AsyncIterable<T> {
-  return Boolean(value)
-    && typeof (value as AsyncIterable<T>)[Symbol.asyncIterator] === 'function'
 }

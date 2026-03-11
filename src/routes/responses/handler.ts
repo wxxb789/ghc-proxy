@@ -1,18 +1,18 @@
 import type { Context } from 'hono'
-import type { Model, ResponsesPayload, ResponsesResult } from '~/types'
-
-import { streamSSE } from 'hono/streaming'
+import type { Model, ResponsesPayload } from '~/types'
 
 import { CopilotClient } from '~/clients'
 import { readCapiRequestContext } from '~/core/capi'
 import { shouldUseFunctionApplyPatch } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
+import { executeStrategy } from '~/lib/execution-strategy'
 import { modelSupportsEndpoint } from '~/lib/model-capabilities'
 import { getClientConfig, state } from '~/lib/state'
 import { createUpstreamSignal } from '~/lib/upstream-signal'
 import { parseResponsesPayload } from '~/lib/validation'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from './context-management'
+import { createResponsesPassthroughStrategy } from './strategy'
 
 const RESPONSES_ENDPOINT = '/responses'
 
@@ -59,59 +59,26 @@ export async function handleResponses(c: Context) {
   )
 
   const { vision, initiator } = getResponsesRequestOptions(payload)
-  const { signal, cleanup } = createUpstreamSignal(
+  const upstreamSignal = createUpstreamSignal(
     c.req.raw.signal,
     state.config.upstreamTimeoutSeconds !== undefined
       ? state.config.upstreamTimeoutSeconds * 1000
       : undefined,
   )
   const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.createResponses(payload, {
+
+  const strategy = createResponsesPassthroughStrategy(copilotClient, payload, {
     vision,
     initiator,
     requestContext: readCapiRequestContext(c.req.raw.headers),
-    signal,
+    signal: upstreamSignal.signal,
   })
 
-  if (isStreamingRequested(payload) && isAsyncIterable(response)) {
-    return streamSSE(c, async (stream) => {
-      const tracker = createStreamIdTracker()
-      try {
-        for await (const chunk of response) {
-          await stream.writeSSE({
-            ...(chunk.id !== undefined ? { id: String(chunk.id) } : {}),
-            ...(chunk.event ? { event: chunk.event } : {}),
-            ...(chunk.comment ? { comment: chunk.comment } : {}),
-            ...(chunk.retry !== undefined ? { retry: chunk.retry } : {}),
-            data: fixStreamIds(chunk.data ?? '', chunk.event, tracker),
-          })
-        }
-      }
-      finally {
-        cleanup()
-      }
-    })
-  }
-
-  try {
-    return c.json(response as ResponsesResult)
-  }
-  finally {
-    cleanup()
-  }
+  return executeStrategy(c, strategy, upstreamSignal)
 }
 
 function findSelectedModel(modelId: string): Model | undefined {
   return state.cache.models?.data.find(model => model.id === modelId)
-}
-
-function isStreamingRequested(payload: ResponsesPayload): boolean {
-  return Boolean(payload.stream)
-}
-
-function isAsyncIterable<T>(value: unknown): value is AsyncIterable<T> {
-  return Boolean(value)
-    && typeof (value as AsyncIterable<T>)[Symbol.asyncIterator] === 'function'
 }
 
 function applyResponsesToolTransforms(payload: ResponsesPayload): void {
@@ -205,74 +172,6 @@ function containsRemoteImageUrl(value: unknown): boolean {
   }
 
   return Object.values(record).some(entry => containsRemoteImageUrl(entry))
-}
-
-interface StreamIdState {
-  responseId?: string
-  itemIdsByOutputIndex: Map<number, string>
-}
-
-function createStreamIdTracker(): StreamIdState {
-  return {
-    itemIdsByOutputIndex: new Map(),
-  }
-}
-
-function fixStreamIds(
-  rawData: string,
-  eventName: string | undefined,
-  state: StreamIdState,
-): string {
-  if (!rawData) {
-    return rawData
-  }
-
-  let parsed: Record<string, unknown>
-  try {
-    parsed = JSON.parse(rawData) as Record<string, unknown>
-  }
-  catch {
-    return rawData
-  }
-
-  if (eventName === 'response.created' || eventName === 'response.completed' || eventName === 'response.incomplete') {
-    const response = parsed.response as Record<string, unknown> | undefined
-    if (response?.id && typeof response.id === 'string') {
-      state.responseId = response.id
-    }
-  }
-
-  if (eventName === 'response.output_item.added' || eventName === 'response.output_item.done') {
-    const outputIndex = typeof parsed.output_index === 'number' ? parsed.output_index : undefined
-    const item = parsed.item as Record<string, unknown> | undefined
-    if (outputIndex !== undefined && typeof item?.id === 'string') {
-      state.itemIdsByOutputIndex.set(outputIndex, item.id)
-    }
-  }
-
-  if (
-    (eventName === 'response.function_call_arguments.delta'
-      || eventName === 'response.function_call_arguments.done'
-      || eventName === 'response.output_text.delta'
-      || eventName === 'response.output_text.done'
-      || eventName === 'response.reasoning_summary_text.delta'
-      || eventName === 'response.reasoning_summary_text.done')
-    && typeof parsed.output_index === 'number'
-  ) {
-    const stableId = state.itemIdsByOutputIndex.get(parsed.output_index)
-    if (stableId && parsed.item_id !== stableId) {
-      parsed.item_id = stableId
-    }
-  }
-
-  if (state.responseId && parsed.response && typeof parsed.response === 'object') {
-    const response = parsed.response as Record<string, unknown>
-    if (response.id !== state.responseId) {
-      response.id = state.responseId
-    }
-  }
-
-  return JSON.stringify(parsed)
 }
 
 function throwInvalidRequestError(

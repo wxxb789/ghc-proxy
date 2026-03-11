@@ -27,22 +27,21 @@ import type {
   ToolChoiceFunction,
   ToolChoiceOptions,
 } from '~/types'
-import { getReasoningEffortForModel } from '~/lib/config'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 
+import { SignatureCodec } from './signature-codec'
+
 const MESSAGE_TYPE = 'message'
-const COMPACTION_SIGNATURE_PREFIX = 'cm1#'
-const COMPACTION_SIGNATURE_SEPARATOR = '@'
 
 export const THINKING_TEXT = 'Thinking...'
 
-interface CompactionCarrier {
-  id: string
-  encrypted_content: string
+export interface AnthropicToResponsesOptions {
+  reasoningEffortResolver?: (model: string) => string
 }
 
 export function translateAnthropicToResponsesPayload(
   payload: AnthropicMessagesPayload,
+  options?: AnthropicToResponsesOptions,
 ): ResponsesPayload {
   assertResponsesCompatibleRequest(payload)
 
@@ -53,7 +52,7 @@ export function translateAnthropicToResponsesPayload(
   }
 
   const { safetyIdentifier, promptCacheKey } = parseUserId(payload.metadata?.user_id)
-  const reasoning = resolveResponsesReasoningConfig(payload)
+  const reasoning = resolveResponsesReasoningConfig(payload, options)
 
   return {
     model: payload.model,
@@ -79,30 +78,14 @@ export function translateAnthropicToResponsesPayload(
   }
 }
 
-export function encodeCompactionCarrierSignature(compaction: CompactionCarrier): string {
-  return `${COMPACTION_SIGNATURE_PREFIX}${compaction.encrypted_content}${COMPACTION_SIGNATURE_SEPARATOR}${compaction.id}`
+export function encodeCompactionCarrierSignature(compaction: { id: string, encrypted_content: string }): string {
+  return SignatureCodec.encodeCompaction(compaction)
 }
 
 export function decodeCompactionCarrierSignature(
   signature: string,
-): CompactionCarrier | undefined {
-  if (!signature.startsWith(COMPACTION_SIGNATURE_PREFIX)) {
-    return undefined
-  }
-
-  const raw = signature.slice(COMPACTION_SIGNATURE_PREFIX.length)
-  const separatorIndex = raw.indexOf(COMPACTION_SIGNATURE_SEPARATOR)
-  if (separatorIndex <= 0 || separatorIndex === raw.length - 1) {
-    return undefined
-  }
-
-  const encrypted_content = raw.slice(0, separatorIndex)
-  const id = raw.slice(separatorIndex + 1)
-  if (!encrypted_content) {
-    return undefined
-  }
-
-  return { id, encrypted_content }
+): { id: string, encrypted_content: string } | undefined {
+  return SignatureCodec.decodeCompaction(signature)
 }
 
 function translateMessage(message: AnthropicMessage): Array<ResponseInputItem> {
@@ -171,7 +154,7 @@ function translateAssistantMessage(
         continue
       }
 
-      if (block.signature.includes('@')) {
+      if (SignatureCodec.isReasoningSignature(block.signature)) {
         flushPendingContent(pendingContent, items, { role: 'assistant', phase: assistantPhase })
         items.push(createReasoningContent(block))
         continue
@@ -276,7 +259,7 @@ function createImageContent(block: AnthropicImageBlock): ResponseInputImage {
 function createReasoningContent(
   block: AnthropicThinkingBlock,
 ): ResponseInputReasoning {
-  const { encryptedContent, id } = parseReasoningSignature(block.signature ?? '')
+  const { encryptedContent, id } = SignatureCodec.decodeReasoning(block.signature ?? '')
   const thinking = block.thinking === THINKING_TEXT ? '' : block.thinking
   return {
     id,
@@ -297,19 +280,6 @@ function createCompactionContent(
     id: compaction.id,
     type: 'compaction',
     encrypted_content: compaction.encrypted_content,
-  }
-}
-
-function parseReasoningSignature(
-  signature: string,
-): { encryptedContent: string, id: string } {
-  const splitIndex = signature.lastIndexOf('@')
-  if (splitIndex <= 0 || splitIndex === signature.length - 1) {
-    return { encryptedContent: signature, id: '' }
-  }
-  return {
-    encryptedContent: signature.slice(0, splitIndex),
-    id: signature.slice(splitIndex + 1),
   }
 }
 
@@ -384,8 +354,9 @@ function convertAnthropicToolChoice(
 
 function resolveResponsesReasoningConfig(
   payload: AnthropicMessagesPayload,
+  options?: AnthropicToResponsesOptions,
 ): ResponsesPayload['reasoning'] | undefined {
-  const effort = resolveResponsesReasoningEffort(payload)
+  const effort = resolveResponsesReasoningEffort(payload, options)
   if (!effort) {
     return undefined
   }
@@ -398,6 +369,7 @@ function resolveResponsesReasoningConfig(
 
 function resolveResponsesReasoningEffort(
   payload: AnthropicMessagesPayload,
+  options?: AnthropicToResponsesOptions,
 ): NonNullable<ResponsesPayload['reasoning']>['effort'] | undefined {
   if (payload.thinking?.type === 'disabled') {
     return 'none'
@@ -412,7 +384,7 @@ function resolveResponsesReasoningEffort(
   }
 
   if (payload.thinking?.type === 'enabled') {
-    return getReasoningEffortForModel(payload.model)
+    return (options?.reasoningEffortResolver?.(payload.model) ?? 'medium') as NonNullable<ResponsesPayload['reasoning']>['effort']
   }
 
   return undefined

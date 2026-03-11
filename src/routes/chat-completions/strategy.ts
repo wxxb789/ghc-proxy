@@ -1,0 +1,66 @@
+import type { CopilotTransport, OpenAIChatAdapter } from '~/adapters'
+import type { CapiChatCompletionChunk, CapiExecutionPlan } from '~/core/capi'
+import type { ExecutionStrategy } from '~/lib/execution-strategy'
+
+import consola from 'consola'
+import { isNonStreamingResponse } from '~/clients'
+
+interface StreamChunk {
+  id?: number | string
+  event?: string
+  data?: string
+  comment?: string
+  retry?: number
+}
+
+type ChatCompletionsResult = Awaited<ReturnType<CopilotTransport['execute']>>
+
+export function createChatCompletionsStrategy(
+  transport: CopilotTransport,
+  adapter: OpenAIChatAdapter,
+  plan: CapiExecutionPlan,
+  signal: AbortSignal,
+): ExecutionStrategy<ChatCompletionsResult, StreamChunk> {
+  return {
+    execute() {
+      return transport.execute(plan, { signal })
+    },
+
+    isStream(result): result is ChatCompletionsResult & AsyncIterable<StreamChunk> {
+      return !isNonStreamingResponse(result)
+    },
+
+    translateResult(result) {
+      consola.debug('Non-streaming response:', JSON.stringify(result))
+      return adapter.fromCapiResponse(result as Exclude<ChatCompletionsResult, AsyncIterable<StreamChunk>>)
+    },
+
+    translateStreamChunk(chunk) {
+      consola.debug('Streaming chunk:', JSON.stringify(chunk))
+      if (chunk.data === '[DONE]') {
+        return {
+          ...(chunk.comment ? { comment: chunk.comment } : {}),
+          ...(chunk.event ? { event: chunk.event } : {}),
+          ...(chunk.id !== undefined ? { id: String(chunk.id) } : {}),
+          ...(chunk.retry !== undefined ? { retry: chunk.retry } : {}),
+          data: chunk.data,
+        }
+      }
+
+      if (!chunk.data) {
+        return null
+      }
+
+      const sanitizedChunk = adapter.serializeStreamChunk(
+        JSON.parse(chunk.data) as CapiChatCompletionChunk,
+      )
+      return {
+        ...(chunk.comment ? { comment: chunk.comment } : {}),
+        ...(chunk.event ? { event: chunk.event } : {}),
+        ...(chunk.id !== undefined ? { id: String(chunk.id) } : {}),
+        ...(chunk.retry !== undefined ? { retry: chunk.retry } : {}),
+        data: JSON.stringify(sanitizedChunk),
+      }
+    },
+  }
+}
