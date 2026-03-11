@@ -17,6 +17,7 @@ export type {
   AnthropicStreamEventData,
   AnthropicStreamState,
   AnthropicTextBlock,
+  AnthropicThinkingBlock,
   AnthropicTool,
   AnthropicToolResultBlock,
   AnthropicToolUseBlock,

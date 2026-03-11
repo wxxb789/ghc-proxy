@@ -33,6 +33,7 @@
     "release:patch": "bumpp patch --yes --commit --tag",
     "release:minor": "bumpp minor --yes --commit --tag",
     "release:major": "bumpp major --yes --commit --tag",
+    "matrix:live": "bun run scripts/live-compat-matrix.ts",
     "smoke:packaged": "bun run scripts/packaged-smoke-test.ts",
     "start": "NODE_ENV=production bun run ./src/main.ts",
     "typecheck": "npx tsc --project tsconfig.json"

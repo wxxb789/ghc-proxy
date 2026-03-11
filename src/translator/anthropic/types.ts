@@ -22,6 +22,9 @@ export interface AnthropicMessagesPayload {
     | { type: 'enabled', budget_tokens: number }
     | { type: 'disabled' }
     | { type: 'adaptive' }
+  output_config?: {
+    effort?: 'low' | 'medium' | 'high' | 'max'
+  }
   service_tier?: 'auto' | 'standard_only'
 }
 

@@ -61,3 +61,24 @@ test('sets X-Initiator to user if only user present', async () => {
   ).headers
   expect(headers['X-Initiator']).toBe('user')
 })
+
+test('prefers dynamic copilot api base from token state', async () => {
+  state.auth.copilotApiBase = 'https://api.enterprise.githubcopilot.com/'
+
+  const payload: ChatCompletionsPayload = {
+    messages: [{ role: 'user', content: 'hi' }],
+    model: 'gpt-test',
+  }
+
+  const client = new CopilotClient(
+    state.auth,
+    getClientConfig(),
+    { fetch: fetchMock as unknown as typeof fetch },
+  )
+  await client.createChatCompletions(payload)
+
+  expect(fetchMock).toHaveBeenCalled()
+  expect(fetchMock.mock.calls[2]?.[0]).toBe('https://api.enterprise.githubcopilot.com/chat/completions')
+
+  state.auth.copilotApiBase = undefined
+})

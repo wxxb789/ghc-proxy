@@ -4,7 +4,7 @@
 [![CI](https://github.com/wxxb789/ghc-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/wxxb789/ghc-proxy/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/wxxb789/ghc-proxy/blob/master/LICENSE)
 
-A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic compatible API. Use it to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://www.cursor.com/), or any tool that speaks the OpenAI Chat Completions or Anthropic Messages protocol.
+A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic compatible API. Use it to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://www.cursor.com/), or any tool that speaks the OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages protocol.
 
 > [!WARNING]
 > Reverse-engineered, unofficial, may break at any time. Excessive use can trigger GitHub abuse detection. **Use at your own risk.**
@@ -110,7 +110,26 @@ ghc-proxy sits between your tools and the GitHub Copilot API:
 
 The proxy authenticates with GitHub using the [device code OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow) (the same flow VS Code uses), then exchanges the GitHub token for a short-lived Copilot token that auto-refreshes.
 
-Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. Anthropic-format requests pass through a translation layer that converts message formats, tool schemas, and streaming events between the two protocols. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
+When the Copilot token response includes `endpoints.api`, `ghc-proxy` now prefers that runtime API base automatically instead of relying only on the configured account type. This keeps enterprise/business routing aligned with the endpoint GitHub actually returned for the current token.
+
+Incoming requests hit a [Hono](https://hono.dev/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use a native Responses path with explicit compatibility policies. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
+
+### Request Routing
+
+`ghc-proxy` does not force every request through one protocol. The current routing rules are:
+
+- `POST /v1/chat/completions`: OpenAI Chat Completions -> shared planning pipeline -> Copilot `/chat/completions`
+- `POST /v1/responses`: OpenAI Responses create -> native Responses handler -> Copilot `/responses`
+- `POST /v1/responses/input_tokens`: Responses input-token counting passthrough when the upstream supports it
+- `GET /v1/responses/:responseId`: Responses retrieve passthrough when the upstream supports it
+- `GET /v1/responses/:responseId/input_items`: Responses input-items passthrough when the upstream supports it
+- `DELETE /v1/responses/:responseId`: Responses delete passthrough when the upstream supports it
+- `POST /v1/messages`: Anthropic Messages -> choose the best available upstream path for the selected model:
+  - native Copilot `/v1/messages` when supported
+  - Anthropic -> Responses -> Anthropic translation when the model only supports `/responses`
+  - Anthropic -> Chat Completions -> Anthropic fallback otherwise
+
+This keeps the existing chat pipeline stable while allowing newer Copilot models to use the endpoint they actually expose.
 
 ### Endpoints
 
@@ -119,6 +138,11 @@ Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming) |
+| `POST` | `/v1/responses` | Create a Responses API response |
+| `POST` | `/v1/responses/input_tokens` | Count Responses input tokens when supported by Copilot upstream |
+| `GET` | `/v1/responses/:responseId` | Retrieve one response when supported by Copilot upstream |
+| `GET` | `/v1/responses/:responseId/input_items` | Retrieve response input items when supported by Copilot upstream |
+| `DELETE` | `/v1/responses/:responseId` | Delete one response when supported by Copilot upstream |
 | `GET`  | `/v1/models` | List available models |
 | `POST` | `/v1/embeddings` | Generate embeddings |
 
@@ -126,7 +150,7 @@ Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/v1/messages` | Messages API with documented tool/thinking/stream translation behavior |
+| `POST` | `/v1/messages` | Messages API with per-model routing across native Messages, Responses translation, or chat-completions fallback |
 | `POST` | `/v1/messages/count_tokens` | Token counting |
 
 **Utility:**
@@ -136,7 +160,7 @@ Incoming requests hit a [Hono](https://hono.dev/) server. OpenAI-format requests
 | `GET`  | `/usage` | Copilot quota / usage monitoring |
 | `GET`  | `/token` | Inspect the current Copilot token |
 
-> **Note:** The `/v1/` prefix is optional. `/chat/completions`, `/models`, and `/embeddings` also work.
+> **Note:** The `/v1/` prefix is optional. `/chat/completions`, `/responses`, `/models`, and `/embeddings` also work.
 
 ## CLI Reference
 
@@ -231,6 +255,61 @@ Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
 
 **Priority order:** environment variable > config.json > built-in default.
 
+### Small-Model Routing
+
+`/v1/messages` can optionally reroute specific low-value requests to a cheaper model:
+
+- `smallModel`: the model to reroute to
+- `compactUseSmallModel`: reroute recognized compact/summarization requests
+- `warmupUseSmallModel`: reroute explicitly marked warmup/probe requests
+
+Both switches default to `false`. Routing is conservative:
+
+- the target `smallModel` must exist in Copilot's model list
+- it must preserve the original model's declared endpoint support
+- tool, thinking, and vision requests are not rerouted to a model that lacks the required capabilities
+
+Warmup routing is intentionally narrow. Requests must look like explicit warmup/probe traffic; ordinary tool-free chat requests are not rerouted just because they include `anthropic-beta`.
+
+### Responses Compatibility
+
+`/v1/responses` is designed to stay close to the OpenAI wire format while making Copilot limitations explicit:
+
+- requests are validated before any mutation
+- common official request fields such as `conversation`, `previous_response_id`, `max_tool_calls`, `truncation`, `user`, `prompt`, and `text` are now modeled explicitly instead of relying on loose passthrough alone
+- official `text.format` options are modeled explicitly, including `text`, `json_object`, and `json_schema`
+- `custom` `apply_patch` can be rewritten as a function tool when `useFunctionApplyPatch` is enabled
+- per-model Responses context compaction can be enabled with `responsesApiContextManagementModels`
+- reasoning defaults for Anthropic -> Responses translation can be tuned with `modelReasoningEfforts`
+- known unsupported builtin tools, such as `web_search`, fail explicitly with `400` instead of being silently removed
+- external image URLs on the Responses path fail explicitly with `400`; use `file_id` or data URL image input instead
+- official `input_file` and `item_reference` input items are modeled explicitly and validated before forwarding
+
+Live upstream verification matters here. On March 11, 2026, a full local scan across every Copilot model that advertised `/responses` support still showed two stable vision gaps:
+
+- external image URLs were rejected uniformly enough that the proxy now rejects them locally with a clearer capability error
+- the current 1x1 PNG data URL probe was rejected upstream as invalid image data even though the fixture itself decodes as a valid PNG locally
+
+The proxy does not currently disable Responses vision wholesale because the same models still advertise vision capability in Copilot model metadata. Treat Responses vision as upstream-contract-sensitive and verify it with `matrix:live` before relying on it.
+
+Additional real-upstream note: on March 11, 2026, `POST /responses` succeeded against the current enterprise Copilot endpoint, but `POST /responses/input_tokens`, `GET /responses/{id}`, `GET /responses/{id}/input_items`, and `DELETE /responses/{id}` all returned upstream `404`. The proxy exposes those routes because they are part of the official Responses surface, but current Copilot upstream support is not there yet. The same live matrix also showed `previous_response_id` returning upstream `400 previous_response_id is not supported` on the tested model.
+
+Example `config.json`:
+
+```json
+{
+  "smallModel": "gpt-4.1-mini",
+  "compactUseSmallModel": true,
+  "warmupUseSmallModel": false,
+  "useFunctionApplyPatch": true,
+  "responsesApiContextManagementModels": ["gpt-5", "gpt-5-mini"],
+  "modelReasoningEfforts": {
+    "gpt-5": "high",
+    "gpt-5-mini": "medium"
+  }
+}
+```
+
 ## Docker
 
 Build and run:
@@ -280,4 +359,16 @@ bun run build            # Build with tsdown
 bun run lint             # ESLint
 bun run typecheck        # tsc --noEmit
 bun test                 # Run tests
+bun run matrix:live      # Real Copilot upstream compatibility matrix
+bun run matrix:live --vision-only --all-responses-models --json
+bun run matrix:live --stateful-only --json --model=gpt-5.2-codex
 ```
+
+> **Note:** `bun run matrix:live` uses your configured GitHub/Copilot credentials and spends real upstream requests. Use it when you want end-to-end verification against the current Copilot service, not for every local edit.
+>
+> Useful flags:
+> - `--json`: emit machine-readable JSON only
+> - `--vision-only`: run just the Responses image probes
+> - `--stateful-only`: run follow-up/resource probes such as `previous_response_id`, `input_tokens`, and `input_items`
+> - `--all-responses-models`: scan every model that advertises `/responses`
+> - `--model=<id>`: pin the Responses scan to one specific model

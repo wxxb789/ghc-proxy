@@ -25,6 +25,12 @@ export async function forwardError(c: Context, error: unknown) {
       errorJson = errorText
     }
     consola.error('HTTP error:', errorJson)
+    if (isStructuredErrorPayload(errorJson)) {
+      return c.json(
+        errorJson,
+        error.response.status as ContentfulStatusCode,
+      )
+    }
     return c.json(
       {
         error: {
@@ -49,4 +55,14 @@ export async function forwardError(c: Context, error: unknown) {
     },
     500,
   )
+}
+
+function isStructuredErrorPayload(
+  value: unknown,
+): value is { error: Record<string, unknown> } {
+  return typeof value === 'object'
+    && value !== null
+    && 'error' in value
+    && typeof value.error === 'object'
+    && value.error !== null
 }

@@ -17,13 +17,16 @@ const USER_AGENT = `GitHubCopilotChat/${COPILOT_VERSION}`
 const API_VERSION = '2025-04-01'
 
 export function copilotBaseUrl(config: ClientConfig) {
+  if (config.copilotApiBase) {
+    return config.copilotApiBase.replace(/\/+$/, '')
+  }
   return config.accountType === 'individual'
     ? 'https://api.githubcopilot.com'
     : `https://api.${config.accountType}.githubcopilot.com`
 }
 export interface CopilotHeaderOptions {
   initiator?: 'user' | 'agent'
-  requestContext?: CapiRequestContext
+  requestContext?: Partial<CapiRequestContext>
   vision?: boolean
 }
 

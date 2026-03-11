@@ -8,6 +8,7 @@ import { CopilotClient, getVSCodeVersion } from '~/clients'
 export interface AuthState {
   githubToken?: string
   copilotToken?: string
+  copilotApiBase?: string
 }
 
 export interface RuntimeConfig {
@@ -51,6 +52,7 @@ export function getClientConfig(): ClientConfig {
   return {
     accountType: state.config.accountType,
     vsCodeVersion: state.cache.vsCodeVersion,
+    copilotApiBase: state.auth.copilotApiBase,
   }
 }
 
