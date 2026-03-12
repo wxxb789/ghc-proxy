@@ -4,10 +4,9 @@ import type {
   ResponsesInputTokensPayload,
 } from '~/types'
 
-import { CopilotClient } from '~/clients'
 import { readCapiRequestContext } from '~/core/capi'
 import { throwInvalidRequestError } from '~/lib/error'
-import { getClientConfig, state } from '~/lib/state'
+import { createCopilotClient } from '~/lib/state'
 import { parseResponsesInputTokensPayload } from '~/lib/validation'
 
 // --- Core request parameter interfaces ---
@@ -25,13 +24,13 @@ export interface ResourceHandlerBodyParams {
   signal: AbortSignal
 }
 
-// --- Framework-agnostic Core functions ---
+// --- Core functions ---
 
 export async function handleRetrieveResponseCore(
   { params, url, headers, signal }: ResourceHandlerParams,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  const copilotClient = createCopilotClient()
   return await copilotClient.getResponse(responseId, {
     params: getRetrieveParamsFromUrl(url),
     requestContext: readCapiRequestContext(headers),
@@ -43,7 +42,7 @@ export async function handleListResponseInputItemsCore(
   { params, url, headers, signal }: ResourceHandlerParams,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  const copilotClient = createCopilotClient()
   return await copilotClient.getResponseInputItems(
     responseId,
     getInputItemsParamsFromUrl(url),
@@ -58,7 +57,7 @@ export async function handleCreateResponseInputTokensCore(
   { body, headers, signal }: ResourceHandlerBodyParams,
 ): Promise<object> {
   const payload = parseResponsesInputTokensPayload(body) as ResponsesInputTokensPayload
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  const copilotClient = createCopilotClient()
   return await copilotClient.createResponseInputTokens(payload, {
     requestContext: readCapiRequestContext(headers),
     signal,
@@ -69,7 +68,7 @@ export async function handleDeleteResponseCore(
   { params, headers, signal }: Omit<ResourceHandlerParams, 'url'>,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  const copilotClient = createCopilotClient()
   return await copilotClient.deleteResponse(responseId, {
     requestContext: readCapiRequestContext(headers),
     signal,
@@ -88,7 +87,7 @@ function requireResponseId(responseId: string | undefined): string {
 function getRetrieveParamsFromUrl(rawUrl: string): ResponseRetrieveParams {
   const url = new URL(rawUrl)
   const params: ResponseRetrieveParams = {
-    include: getIncludeParamsFromUrl(rawUrl),
+    include: getIncludeParams(url),
   }
 
   const startingAfter = url.searchParams.get('starting_after')
@@ -136,7 +135,7 @@ function getInputItemsParamsFromUrl(rawUrl: string): ResponseInputItemsListParam
   const order = url.searchParams.get('order')
   const params: ResponseInputItemsListParams = {
     after: url.searchParams.get('after') ?? undefined,
-    include: getIncludeParamsFromUrl(rawUrl),
+    include: getIncludeParams(url),
   }
 
   if (limit !== null) {
@@ -163,8 +162,7 @@ function getInputItemsParamsFromUrl(rawUrl: string): ResponseInputItemsListParam
   return params
 }
 
-function getIncludeParamsFromUrl(rawUrl: string): Array<string> | undefined {
-  const url = new URL(rawUrl)
+function getIncludeParams(url: URL): Array<string> | undefined {
   const includes = url.searchParams.getAll('include')
     .flatMap(value => value.split(','))
     .map(value => value.trim())

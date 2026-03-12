@@ -6,7 +6,7 @@ export interface ModelMappingInfo {
   mappedModel?: string
 }
 
-function formatElapsed(start: number) {
+export function formatElapsed(start: number) {
   const delta = Date.now() - start
   return delta < 1000 ? `${delta}ms` : `${Math.round(delta / 1000)}s`
 }
@@ -62,7 +62,7 @@ function formatModelMapping(info: ModelMappingInfo | undefined): string {
 }
 
 /**
- * Framework-agnostic request logging function.
+ * Request logging function.
  * Logs a formatted request line with method, path, status, elapsed time,
  * and optional model mapping info.
  */
@@ -82,11 +82,4 @@ export function logRequest(
   ].join(' ')
 
   consola.info(`${line}${formatModelMapping(modelInfo)}`)
-}
-
-/**
- * Computes a human-readable elapsed time string from a start timestamp.
- */
-export function computeElapsed(start: number): string {
-  return formatElapsed(start)
 }

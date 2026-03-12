@@ -8,9 +8,8 @@ export async function awaitApproval() {
   })
 
   if (!response) {
-    throw new HTTPError(
-      'Request rejected',
-      Response.json({ message: 'Request rejected' }, { status: 403 }),
-    )
+    throw new HTTPError(403, {
+      error: { message: 'Request rejected', type: 'forbidden' },
+    })
   }
 }

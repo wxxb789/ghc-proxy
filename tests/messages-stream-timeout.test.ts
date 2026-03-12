@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
-import { createErrorResponse } from '~/lib/error'
+import { HTTPError } from '~/lib/error'
 import { sseAdapter } from '~/lib/sse-adapter'
 import { handleMessagesCore } from '~/routes/messages/handler'
 import { runRequestGuard } from '~/routes/middleware/request-guard'
@@ -54,7 +54,22 @@ describe('POST /v1/messages streaming error handling', () => {
     CopilotClient.prototype.createChatCompletions = timeoutCreateChatCompletions
 
     const app = new Elysia()
-      .onError(async ({ error }) => createErrorResponse(error))
+      .error({ HTTP: HTTPError })
+      .onError(({ code, error }) => {
+        if (code === 'HTTP')
+          return
+        if (error instanceof Error && error.name === 'AbortError') {
+          return Response.json(
+            { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
+            { status: 504 },
+          )
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        return Response.json(
+          { error: { message, type: 'error' } },
+          { status: 500 },
+        )
+      })
       .post('/v1/messages', async function* ({ body, request }) {
         await runRequestGuard()
         const { result } = await handleMessagesCore({

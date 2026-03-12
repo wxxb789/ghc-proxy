@@ -8,7 +8,9 @@ import { readConfig } from '~/lib/config'
 import { ensurePaths } from '~/lib/paths'
 import { cacheModels, cacheVSCodeVersion, state } from '~/lib/state'
 import { setupCopilotToken, setupGitHubToken } from '~/lib/token'
-import { server } from '~/server'
+import { createServer } from '~/server'
+
+const server = createServer()
 
 type MatrixStatus
   = | 'supported'

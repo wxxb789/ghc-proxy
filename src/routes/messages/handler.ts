@@ -3,33 +3,31 @@ import type { ModelMappingInfo } from '~/lib/request-logger'
 import type { Model } from '~/types'
 import consola from 'consola'
 
-import { AnthropicMessagesAdapter, CopilotTransport } from '~/adapters'
-import { CopilotClient } from '~/clients'
+import { CopilotTransport } from '~/adapters'
 import { readCapiRequestContext } from '~/core/capi'
 import { getReasoningEffortForModel } from '~/lib/config'
-import { HTTPError } from '~/lib/error'
+import { fromTranslationFailure } from '~/lib/error'
 import { runStrategy } from '~/lib/execution-strategy'
 import {
   findModelById,
+  MESSAGES_ENDPOINT,
   modelSupportsAdaptiveThinking,
   modelSupportsEndpoint,
+  RESPONSES_ENDPOINT,
 } from '~/lib/model-capabilities'
-import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { applyMessagesModelPolicy } from '~/lib/request-model-policy'
-import { getClientConfig, state } from '~/lib/state'
-import { createUpstreamSignal } from '~/lib/upstream-signal'
+import { createCopilotClient } from '~/lib/state'
+import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 import { parseAnthropicMessagesPayload } from '~/lib/validation'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 import { SignatureCodec } from '~/translator/responses/signature-codec'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '../responses/context-management'
+import { createAnthropicAdapter } from './shared'
 import { createMessagesViaChatCompletionsStrategy } from './strategies/chat-completions'
 import { createNativeMessagesStrategy } from './strategies/native-messages'
 import { createMessagesViaResponsesStrategy } from './strategies/responses-api'
-
-const RESPONSES_ENDPOINT = '/responses'
-const MESSAGES_ENDPOINT = '/v1/messages'
 
 export interface MessagesCoreParams {
   body: unknown
@@ -42,31 +40,8 @@ export interface MessagesCoreResult {
   modelMapping?: ModelMappingInfo
 }
 
-function createAnthropicAdapter() {
-  const knownModelIds = state.cache.models
-    ? new Set(state.cache.models.data.map(model => model.id))
-    : undefined
-  const fallbackConfig = getModelFallbackConfig()
-
-  return new AnthropicMessagesAdapter({
-    modelResolver: (model: string) => resolveModel(model, knownModelIds, fallbackConfig),
-    getModelCapabilities: model => ({
-      supportsThinkingBudget: model.startsWith('claude'),
-    }),
-  })
-}
-
-function toHTTPError(error: TranslationFailure): HTTPError {
-  return new HTTPError(
-    error.message,
-    new Response(error.message, {
-      status: error.status,
-    }),
-  )
-}
-
 /**
- * Framework-agnostic handler for Anthropic messages endpoint.
+ * Core handler for Anthropic messages endpoint.
  * Returns both the execution result and model mapping info.
  */
 export async function handleMessagesCore(
@@ -94,14 +69,9 @@ export async function handleMessagesCore(
 
   const selectedModel = findModelById(anthropicPayload.model)
 
-  const upstreamSignal = createUpstreamSignal(
-    signal,
-    state.config.upstreamTimeoutSeconds !== undefined
-      ? state.config.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
+  const upstreamSignal = createUpstreamSignalFromConfig(signal)
 
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  const copilotClient = createCopilotClient()
 
   if (shouldUseMessagesApi(selectedModel)) {
     filterThinkingBlocksForNativeMessages(anthropicPayload)
@@ -141,7 +111,7 @@ export async function handleMessagesCore(
     }
     catch (error) {
       if (error instanceof TranslationFailure) {
-        throw toHTTPError(error)
+        throw fromTranslationFailure(error)
       }
       throw error
     }
@@ -180,7 +150,7 @@ export async function handleMessagesCore(
   }
   catch (error) {
     if (error instanceof TranslationFailure) {
-      throw toHTTPError(error)
+      throw fromTranslationFailure(error)
     }
     throw error
   }

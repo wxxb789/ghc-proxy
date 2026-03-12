@@ -1,3 +1,5 @@
+import { state } from '~/lib/state'
+
 const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 minutes
 
 export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -20,4 +22,16 @@ export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEF
       clientSignal?.removeEventListener('abort', onAbort)
     },
   }
+}
+
+/**
+ * Convenience wrapper that reads the upstream timeout from runtime config.
+ */
+export function createUpstreamSignalFromConfig(clientSignal: AbortSignal) {
+  return createUpstreamSignal(
+    clientSignal,
+    state.config.upstreamTimeoutSeconds !== undefined
+      ? state.config.upstreamTimeoutSeconds * 1000
+      : undefined,
+  )
 }

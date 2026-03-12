@@ -56,9 +56,12 @@ export function getClientConfig(): ClientConfig {
   }
 }
 
+export function createCopilotClient(): CopilotClient {
+  return new CopilotClient(state.auth, getClientConfig())
+}
+
 export async function cacheModels(client?: CopilotClient): Promise<void> {
-  const copilotClient
-    = client ?? new CopilotClient(state.auth, getClientConfig())
+  const copilotClient = client ?? createCopilotClient()
 
   const models = await copilotClient.getModels()
 

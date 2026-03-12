@@ -574,12 +574,16 @@ const embeddingRequestSchema = z.object({
   model: z.string().min(1),
 }).loose()
 
-function throwInvalidPayload(context: string, issues: Array<z.core.$ZodIssue>) {
+function throwInvalidPayload(context: string, issues: Array<z.core.$ZodIssue>): never {
   consola.warn('Invalid request payload', { context, issues })
-  throw new HTTPError(
-    'Invalid request payload',
-    new Response('Invalid request payload', { status: 400 }),
-  )
+  throw new HTTPError(400, {
+    error: {
+      message: 'Invalid request payload',
+      type: 'invalid_request_error',
+      param: context,
+      details: issues.map(i => ({ path: i.path, message: i.message })),
+    },
+  })
 }
 
 export function parseOpenAIChatPayload(payload: unknown): ChatCompletionsPayload {

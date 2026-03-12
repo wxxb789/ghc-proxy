@@ -4,6 +4,7 @@ import type { ExecutionStrategy, SSEStreamChunk } from '~/lib/execution-strategy
 
 import consola from 'consola'
 import { isNonStreamingResponse } from '~/clients'
+import { passthroughSSEChunk } from '~/lib/execution-strategy'
 
 type ChatCompletionsResult = Awaited<ReturnType<CopilotTransport['execute']>>
 
@@ -30,13 +31,7 @@ export function createChatCompletionsStrategy(
     translateStreamChunk(chunk) {
       consola.debug('Streaming chunk:', JSON.stringify(chunk))
       if (chunk.data === '[DONE]') {
-        return {
-          ...(chunk.comment ? { comment: chunk.comment } : {}),
-          ...(chunk.event ? { event: chunk.event } : {}),
-          ...(chunk.id !== undefined ? { id: String(chunk.id) } : {}),
-          ...(chunk.retry !== undefined ? { retry: chunk.retry } : {}),
-          data: chunk.data,
-        }
+        return passthroughSSEChunk(chunk, chunk.data)
       }
 
       if (!chunk.data) {
@@ -46,13 +41,7 @@ export function createChatCompletionsStrategy(
       const sanitizedChunk = adapter.serializeStreamChunk(
         JSON.parse(chunk.data) as CapiChatCompletionChunk,
       )
-      return {
-        ...(chunk.comment ? { comment: chunk.comment } : {}),
-        ...(chunk.event ? { event: chunk.event } : {}),
-        ...(chunk.id !== undefined ? { id: String(chunk.id) } : {}),
-        ...(chunk.retry !== undefined ? { retry: chunk.retry } : {}),
-        data: JSON.stringify(sanitizedChunk),
-      }
+      return passthroughSSEChunk(chunk, JSON.stringify(sanitizedChunk))
     },
   }
 }

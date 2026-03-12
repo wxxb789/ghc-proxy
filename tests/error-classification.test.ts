@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
-import { createErrorResponse } from '~/lib/error'
+import { HTTPError } from '~/lib/error'
 import { sseAdapter } from '~/lib/sse-adapter'
 import { handleMessagesCore } from '~/routes/messages/handler'
 import { runRequestGuard } from '~/routes/middleware/request-guard'
@@ -35,7 +35,22 @@ function createAbortErrorAsError(): Error {
 
 function createTestApp() {
   return new Elysia()
-    .onError(async ({ error }) => createErrorResponse(error))
+    .error({ HTTP: HTTPError })
+    .onError(({ code, error }) => {
+      if (code === 'HTTP')
+        return
+      if (error instanceof Error && error.name === 'AbortError') {
+        return Response.json(
+          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
+          { status: 504 },
+        )
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      return Response.json(
+        { error: { message, type: 'error' } },
+        { status: 500 },
+      )
+    })
     .post('/v1/messages', async function* ({ body, request }) {
       await runRequestGuard()
       const { result } = await handleMessagesCore({
@@ -63,7 +78,7 @@ function makeRequest(app: ReturnType<typeof createTestApp>) {
   }))
 }
 
-describe('Error classification in createErrorResponse', () => {
+describe('Error classification in onError handler', () => {
   test('AbortError (Error subclass) returns 504', async () => {
     CopilotClient.prototype.createChatCompletions = () =>
       Promise.reject(createAbortErrorAsError())
@@ -99,10 +114,11 @@ describe('Error classification in createErrorResponse', () => {
     })
   })
 
-  test('HTTPError returns upstream status code', async () => {
+  test('HTTPError returns upstream status code via toResponse()', async () => {
     const { HTTPError } = await import('~/lib/error')
-    const mockResponse = new Response('Upstream error', { status: 429 })
-    const httpError = new HTTPError('Rate limited', mockResponse)
+    const httpError = new HTTPError(429, {
+      error: { message: 'Upstream error', type: 'error' },
+    })
     CopilotClient.prototype.createChatCompletions = () =>
       Promise.reject(httpError)
 

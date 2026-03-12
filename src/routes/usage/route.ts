@@ -2,9 +2,7 @@ import { Elysia } from 'elysia'
 
 import { handleUsageCore } from './handler'
 
-export { handleUsageCore } from './handler'
-
-export const usageRoute = new Elysia()
-  .get('/usage', async () => {
-    return handleUsageCore()
-  })
+export function createUsageRoute() {
+  return new Elysia()
+    .get('/usage', async () => handleUsageCore())
+}

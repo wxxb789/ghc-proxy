@@ -1,61 +1,33 @@
 import consola from 'consola'
 
-export class HTTPError extends Error {
-  response: Response
-
-  constructor(message: string, response: Response) {
-    super(message)
-    this.response = response
+export interface HTTPErrorBody {
+  error: {
+    message: string
+    type: string
+    param?: string
+    code?: string
+    details?: Array<{ path: unknown, message: string }>
   }
 }
 
 /**
- * Framework-agnostic error response builder.
- * Returns a standard Response object using the Web API directly.
+ * Elysia-native error class with `status` property and `toResponse()`.
+ * Elysia auto-handles this via `toResponse()` when thrown in route handlers.
  */
-export async function createErrorResponse(error: unknown): Promise<Response> {
-  consola.error('Error occurred:', error)
+export class HTTPError extends Error {
+  readonly status: number
+  readonly body: HTTPErrorBody
 
-  if (error instanceof HTTPError) {
-    const errorText = await error.response.text()
-    let errorJson: unknown
-    try {
-      errorJson = JSON.parse(errorText)
-    }
-    catch {
-      errorJson = errorText
-    }
-    consola.error('HTTP error:', errorJson)
-    if (isStructuredErrorPayload(errorJson)) {
-      return Response.json(errorJson, { status: error.response.status })
-    }
-    return Response.json(
-      {
-        error: {
-          message: errorText,
-          type: 'error',
-        },
-      },
-      { status: error.response.status },
-    )
+  constructor(status: number, body: HTTPErrorBody) {
+    super(body.error.message)
+    this.name = 'HTTPError'
+    this.status = status
+    this.body = body
   }
 
-  if (error instanceof Error && error.name === 'AbortError') {
-    return Response.json(
-      { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
-      { status: 504 },
-    )
+  toResponse() {
+    return Response.json(this.body, { status: this.status })
   }
-
-  return Response.json(
-    {
-      error: {
-        message: (error as Error).message,
-        type: 'error',
-      },
-    },
-    { status: 500 },
-  )
 }
 
 export function throwInvalidRequestError(
@@ -63,20 +35,20 @@ export function throwInvalidRequestError(
   param: string,
   code?: string,
 ): never {
-  throw new HTTPError(
-    message,
-    Response.json(
-      {
-        error: {
-          message,
-          type: 'invalid_request_error',
-          param,
-          ...(code ? { code } : {}),
-        },
-      },
-      { status: 400 },
-    ),
-  )
+  throw new HTTPError(400, {
+    error: {
+      message,
+      type: 'invalid_request_error',
+      param,
+      ...(code ? { code } : {}),
+    },
+  })
+}
+
+export function fromTranslationFailure(failure: { message: string, status: number }): HTTPError {
+  return new HTTPError(failure.status, {
+    error: { message: failure.message, type: 'translation_error' },
+  })
 }
 
 function isStructuredErrorPayload(
@@ -87,4 +59,24 @@ function isStructuredErrorPayload(
     && 'error' in value
     && typeof value.error === 'object'
     && value.error !== null
+}
+
+/**
+ * Read an upstream Response body and throw an HTTPError with structured payload.
+ * Used by CopilotClient when upstream returns a non-OK response.
+ */
+export async function throwUpstreamError(message: string, response: Response): Promise<never> {
+  let body: HTTPErrorBody
+  try {
+    const text = await response.text()
+    const json = JSON.parse(text)
+    body = isStructuredErrorPayload(json)
+      ? json as HTTPErrorBody
+      : { error: { message: text, type: 'upstream_error' } }
+  }
+  catch {
+    body = { error: { message, type: 'upstream_error' } }
+  }
+  consola.error('Upstream error:', body)
+  throw new HTTPError(response.status, body)
 }

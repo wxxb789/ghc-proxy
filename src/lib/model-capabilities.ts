@@ -2,6 +2,9 @@ import type { Model } from '~/types'
 
 import { state } from './state'
 
+export const RESPONSES_ENDPOINT = '/responses' as const
+export const MESSAGES_ENDPOINT = '/v1/messages' as const
+
 export function findModelById(
   modelId: string,
 ): Model | undefined {

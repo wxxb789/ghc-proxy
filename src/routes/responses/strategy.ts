@@ -4,6 +4,7 @@ import type { ExecutionStrategy, SSEStreamChunk } from '~/lib/execution-strategy
 import type { ResponsesPayload, ResponsesResult } from '~/types'
 
 import { isAsyncIterable } from '~/lib/async-iterable'
+import { passthroughSSEChunk } from '~/lib/execution-strategy'
 
 interface StreamIdState {
   responseId?: string
@@ -99,13 +100,7 @@ export function createResponsesPassthroughStrategy(
     },
 
     translateStreamChunk(chunk) {
-      return {
-        ...(chunk.id !== undefined ? { id: String(chunk.id) } : {}),
-        ...(chunk.event ? { event: chunk.event } : {}),
-        ...(chunk.comment ? { comment: chunk.comment } : {}),
-        ...(chunk.retry !== undefined ? { retry: chunk.retry } : {}),
-        data: fixStreamIds(chunk.data ?? '', chunk.event, tracker),
-      }
+      return passthroughSSEChunk(chunk, fixStreamIds(chunk.data ?? '', chunk.event, tracker))
     },
   }
 }

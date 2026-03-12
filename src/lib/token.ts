@@ -99,7 +99,7 @@ export async function setupGitHubToken(
   }
   catch (error) {
     if (error instanceof HTTPError) {
-      consola.error('Failed to get GitHub token:', await error.response.json())
+      consola.error('Failed to get GitHub token:', error.body)
       throw error
     }
 
@@ -110,7 +110,7 @@ export async function setupGitHubToken(
 
 function isAuthError(error: unknown) {
   return error instanceof HTTPError
-    && (error.response.status === 401 || error.response.status === 403)
+    && (error.status === 401 || error.status === 403)
 }
 
 async function logUser() {

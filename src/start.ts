@@ -5,17 +5,13 @@ import { defineCommand } from 'citty'
 import clipboard from 'clipboardy'
 import consola from 'consola'
 
-import { serve } from 'srvx'
-import invariant from 'tiny-invariant'
-
-import { CopilotClient } from '~/clients'
 import { readConfig } from './lib/config'
 import { ensurePaths } from './lib/paths'
 import { initProxyFromEnv } from './lib/proxy'
 import { generateEnvScript } from './lib/shell'
-import { cacheModels, cacheVSCodeVersion, getClientConfig, state } from './lib/state'
+import { cacheModels, cacheVSCodeVersion, createCopilotClient, state } from './lib/state'
 import { setupCopilotToken, setupGitHubToken } from './lib/token'
-import { server } from './server'
+import { createServer } from './server'
 
 interface RunServerOptions {
   port: number
@@ -136,7 +132,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
 
   await setupCopilotToken()
 
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  const copilotClient = createCopilotClient()
   await cacheModels(copilotClient)
 
   consola.info(
@@ -146,18 +142,14 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   const serverUrl = `http://localhost:${options.port}`
 
   if (options.claudeCode) {
-    invariant(state.cache.models, 'Models should be loaded by now')
+    if (!state.cache.models) {
+      throw new Error('Models should be loaded by now')
+    }
     await maybeCopyClaudeCodeCommand(serverUrl)
   }
 
-  serve({
-    fetch: (req: Request) => server.handle(req) as Promise<Response>,
-    port: options.port,
-    bun:
-      options.idleTimeoutSeconds === undefined
-        ? undefined
-        : { idleTimeout: options.idleTimeoutSeconds },
-  })
+  const app = createServer({ idleTimeout: options.idleTimeoutSeconds })
+  app.listen(options.port)
 }
 
 function parseIntArg(raw: string | undefined, name: string, fallbackMsg: string): number | undefined {

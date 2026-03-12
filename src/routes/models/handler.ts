@@ -1,13 +1,12 @@
-import { CopilotClient } from '~/clients'
-import { cacheModels, getClientConfig, state } from '~/lib/state'
+import { cacheModels, createCopilotClient, state } from '~/lib/state'
 
 /**
- * Framework-agnostic handler for listing models.
+ * Core handler for listing models.
  */
 export async function handleModelsCore(): Promise<object> {
   if (!state.cache.models) {
     // This should be handled by startup logic, but as a fallback.
-    const copilotClient = new CopilotClient(state.auth, getClientConfig())
+    const copilotClient = createCopilotClient()
     await cacheModels(copilotClient)
   }
 

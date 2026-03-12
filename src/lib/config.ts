@@ -1,33 +1,39 @@
 import fs from 'node:fs/promises'
 import process from 'node:process'
 import consola from 'consola'
+import { z } from 'zod'
 
 import { PATHS } from './paths'
 
-interface ModelFallbackFileConfig {
-  claudeOpus?: string
-  claudeSonnet?: string
-  claudeHaiku?: string
-}
+const reasoningEffortSchema = z.enum([
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+])
 
-type ReasoningEffort
-  = | 'none'
-    | 'minimal'
-    | 'low'
-    | 'medium'
-    | 'high'
-    | 'xhigh'
+type ReasoningEffort = z.infer<typeof reasoningEffortSchema>
 
-export interface ConfigFile {
-  githubToken?: string
-  modelFallback?: ModelFallbackFileConfig
-  smallModel?: string
-  compactUseSmallModel?: boolean
-  warmupUseSmallModel?: boolean
-  useFunctionApplyPatch?: boolean
-  responsesApiContextManagementModels?: Array<string>
-  modelReasoningEfforts?: Record<string, ReasoningEffort>
-}
+const configFileSchema = z.object({
+  githubToken: z.string().optional(),
+  modelFallback: z.object({
+    claudeOpus: z.string().optional(),
+    claudeSonnet: z.string().optional(),
+    claudeHaiku: z.string().optional(),
+  }).optional(),
+  smallModel: z.string().optional(),
+  compactUseSmallModel: z.boolean().optional(),
+  warmupUseSmallModel: z.boolean().optional(),
+  useFunctionApplyPatch: z.boolean().optional(),
+  responsesApiContextManagementModels: z.array(z.string()).optional(),
+  modelReasoningEfforts: z.record(z.string(), reasoningEffortSchema).optional(),
+}).passthrough()
+
+export type ConfigFile = z.infer<typeof configFileSchema>
+
+const KNOWN_CONFIG_KEYS = new Set(Object.keys(configFileSchema.shape))
 
 let cachedConfig: ConfigFile = {}
 
@@ -45,19 +51,38 @@ export async function readConfig(): Promise<ConfigFile> {
       return {}
     }
 
-    const parsed = JSON.parse(content) as unknown
+    const raw = JSON.parse(content) as unknown
 
     if (
-      typeof parsed !== 'object'
-      || parsed === null
-      || Array.isArray(parsed)
+      typeof raw !== 'object'
+      || raw === null
+      || Array.isArray(raw)
     ) {
       consola.warn('config.json is not a valid object. Using defaults.')
       cachedConfig = {}
       return {}
     }
 
-    cachedConfig = parsed as ConfigFile
+    const result = configFileSchema.safeParse(raw)
+    if (!result.success) {
+      consola.warn(
+        'config.json has invalid fields:',
+        result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
+        'Using defaults for invalid fields.',
+      )
+      // Fall back to treating the raw object as-is for known valid fields
+      cachedConfig = raw as ConfigFile
+      return cachedConfig
+    }
+
+    // Warn about unknown fields
+    const unknownKeys = Object.keys(raw as Record<string, unknown>)
+      .filter(key => !KNOWN_CONFIG_KEYS.has(key))
+    if (unknownKeys.length > 0) {
+      consola.warn(`config.json contains unknown fields: ${unknownKeys.join(', ')}`)
+    }
+
+    cachedConfig = result.data
     return cachedConfig
   }
   catch (error: unknown) {

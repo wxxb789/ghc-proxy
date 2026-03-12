@@ -29,7 +29,7 @@ export interface ExecutionStrategy<TResult, TChunk> {
 }
 
 /**
- * Framework-agnostic strategy runner. Returns a discriminated union
+ * Strategy runner. Returns a discriminated union
  * instead of a framework-specific Response.
  */
 export async function runStrategy<TResult, TChunk>(
@@ -83,4 +83,18 @@ function normalizeOutputs(value: SSEOutput | SSEOutput[] | null): SSEOutput[] {
     return []
   }
   return Array.isArray(value) ? value : [value]
+}
+
+/**
+ * Creates an SSEOutput by copying SSE metadata fields from a raw chunk
+ * and replacing the data field with the provided value.
+ */
+export function passthroughSSEChunk(chunk: SSEStreamChunk, data: string): SSEOutput {
+  return {
+    ...(chunk.comment ? { comment: chunk.comment } : {}),
+    ...(chunk.event ? { event: chunk.event } : {}),
+    ...(chunk.id !== undefined ? { id: String(chunk.id) } : {}),
+    ...(chunk.retry !== undefined ? { retry: chunk.retry } : {}),
+    data,
+  }
 }

@@ -1,20 +1,17 @@
 import type { ExecutionResult } from '~/lib/execution-strategy'
 
 import type { ResponsesPayload } from '~/types'
-import { CopilotClient } from '~/clients'
 import { readCapiRequestContext } from '~/core/capi'
 import { shouldUseFunctionApplyPatch } from '~/lib/config'
 import { throwInvalidRequestError } from '~/lib/error'
 import { runStrategy } from '~/lib/execution-strategy'
-import { findModelById, modelSupportsEndpoint } from '~/lib/model-capabilities'
-import { getClientConfig, state } from '~/lib/state'
-import { createUpstreamSignal } from '~/lib/upstream-signal'
+import { findModelById, modelSupportsEndpoint, RESPONSES_ENDPOINT } from '~/lib/model-capabilities'
+import { createCopilotClient } from '~/lib/state'
+import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 import { parseResponsesPayload } from '~/lib/validation'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from './context-management'
 import { createResponsesPassthroughStrategy } from './strategy'
-
-const RESPONSES_ENDPOINT = '/responses'
 
 export interface ResponsesCoreParams {
   body: unknown
@@ -23,7 +20,7 @@ export interface ResponsesCoreParams {
 }
 
 /**
- * Framework-agnostic handler for responses endpoint.
+ * Core handler for responses endpoint.
  */
 export async function handleResponsesCore(
   { body, signal, headers }: ResponsesCoreParams,
@@ -54,13 +51,8 @@ export async function handleResponsesCore(
   )
 
   const { vision, initiator } = getResponsesRequestOptions(payload)
-  const upstreamSignal = createUpstreamSignal(
-    signal,
-    state.config.upstreamTimeoutSeconds !== undefined
-      ? state.config.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  const upstreamSignal = createUpstreamSignalFromConfig(signal)
+  const copilotClient = createCopilotClient()
 
   const strategy = createResponsesPassthroughStrategy(copilotClient, payload, {
     vision,

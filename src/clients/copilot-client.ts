@@ -24,7 +24,7 @@ import consola from 'consola'
 import { events } from 'fetch-event-stream'
 import { copilotBaseUrl, copilotHeaders } from '~/lib/api-config'
 
-import { HTTPError } from '~/lib/error'
+import { throwUpstreamError } from '~/lib/error'
 
 export class CopilotClient {
   private auth: ClientAuth
@@ -37,6 +37,12 @@ export class CopilotClient {
     this.fetchImpl = deps?.fetch ?? fetch
   }
 
+  private requireToken(): void {
+    if (!this.auth.copilotToken) {
+      throw new Error('Copilot token not found')
+    }
+  }
+
   async createChatCompletions(
     payload: CapiChatCompletionsPayload,
     options?: {
@@ -45,8 +51,7 @@ export class CopilotClient {
       requestContext?: CapiRequestContext
     },
   ) {
-    if (!this.auth.copilotToken)
-      throw new Error('Copilot token not found')
+    this.requireToken()
 
     const enableVision = payload.messages.some(
       x =>
@@ -77,7 +82,7 @@ export class CopilotClient {
 
     if (!response.ok) {
       consola.error('Failed to create chat completions', response)
-      throw new HTTPError('Failed to create chat completions', response)
+      await throwUpstreamError('Failed to create chat completions', response)
     }
 
     if (payload.stream) {
@@ -90,8 +95,7 @@ export class CopilotClient {
   async createEmbeddings(
     payload: EmbeddingRequest,
   ): Promise<EmbeddingResponse> {
-    if (!this.auth.copilotToken)
-      throw new Error('Copilot token not found')
+    this.requireToken()
 
     const response = await this.fetchImpl(
       `${copilotBaseUrl(this.config)}/embeddings`,
@@ -103,7 +107,7 @@ export class CopilotClient {
     )
 
     if (!response.ok) {
-      throw new HTTPError('Failed to create embeddings', response)
+      await throwUpstreamError('Failed to create embeddings', response)
     }
 
     return (await response.json()) as EmbeddingResponse
@@ -118,7 +122,7 @@ export class CopilotClient {
     )
 
     if (!response.ok)
-      throw new HTTPError('Failed to get models', response)
+      await throwUpstreamError('Failed to get models', response)
 
     return (await response.json()) as ModelsResponse
   }
@@ -132,8 +136,7 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ) {
-    if (!this.auth.copilotToken)
-      throw new Error('Copilot token not found')
+    this.requireToken()
 
     const headers = copilotHeaders(this.auth, this.config, {
       vision: options?.vision,
@@ -153,7 +156,7 @@ export class CopilotClient {
 
     if (!response.ok) {
       consola.error('Failed to create responses', response)
-      throw new HTTPError('Failed to create responses', response)
+      await throwUpstreamError('Failed to create responses', response)
     }
 
     if (payload.stream) {
@@ -171,8 +174,7 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ): Promise<ResponsesResult | Record<string, unknown>> {
-    if (!this.auth.copilotToken)
-      throw new Error('Copilot token not found')
+    this.requireToken()
 
     const response = await this.fetchImpl(
       this.buildResponsesUrl(responseId, options?.params),
@@ -186,7 +188,7 @@ export class CopilotClient {
 
     if (!response.ok) {
       consola.error('Failed to get response', response)
-      throw new HTTPError('Failed to get response', response)
+      await throwUpstreamError('Failed to get response', response)
     }
 
     return await response.json() as ResponsesResult | Record<string, unknown>
@@ -200,8 +202,7 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ): Promise<ResponseInputItemsListResult | Record<string, unknown>> {
-    if (!this.auth.copilotToken)
-      throw new Error('Copilot token not found')
+    this.requireToken()
 
     const response = await this.fetchImpl(
       this.buildResponseInputItemsUrl(responseId, params),
@@ -215,7 +216,7 @@ export class CopilotClient {
 
     if (!response.ok) {
       consola.error('Failed to get response input items', response)
-      throw new HTTPError('Failed to get response input items', response)
+      await throwUpstreamError('Failed to get response input items', response)
     }
 
     return await response.json() as ResponseInputItemsListResult | Record<string, unknown>
@@ -228,8 +229,7 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ): Promise<ResponseInputTokensResult | Record<string, unknown>> {
-    if (!this.auth.copilotToken)
-      throw new Error('Copilot token not found')
+    this.requireToken()
 
     const response = await this.fetchImpl(
       `${copilotBaseUrl(this.config)}/responses/input_tokens`,
@@ -245,7 +245,7 @@ export class CopilotClient {
 
     if (!response.ok) {
       consola.error('Failed to create response input tokens', response)
-      throw new HTTPError('Failed to create response input tokens', response)
+      await throwUpstreamError('Failed to create response input tokens', response)
     }
 
     return await response.json() as ResponseInputTokensResult | Record<string, unknown>
@@ -258,8 +258,7 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ): Promise<ResponseDeletionResult | Record<string, unknown>> {
-    if (!this.auth.copilotToken)
-      throw new Error('Copilot token not found')
+    this.requireToken()
 
     const response = await this.fetchImpl(
       this.buildResponsesUrl(responseId),
@@ -274,7 +273,7 @@ export class CopilotClient {
 
     if (!response.ok) {
       consola.error('Failed to delete response', response)
-      throw new HTTPError('Failed to delete response', response)
+      await throwUpstreamError('Failed to delete response', response)
     }
 
     return await response.json() as ResponseDeletionResult | Record<string, unknown>
@@ -288,8 +287,7 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ) {
-    if (!this.auth.copilotToken)
-      throw new Error('Copilot token not found')
+    this.requireToken()
 
     const headers = copilotHeaders(this.auth, this.config, {
       initiator: 'agent',
@@ -312,7 +310,7 @@ export class CopilotClient {
 
     if (!response.ok) {
       consola.error('Failed to create messages', response)
-      throw new HTTPError('Failed to create messages', response)
+      await throwUpstreamError('Failed to create messages', response)
     }
 
     if (payload.stream) {

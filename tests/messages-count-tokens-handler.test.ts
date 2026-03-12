@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { Elysia } from 'elysia'
 
-import { createErrorResponse } from '~/lib/error'
+import { HTTPError } from '~/lib/error'
 import { state } from '~/lib/state'
 import { handleCountTokensCore } from '~/routes/messages/count-tokens-handler'
 
@@ -43,7 +43,22 @@ function buildModelsResponse(...models: Array<Model>): ModelsResponse {
 
 function createApp() {
   return new Elysia()
-    .onError(async ({ error }) => createErrorResponse(error))
+    .error({ HTTP: HTTPError })
+    .onError(({ code, error }) => {
+      if (code === 'HTTP')
+        return
+      if (error instanceof Error && error.name === 'AbortError') {
+        return Response.json(
+          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
+          { status: 504 },
+        )
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      return Response.json(
+        { error: { message, type: 'error' } },
+        { status: 500 },
+      )
+    })
     .post('/v1/messages/count_tokens', async ({ body, request }) => {
       return handleCountTokensCore({
         body,

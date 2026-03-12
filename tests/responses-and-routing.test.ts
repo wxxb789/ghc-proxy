@@ -8,10 +8,10 @@ import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
 import { getCachedConfig } from '~/lib/config'
-import { createErrorResponse } from '~/lib/error'
+import { HTTPError } from '~/lib/error'
 import { state } from '~/lib/state'
-import { messageRoutes } from '~/routes/messages/route'
-import { responsesRoutes } from '~/routes/responses/route'
+import { createMessageRoutes } from '~/routes/messages/route'
+import { createResponsesRoutes } from '~/routes/responses/route'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 import { ResponsesStreamTranslator } from '~/translator/responses/responses-stream-translator'
@@ -123,9 +123,27 @@ function buildModelsResponse(...models: Array<Model>): ModelsResponse {
 
 function createApp() {
   return new Elysia()
-    .onError(async ({ error }) => createErrorResponse(error))
-    .use(messageRoutes)
-    .use(responsesRoutes)
+    .error({ HTTP: HTTPError })
+    .onError(({ code, error }) => {
+      if (code === 'HTTP')
+        return
+      if (error instanceof Error && error.name === 'AbortError') {
+        return Response.json(
+          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
+          { status: 504 },
+        )
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      return Response.json(
+        { error: { message, type: 'error' } },
+        { status: 500 },
+      )
+    })
+    .group('/v1', (app) => {
+      return app
+        .use(createMessageRoutes())
+        .use(createResponsesRoutes())
+    })
 }
 
 function mockResponses(

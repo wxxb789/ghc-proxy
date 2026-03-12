@@ -17,10 +17,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
-import { createErrorResponse } from '~/lib/error'
+import { HTTPError } from '~/lib/error'
 import { state } from '~/lib/state'
-import { completionRoutes } from '~/routes/chat-completions/route'
-import { messageRoutes } from '~/routes/messages/route'
+import { createCompletionRoutes } from '~/routes/chat-completions/route'
+import { createMessageRoutes } from '~/routes/messages/route'
 
 type CreateChatCompletions = typeof CopilotClient.prototype.createChatCompletions
 
@@ -82,9 +82,27 @@ function buildModelsResponse(...models: Array<Model>): ModelsResponse {
 
 function createApp() {
   return new Elysia()
-    .onError(async ({ error }) => createErrorResponse(error))
-    .use(messageRoutes)
-    .use(completionRoutes)
+    .error({ HTTP: HTTPError })
+    .onError(({ code, error }) => {
+      if (code === 'HTTP')
+        return
+      if (error instanceof Error && error.name === 'AbortError') {
+        return Response.json(
+          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
+          { status: 504 },
+        )
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      return Response.json(
+        { error: { message, type: 'error' } },
+        { status: 500 },
+      )
+    })
+    .group('/v1', (app) => {
+      return app
+        .use(createMessageRoutes())
+        .use(createCompletionRoutes())
+    })
 }
 
 function parseSse(body: string): Array<ParsedSseEvent> {
