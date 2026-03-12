@@ -244,3 +244,43 @@ interface ConversationTurn {
 ```
 
 The conversation model serves as the bridge between the normalized Anthropic form and the CAPI execution plan.
+
+## Token Usage Translation
+
+All three translation paths preserve upstream token usage. No synthetic or estimated usage data is injected into API responses.
+
+### Chat Completions Path
+
+`mapOpenAIUsageToAnthropic()` in `src/translator/anthropic/shared.ts` converts OpenAI-format usage:
+
+```text
+OpenAI                              Anthropic
+─────                               ─────────
+prompt_tokens - cached_tokens   →   input_tokens
+completion_tokens               →   output_tokens
+prompt_tokens_details.cached    →   cache_read_input_tokens (when present)
+```
+
+For streaming, usage arrives in the final `data: [DONE]`-preceding chunk when `stream_options.include_usage` is set. The stream translator emits it in `message_delta`.
+
+### Responses Path
+
+`mapResponsesUsage()` in `src/translator/responses/responses-to-anthropic.ts` converts Responses-format usage:
+
+```text
+Responses                           Anthropic
+─────────                           ─────────
+input_tokens - cached_tokens    →   input_tokens
+output_tokens                   →   output_tokens
+input_tokens_details.cached     →   cache_read_input_tokens (when present)
+```
+
+For streaming, `ResponsesStreamTranslator` extracts usage from the `response.created` event and emits it in `message_start`. See `src/translator/responses/responses-stream-translator.ts:117-133`.
+
+### Native Messages Path
+
+No translation needed. The upstream response already contains Anthropic-format usage fields and is forwarded as-is.
+
+### Streaming Usage Opt-in
+
+Streaming usage for the Chat Completions path requires `stream_options: { include_usage: true }`. This is configured per CAPI profile (`src/core/capi/profile.ts`): enabled for Claude models (`claudeProfile.includeUsageOnStream = true`), disabled for others.

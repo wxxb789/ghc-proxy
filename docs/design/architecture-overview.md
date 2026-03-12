@@ -12,7 +12,7 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 |-----------------|---------------------------------|
 | Runtime         | Bun >= 1.2 (Node.js compatible) |
 | Language        | TypeScript (ESNext, strict)     |
-| HTTP Framework  | Hono                            |
+| HTTP Framework  | Elysia                          |
 | CLI Framework   | citty                           |
 | Validation      | Zod                             |
 | Token Counting  | gpt-tokenizer                   |
@@ -28,7 +28,7 @@ Client Request (OpenAI / Anthropic format)
     |
     v
 +-------------------------------------------+
-|              Hono Router                  |
+|             Elysia Router                 |
 |  /chat/completions  /v1/messages  /v1/responses  /models  ...
 +-------------------------------------------+
     |
@@ -104,3 +104,15 @@ Client Response (OpenAI / Anthropic format)
 5. **Streaming-first** -- All endpoints support both streaming and non-streaming responses. Streaming errors become protocol-level error events rather than broken TCP connections.
 
 6. **Favor direct implementation** -- No unnecessary abstractions. Each route handler is self-contained.
+
+## Token Usage
+
+Token usage follows a **passthrough architecture**: Copilot's upstream API returns real usage data, and the proxy translates it into the client's expected format without synthesizing or estimating values.
+
+| Execution Path | Upstream Format | Translation | Streaming Behavior |
+|---|---|---|---|
+| Chat Completions | OpenAI `usage` | `mapOpenAIUsageToAnthropic()` | Opt-in via `stream_options.include_usage` |
+| Responses API | Responses `usage` | `mapResponsesUsage()` | Included in `response.created` event |
+| Native Messages | Anthropic `usage` | None (passthrough) | Included natively |
+
+The `gpt-tokenizer` library is used **only** for the `count_tokens` endpoint, which provides local pre-flight estimation. It applies model-specific correction factors (1.15x for Claude) because GPT tokenizers produce different counts than Claude's tokenizer. See [Copilot Token Usage](../research/copilot-token-usage.md) for full details.

@@ -21,3 +21,4 @@ Architecture and design documentation for ghc-proxy.
 |----------|----------|
 | [Anthropic Translation Matrix](../anthropic-translation-matrix.md) | Detailed translation compatibility matrix for the chat-completions fallback path |
 | [Messages Routing and Translation](../messages-routing-and-translation.md) | Per-model routing decision logic and Responses API compatibility policies |
+| [Copilot Token Usage](../research/copilot-token-usage.md) | How Copilot returns token usage across all API paths, and local estimation via gpt-tokenizer |

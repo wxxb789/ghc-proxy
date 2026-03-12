@@ -8,7 +8,7 @@ This document describes the source code organization and the responsibility of e
 src/
 ├── main.ts                    # CLI entry point (citty commands)
 ├── start.ts                   # Server startup logic
-├── app.ts                     # Hono app factory
+├── app.ts                     # Elysia app factory
 ├── routes/                    # HTTP route handlers
 │   ├── chat-completions/      # POST /chat/completions
 │   ├── messages/              # POST /v1/messages
@@ -38,7 +38,7 @@ Each route directory follows a consistent pattern:
 
 ```text
 routes/<endpoint>/
-├── route.ts        # Hono route definition (app.post / app.get)
+├── route.ts        # Elysia route definition
 ├── handler.ts      # Request parsing, validation, strategy dispatch
 └── strategy.ts     # ExecutionStrategy implementation(s)
 ```
@@ -152,7 +152,7 @@ ConversationRequest
 | `config.ts`                 | Config file reader (~/.ghc-proxy/config.json)        |
 | `rate-limit.ts`             | Request throttling (queue or error mode)             |
 | `upstream-signal.ts`        | AbortSignal management for upstream requests         |
-| `tokenizer.ts`              | Token counting via gpt-tokenizer                     |
+| `tokenizer.ts`              | Local token estimation via gpt-tokenizer (used only by `count_tokens` endpoint, not for response usage) |
 | `request-logger.ts`         | Structured request/response logging                  |
 | `async-iterable.ts`         | Streaming helpers                                    |
 | `approval.ts`               | Manual approval workflow                             |
@@ -166,4 +166,4 @@ ConversationRequest
 | `copilot.ts`    | OpenAI-compatible types with Copilot extensions      |
 | `responses.ts`  | OpenAI Responses API types                           |
 | `github.ts`     | GitHub API types (auth, user)                        |
-| `hono.d.ts`     | Hono context type extensions                         |
+| `responses.ts`  | OpenAI Responses API types                           |
