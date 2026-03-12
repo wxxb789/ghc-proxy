@@ -13,6 +13,7 @@ export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEF
 
   return {
     signal: controller.signal,
+    clientSignal,
     cleanup: () => {
       if (timeout)
         clearTimeout(timeout)
