@@ -11,7 +11,6 @@ import { runStrategy } from '~/lib/execution-strategy'
 import {
   findModelById,
   MESSAGES_ENDPOINT,
-  modelSupportsAdaptiveThinking,
   modelSupportsEndpoint,
   RESPONSES_ENDPOINT,
 } from '~/lib/model-capabilities'
@@ -75,19 +74,6 @@ export async function handleMessagesCore(
 
   if (shouldUseMessagesApi(selectedModel)) {
     filterThinkingBlocksForNativeMessages(anthropicPayload)
-
-    if (modelSupportsAdaptiveThinking(selectedModel)) {
-      if (!anthropicPayload.thinking) {
-        anthropicPayload.thinking = { type: 'adaptive' }
-      }
-
-      if (anthropicPayload.thinking.type !== 'disabled' && !anthropicPayload.output_config?.effort) {
-        anthropicPayload.output_config = {
-          ...anthropicPayload.output_config,
-          effort: getAnthropicEffortForModel(anthropicPayload.model),
-        }
-      }
-    }
 
     const strategy = createNativeMessagesStrategy(
       copilotClient,
@@ -201,19 +187,6 @@ function filterThinkingBlocksForNativeMessages(
       )
     })
   }
-}
-
-function getAnthropicEffortForModel(
-  model: string,
-): 'low' | 'medium' | 'high' | 'max' {
-  const reasoningEffort = getReasoningEffortForModel(model)
-  if (reasoningEffort === 'xhigh') {
-    return 'max'
-  }
-  if (reasoningEffort === 'none' || reasoningEffort === 'minimal') {
-    return 'low'
-  }
-  return reasoningEffort
 }
 
 function shouldUseResponsesApi(

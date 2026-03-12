@@ -10,7 +10,7 @@ export interface ModelFallbackConfig {
 
 export const DEFAULT_FALLBACKS: ModelFallbackConfig = {
   claudeOpus: 'claude-opus-4.6',
-  claudeSonnet: 'claude-sonnet-4.5',
+  claudeSonnet: 'claude-sonnet-4.6',
   claudeHaiku: 'claude-haiku-4.5',
 }
 

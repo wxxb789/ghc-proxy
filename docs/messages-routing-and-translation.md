@@ -17,10 +17,7 @@ The order matters. Native passthrough wins when the model exposes it. The Respon
 When a model supports Copilot `POST /v1/messages`, the proxy forwards the Anthropic payload with minimal mutation:
 
 - Existing assistant thinking blocks that only contain placeholder or encoded Responses state are filtered before passthrough.
-- If the model declares `adaptive_thinking` support and the caller did not specify `thinking`, the proxy fills `thinking: { type: "adaptive" }`.
-- If the model declares `adaptive_thinking` support and the caller did not specify `output_config.effort`, the proxy fills an effort derived from `modelReasoningEfforts`.
-
-The proxy does not override explicit caller intent. If the caller already sent `thinking` or `output_config`, those values win.
+- All other fields — including `thinking`, `output_config`, and any unknown fields allowed by the loose Zod schema — are passed through as-is to the upstream endpoint.
 
 ## Responses Translation Path
 

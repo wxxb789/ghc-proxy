@@ -268,7 +268,7 @@ describe('API smoke', () => {
     const json = await response.json() as AnthropicResponse
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.payload.model).toBe('claude-sonnet-4.5')
+    expect(calls[0]?.payload.model).toBe('claude-sonnet-4.6')
     expect(calls[0]?.payload.reasoning_effort).toBe('low')
     expect(calls[0]?.payload.thinking_budget).toBe(4096)
     expect(calls[0]?.payload.stream_options).toBeUndefined()

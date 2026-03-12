@@ -609,6 +609,40 @@ describe('responses and routing', () => {
     expect(calls).toHaveLength(1)
   })
 
+  test('/v1/messages native path does not inject thinking or output_config', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5', ['/v1/messages']))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-sonnet-4.5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+      },
+    }, calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4.5',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.thinking).toBeUndefined()
+    expect(calls[0]?.payload.output_config).toBeUndefined()
+  })
+
   test('/v1/messages native messages path preserves explicit thinking configuration', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []

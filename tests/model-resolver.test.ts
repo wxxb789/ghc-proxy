@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { resolveModel } from '~/lib/model-resolver'
+import { DEFAULT_FALLBACKS, resolveModel } from '~/lib/model-resolver'
 
 describe('resolveModel', () => {
   const defaultConfig = {
@@ -62,5 +62,19 @@ describe('resolveModel', () => {
     expect(
       resolveModel('claude-opus-4-preview', knownModels, defaultConfig),
     ).toBe('claude-opus-4-preview')
+  })
+})
+
+describe('DEFAULT_FALLBACKS', () => {
+  test('maps opus to claude-opus-4.6', () => {
+    expect(DEFAULT_FALLBACKS.claudeOpus).toBe('claude-opus-4.6')
+  })
+
+  test('maps sonnet to claude-sonnet-4.6', () => {
+    expect(DEFAULT_FALLBACKS.claudeSonnet).toBe('claude-sonnet-4.6')
+  })
+
+  test('maps haiku to claude-haiku-4.5', () => {
+    expect(DEFAULT_FALLBACKS.claudeHaiku).toBe('claude-haiku-4.5')
   })
 })
