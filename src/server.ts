@@ -1,6 +1,7 @@
 import type { ModelMappingInfo } from './lib/request-logger'
 
 import { cors } from '@elysiajs/cors'
+import { node } from '@elysiajs/node'
 import { Elysia } from 'elysia'
 
 import { HTTPError } from './lib/error'
@@ -13,12 +14,15 @@ import { createResponsesRoutes } from './routes/responses/route'
 import { createTokenRoute } from './routes/token/route'
 import { createUsageRoute } from './routes/usage/route'
 
+const isBun = typeof globalThis.Bun !== 'undefined'
+
 export interface ServerOptions {
   idleTimeout?: number
 }
 
 export function createServer(options?: ServerOptions) {
   return new Elysia({
+    adapter: isBun ? undefined : node(),
     serve: options?.idleTimeout !== undefined
       ? { idleTimeout: options.idleTimeout }
       : undefined,

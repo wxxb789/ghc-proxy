@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import process from 'node:process'
 import { defineCommand, runMain } from 'citty'

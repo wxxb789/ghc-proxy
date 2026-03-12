@@ -129,7 +129,7 @@ Priority: Environment variable > Config file > Default value.
 5. Obtain Copilot API token from GitHub token
 6. Cache VS Code version
 7. Cache Copilot model list
-8. Start Hono HTTP server
+8. Start Elysia HTTP server (Bun-native adapter or @elysiajs/node fallback)
 9. (Optional) Interactive Claude Code setup
 ```
 

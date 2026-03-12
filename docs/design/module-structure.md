@@ -8,7 +8,7 @@ This document describes the source code organization and the responsibility of e
 src/
 ├── main.ts                    # CLI entry point (citty commands)
 ├── start.ts                   # Server startup logic
-├── app.ts                     # Elysia app factory
+├── server.ts                  # Elysia app factory (Bun-native or @elysiajs/node adapter)
 ├── routes/                    # HTTP route handlers
 │   ├── chat-completions/      # POST /chat/completions
 │   ├── messages/              # POST /v1/messages

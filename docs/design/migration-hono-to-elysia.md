@@ -28,7 +28,7 @@ All phases completed successfully. The project now uses Elysia as its HTTP frame
 - Added `runRequestGuard()` pure guard function
 
 **Phase 2 (Framework Switch):**
-- Replaced `hono` with `elysia` + `@elysiajs/cors` in package.json
+- Replaced `hono` with `elysia` + `@elysiajs/cors` + `@elysiajs/node` in package.json
 - Rewrote `src/server.ts` to use Elysia with `derive()`, `onAfterHandle`, `onError`
 - Rewrote all 7 route files as Elysia plugins
 - Created `src/lib/sse-adapter.ts` to bridge `AsyncGenerator<SSEOutput>` to Elysia SSE
