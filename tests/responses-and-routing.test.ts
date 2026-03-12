@@ -4,11 +4,11 @@ import type { AnthropicMessagesPayload, AnthropicResponse } from '~/translator'
 import type { Model, ModelsResponse, ResponsesPayload, ResponsesResult, ResponseStreamEvent } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
 import { getCachedConfig } from '~/lib/config'
-import { forwardError } from '~/lib/error'
+import { createErrorResponse } from '~/lib/error'
 import { state } from '~/lib/state'
 import { messageRoutes } from '~/routes/messages/route'
 import { responsesRoutes } from '~/routes/responses/route'
@@ -122,11 +122,10 @@ function buildModelsResponse(...models: Array<Model>): ModelsResponse {
 }
 
 function createApp() {
-  const app = new Hono()
-  app.onError((error, c) => forwardError(c, error))
-  app.route('/v1/messages', messageRoutes)
-  app.route('/v1/responses', responsesRoutes)
-  return app
+  return new Elysia()
+    .onError(async ({ error }) => createErrorResponse(error))
+    .use(messageRoutes)
+    .use(responsesRoutes)
 }
 
 function mockResponses(
@@ -263,7 +262,7 @@ describe('responses and routing', () => {
       top_p: null,
     }, calls)
 
-    const response = await app.request('/v1/responses', {
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -273,7 +272,7 @@ describe('responses and routing', () => {
           { type: 'custom', name: 'apply_patch' },
         ],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     expect(calls[0]?.payload.tools).toHaveLength(1)
@@ -308,7 +307,7 @@ describe('responses and routing', () => {
       top_p: null,
     }, calls)
 
-    const response = await app.request('/v1/responses', {
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -318,7 +317,7 @@ describe('responses and routing', () => {
           { type: 'web_search', name: 'web_search_preview' },
         ],
       }),
-    })
+    }))
 
     const json = await response.json() as {
       error?: { code?: string, param?: string }
@@ -354,7 +353,7 @@ describe('responses and routing', () => {
       top_p: null,
     }, calls)
 
-    const response = await app.request('/v1/responses', {
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -368,7 +367,7 @@ describe('responses and routing', () => {
           ],
         }],
       }),
-    })
+    }))
 
     const json = await response.json() as {
       error?: { code?: string, param?: string }
@@ -383,14 +382,14 @@ describe('responses and routing', () => {
     const app = createApp()
     state.cache.models = buildModelsResponse(buildModel('gpt-4.1', ['/responses']))
 
-    const response = await app.request('/v1/responses', {
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model: '',
         input: [{ type: 'message', role: 'user', content: 'hello' }],
       }),
-    })
+    }))
 
     expect(response.status).toBe(400)
   })
@@ -435,9 +434,9 @@ describe('responses and routing', () => {
       deleted: true,
     }, deleteCalls)
 
-    const inputItemsResponse = await app.request('/v1/responses/resp_123/input_items?limit=2&order=desc&include=reasoning.encrypted_content,file_search_call.results', {
+    const inputItemsResponse = await app.handle(new Request('http://localhost/v1/responses/resp_123/input_items?limit=2&order=desc&include=reasoning.encrypted_content,file_search_call.results', {
       method: 'GET',
-    })
+    }))
     expect(inputItemsResponse.status).toBe(200)
     expect(inputItemsCalls[0]).toEqual({
       responseId: 'resp_123',
@@ -449,9 +448,9 @@ describe('responses and routing', () => {
       },
     })
 
-    const getResponse = await app.request('/v1/responses/resp_123?include=reasoning.encrypted_content&include_obfuscation=true&starting_after=3&stream=false', {
+    const getResponse = await app.handle(new Request('http://localhost/v1/responses/resp_123?include=reasoning.encrypted_content&include_obfuscation=true&starting_after=3&stream=false', {
       method: 'GET',
-    })
+    }))
     expect(getResponse.status).toBe(200)
     expect(getCalls[0]).toEqual({
       responseId: 'resp_123',
@@ -463,21 +462,21 @@ describe('responses and routing', () => {
       },
     })
 
-    const inputTokensResponse = await app.request('/v1/responses/input_tokens', {
+    const inputTokensResponse = await app.handle(new Request('http://localhost/v1/responses/input_tokens', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         input: [{ type: 'message', role: 'user', content: 'hello' }],
       }),
-    })
+    }))
     expect(inputTokensResponse.status).toBe(200)
     expect(inputTokensCalls[0]?.payload).toMatchObject({
       input: [{ type: 'message', role: 'user', content: 'hello' }],
     })
 
-    const deleteResponse = await app.request('/v1/responses/resp_123', {
+    const deleteResponse = await app.handle(new Request('http://localhost/v1/responses/resp_123', {
       method: 'DELETE',
-    })
+    }))
     expect(deleteResponse.status).toBe(200)
     expect(deleteCalls[0]).toEqual({
       responseId: 'resp_123',
@@ -487,24 +486,24 @@ describe('responses and routing', () => {
   test('/v1/responses resource validation rejects invalid query parameters', async () => {
     const app = createApp()
 
-    const limitResponse = await app.request('/v1/responses/resp_123/input_items?limit=0', {
+    const limitResponse = await app.handle(new Request('http://localhost/v1/responses/resp_123/input_items?limit=0', {
       method: 'GET',
-    })
+    }))
     expect(limitResponse.status).toBe(400)
 
-    const orderResponse = await app.request('/v1/responses/resp_123/input_items?order=sideways', {
+    const orderResponse = await app.handle(new Request('http://localhost/v1/responses/resp_123/input_items?order=sideways', {
       method: 'GET',
-    })
+    }))
     expect(orderResponse.status).toBe(400)
 
-    const startingAfterResponse = await app.request('/v1/responses/resp_123?starting_after=-1', {
+    const startingAfterResponse = await app.handle(new Request('http://localhost/v1/responses/resp_123?starting_after=-1', {
       method: 'GET',
-    })
+    }))
     expect(startingAfterResponse.status).toBe(400)
 
-    const booleanResponse = await app.request('/v1/responses/resp_123?stream=maybe', {
+    const booleanResponse = await app.handle(new Request('http://localhost/v1/responses/resp_123?stream=maybe', {
       method: 'GET',
-    })
+    }))
     expect(booleanResponse.status).toBe(400)
   })
 
@@ -543,7 +542,7 @@ describe('responses and routing', () => {
       top_p: null,
     }, calls)
 
-    const response = await app.request('/v1/messages', {
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -551,7 +550,7 @@ describe('responses and routing', () => {
         max_tokens: 256,
         messages: [{ role: 'user', content: 'hello' }],
       }),
-    })
+    }))
 
     const json = await response.json() as AnthropicResponse
     expect(response.status).toBe(200)
@@ -578,7 +577,7 @@ describe('responses and routing', () => {
       },
     }, calls)
 
-    const response = await app.request('/v1/messages', {
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -586,7 +585,7 @@ describe('responses and routing', () => {
         max_tokens: 256,
         messages: [{ role: 'user', content: 'hello' }],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     expect(calls).toHaveLength(1)
@@ -611,7 +610,7 @@ describe('responses and routing', () => {
       },
     }, calls)
 
-    const response = await app.request('/v1/messages', {
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -621,7 +620,7 @@ describe('responses and routing', () => {
         output_config: { effort: 'max' },
         messages: [{ role: 'user', content: 'hello' }],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     expect(calls[0]?.payload.thinking).toEqual({ type: 'disabled' })
@@ -662,7 +661,7 @@ describe('responses and routing', () => {
       },
     }, chatCalls)
 
-    await app.request('/v1/messages', {
+    await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -673,7 +672,7 @@ describe('responses and routing', () => {
         max_tokens: 32,
         messages: [{ role: 'user', content: 'ping' }],
       }),
-    })
+    }))
 
     expect(chatCalls[0]?.payload.model).toBe('gpt-4.1-mini')
   })
@@ -711,7 +710,7 @@ describe('responses and routing', () => {
       },
     }, chatCalls)
 
-    await app.request('/v1/messages', {
+    await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -735,7 +734,7 @@ describe('responses and routing', () => {
           ],
         }],
       }),
-    })
+    }))
 
     expect(chatCalls[0]?.payload.model).toBe('claude-opus-4.6')
   })
@@ -781,7 +780,7 @@ describe('responses and routing', () => {
       }
     })(), [])
 
-    const response = await app.request('/v1/messages', {
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -790,7 +789,7 @@ describe('responses and routing', () => {
         stream: true,
         messages: [{ role: 'user', content: 'hello' }],
       }),
-    })
+    }))
 
     const body = await response.text()
     expect(response.status).toBe(200)

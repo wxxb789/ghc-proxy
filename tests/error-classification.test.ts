@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
-import { forwardError } from '~/lib/error'
-import { handleCompletion as handleMessages } from '~/routes/messages/handler'
+import { createErrorResponse } from '~/lib/error'
+import { sseAdapter } from '~/lib/sse-adapter'
+import { handleMessagesCore } from '~/routes/messages/handler'
+import { runRequestGuard } from '~/routes/middleware/request-guard'
 
 let originalCreateChatCompletions: typeof CopilotClient.prototype.createChatCompletions
 
@@ -32,14 +34,24 @@ function createAbortErrorAsError(): Error {
 }
 
 function createTestApp() {
-  const app = new Hono()
-  app.onError((error, c) => forwardError(c, error))
-  app.post('/v1/messages', c => handleMessages(c))
-  return app
+  return new Elysia()
+    .onError(async ({ error }) => createErrorResponse(error))
+    .post('/v1/messages', async function* ({ body, request }) {
+      await runRequestGuard()
+      const { result } = await handleMessagesCore({
+        body,
+        signal: request.signal,
+        headers: request.headers,
+      })
+      if (result.kind === 'json') {
+        return result.data
+      }
+      yield* sseAdapter(result.generator)
+    })
 }
 
-function makeRequest(app: Hono) {
-  return app.request('/v1/messages', {
+function makeRequest(app: ReturnType<typeof createTestApp>) {
+  return app.handle(new Request('http://localhost/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -48,10 +60,10 @@ function makeRequest(app: Hono) {
       stream: false,
       messages: [{ role: 'user', content: 'Hello!' }],
     }),
-  })
+  }))
 }
 
-describe('Error classification in forwardError', () => {
+describe('Error classification in createErrorResponse', () => {
   test('AbortError (Error subclass) returns 504', async () => {
     CopilotClient.prototype.createChatCompletions = () =>
       Promise.reject(createAbortErrorAsError())

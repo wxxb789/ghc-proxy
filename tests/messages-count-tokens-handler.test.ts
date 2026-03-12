@@ -1,11 +1,11 @@
 import type { Model, ModelsResponse } from '~/types'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
-import { forwardError } from '~/lib/error'
+import { createErrorResponse } from '~/lib/error'
 import { state } from '~/lib/state'
-import { handleCountTokens } from '~/routes/messages/count-tokens-handler'
+import { handleCountTokensCore } from '~/routes/messages/count-tokens-handler'
 
 function buildModel(id: string): Model {
   return {
@@ -42,10 +42,14 @@ function buildModelsResponse(...models: Array<Model>): ModelsResponse {
 }
 
 function createApp() {
-  const app = new Hono()
-  app.onError((error, c) => forwardError(c, error))
-  app.post('/v1/messages/count_tokens', c => handleCountTokens(c))
-  return app
+  return new Elysia()
+    .onError(async ({ error }) => createErrorResponse(error))
+    .post('/v1/messages/count_tokens', async ({ body, request }) => {
+      return handleCountTokensCore({
+        body,
+        headers: request.headers,
+      })
+    })
 }
 
 const originalModels = state.cache.models
@@ -63,7 +67,7 @@ describe('POST /v1/messages/count_tokens', () => {
     state.cache.models = buildModelsResponse(buildModel('claude-haiku-4.5'))
     const app = createApp()
 
-    const response = await app.request('/v1/messages/count_tokens', {
+    const response = await app.handle(new Request('http://localhost/v1/messages/count_tokens', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -72,7 +76,7 @@ describe('POST /v1/messages/count_tokens', () => {
         model: 'claude-haiku-4.5',
         messages: [{ role: 'user', content: 'Hello!' }],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     const json = (await response.json()) as { input_tokens: number }
@@ -84,7 +88,7 @@ describe('POST /v1/messages/count_tokens', () => {
     state.cache.models = buildModelsResponse(buildModel('claude-haiku-4.5'))
     const app = createApp()
 
-    const response = await app.request('/v1/messages/count_tokens', {
+    const response = await app.handle(new Request('http://localhost/v1/messages/count_tokens', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -92,7 +96,7 @@ describe('POST /v1/messages/count_tokens', () => {
       body: JSON.stringify({
         model: 'claude-haiku-4.5',
       }),
-    })
+    }))
 
     expect(response.status).toBe(400)
     const json = (await response.json()) as {
@@ -105,7 +109,7 @@ describe('POST /v1/messages/count_tokens', () => {
     state.cache.models = buildModelsResponse(buildModel('gpt-4.1'))
     const app = createApp()
 
-    const response = await app.request('/v1/messages/count_tokens', {
+    const response = await app.handle(new Request('http://localhost/v1/messages/count_tokens', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -114,7 +118,7 @@ describe('POST /v1/messages/count_tokens', () => {
         model: 'claude-haiku-4.5',
         messages: [{ role: 'user', content: 'Hello!' }],
       }),
-    })
+    }))
 
     expect(response.status).toBe(400)
     const json = (await response.json()) as {

@@ -1,4 +1,3 @@
-import type { Context } from 'hono'
 import type {
   ResponseInputItemsListParams,
   ResponseRetrieveParams,
@@ -77,47 +76,7 @@ export async function handleDeleteResponseCore(
   })
 }
 
-// --- Hono-specific wrappers ---
-
-export async function handleRetrieveResponse(c: Context) {
-  const result = await handleRetrieveResponseCore({
-    params: { responseId: c.req.param('responseId') },
-    url: c.req.url,
-    headers: c.req.raw.headers,
-    signal: c.req.raw.signal,
-  })
-  return c.json(result)
-}
-
-export async function handleListResponseInputItems(c: Context) {
-  const result = await handleListResponseInputItemsCore({
-    params: { responseId: c.req.param('responseId') },
-    url: c.req.url,
-    headers: c.req.raw.headers,
-    signal: c.req.raw.signal,
-  })
-  return c.json(result)
-}
-
-export async function handleCreateResponseInputTokens(c: Context) {
-  const result = await handleCreateResponseInputTokensCore({
-    body: await c.req.json(),
-    headers: c.req.raw.headers,
-    signal: c.req.raw.signal,
-  })
-  return c.json(result)
-}
-
-export async function handleDeleteResponse(c: Context) {
-  const result = await handleDeleteResponseCore({
-    params: { responseId: c.req.param('responseId') },
-    headers: c.req.raw.headers,
-    signal: c.req.raw.signal,
-  })
-  return c.json(result)
-}
-
-// --- Shared helpers (now framework-agnostic, accept url string) ---
+// --- Shared helpers ---
 
 function requireResponseId(responseId: string | undefined): string {
   if (!responseId) {

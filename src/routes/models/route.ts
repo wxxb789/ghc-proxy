@@ -1,37 +1,13 @@
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
-import { CopilotClient } from '~/clients'
-import { cacheModels, getClientConfig, state } from '~/lib/state'
+import { handleModelsCore } from './handler'
 
-/**
- * Framework-agnostic handler for listing models.
- */
-export async function handleModelsCore(): Promise<object> {
-  if (!state.cache.models) {
-    // This should be handled by startup logic, but as a fallback.
-    const copilotClient = new CopilotClient(state.auth, getClientConfig())
-    await cacheModels(copilotClient)
-  }
+export { handleModelsCore } from './handler'
 
-  const models = state.cache.models?.data.map(model => ({
-    id: model.id,
-    object: 'model',
-    type: 'model',
-    created: 0, // No date available from source
-    created_at: new Date(0).toISOString(), // No date available from source
-    owned_by: model.vendor,
-    display_name: model.name,
-  }))
-
-  return {
-    object: 'list',
-    data: models,
-    has_more: false,
-  }
-}
-
-export const modelRoutes = new Hono()
-
-modelRoutes.get('/', async (c) => {
-  return c.json(await handleModelsCore())
-})
+export const modelRoutes = new Elysia()
+  .get('/models', async () => {
+    return handleModelsCore()
+  })
+  .get('/v1/models', async () => {
+    return handleModelsCore()
+  })

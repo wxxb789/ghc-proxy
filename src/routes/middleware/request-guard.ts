@@ -1,5 +1,3 @@
-import type { MiddlewareHandler } from 'hono'
-
 import { awaitApproval } from '~/lib/approval'
 import { checkRateLimit } from '~/lib/rate-limit'
 import { state } from '~/lib/state'
@@ -14,12 +12,4 @@ export async function runRequestGuard(): Promise<void> {
   if (state.config.manualApprove) {
     await awaitApproval()
   }
-}
-
-/**
- * Hono middleware wrapper for the request guard.
- */
-export const requestGuard: MiddlewareHandler = async (_c, next) => {
-  await runRequestGuard()
-  await next()
 }

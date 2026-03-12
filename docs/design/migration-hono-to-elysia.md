@@ -11,64 +11,39 @@
 | WU-5 | Simple Route Handlers | ✅ done | 4 Core functions extracted |
 | WU-6 | Streaming Handler Decoupling | ✅ done | 4 Core functions extracted |
 | WU-7 | Resource Handler Decoupling | ✅ done | 4 Core functions extracted |
-| WU-8 | Framework Switch | in progress | |
-| Verify | Full CI pipeline | pending | |
+| WU-8 | Framework Switch | ✅ done | Elysia installed, all routes/tests migrated, Hono removed |
+| Verify | Full CI pipeline | ✅ done | lint, typecheck, 105 tests, build, smoke all pass |
 
-## Phase 1: Extract Framework-Agnostic Logic
+## Migration Complete
 
-All WUs extract `*Core` functions returning plain data. Existing Hono wrappers stay intact.
+All phases completed successfully. The project now uses Elysia as its HTTP framework.
 
-### WU-1: SSE Execution Strategy Decoupling
-- File: `src/lib/execution-strategy.ts`
-- Add `ExecutionResult` discriminated union type
-- Add `runStrategy()` that returns `ExecutionResult` instead of `Response`
-- Keep `executeStrategy()` as thin Hono wrapper
+### Summary of Changes
 
-### WU-2: Error Handling Decoupling
-- File: `src/lib/error.ts`
-- Add `createErrorResponse(error): Promise<Response>` using `Response.json()` directly
-- Keep `forwardError(c, error)` as thin Hono wrapper
+**Phase 1 (Framework-Agnostic Extraction):**
+- Extracted `*Core` functions from all route handlers
+- Added `runStrategy()` returning `ExecutionResult` discriminated union
+- Added `createErrorResponse()` for framework-agnostic error handling
+- Added `logRequest()` and `computeElapsed()` pure logging functions
+- Added `runRequestGuard()` pure guard function
 
-### WU-3: Request Logger Decoupling
-- File: `src/lib/request-logger.ts`
-- Extract `logRequest(method, url, status, elapsed, modelInfo?)` pure function
-- Keep `requestLogger` middleware and `setModelMappingInfo` as wrappers
+**Phase 2 (Framework Switch):**
+- Replaced `hono` with `elysia` + `@elysiajs/cors` in package.json
+- Rewrote `src/server.ts` to use Elysia with `derive()`, `onAfterHandle`, `onError`
+- Rewrote all 7 route files as Elysia plugins
+- Created `src/lib/sse-adapter.ts` to bridge `AsyncGenerator<SSEOutput>` to Elysia SSE
+- Updated `src/start.ts` (`server.fetch` → `server.handle`)
+- Deleted `src/types/hono.d.ts`
+- Removed all Hono wrappers from handler files
+- Migrated 5 test files from `Hono` + `app.request()` to `Elysia` + `app.handle(new Request(...))`
+- Updated `scripts/live-compat-matrix.ts` (`server.request` → `server.handle`)
 
-### WU-4: Request Guard Decoupling
-- File: `src/routes/middleware/request-guard.ts`
-- Extract `runRequestGuard(): Promise<void>` pure function
-- Keep `requestGuard` middleware as wrapper
-
-### WU-5: Simple Route Handlers
-- `src/routes/models/route.ts` → `handleModelsCore(): Promise<object>`
-- `src/routes/embeddings/route.ts` → `handleEmbeddingsCore(body): Promise<object>`
-- `src/routes/token/route.ts` → `handleTokenCore(): object`
-- `src/routes/usage/route.ts` → `handleUsageCore(): Promise<object>`
-
-### WU-6: Streaming Handler Decoupling (depends on WU-1)
-- `src/routes/chat-completions/handler.ts` → `handleCompletionCore()`
-- `src/routes/messages/handler.ts` → `handleMessagesCore()`
-- `src/routes/messages/count-tokens-handler.ts` → `handleCountTokensCore()`
-- `src/routes/responses/handler.ts` → `handleResponsesCore()`
-
-### WU-7: Resource Handler Decoupling
-- `src/routes/responses/resource-handler.ts` → 4x `*Core()` functions
-
-## Phase 2: Framework Switch
-
-### WU-8: Install Elysia, Rewrite Server/Routes/Tests, Remove Hono
-- Replace hono with elysia + @elysiajs/cors in package.json
-- Rewrite src/server.ts to Elysia
-- Rewrite all route files to Elysia plugins
-- Update src/start.ts (server.fetch → server.handle)
-- Delete src/types/hono.d.ts
-- Remove all Hono wrappers
-- Migrate 5 test files
-
-## Verification
+### Verification Results
 
 ```bash
-bun install
-bun run lint:all && bun run typecheck && bun run build && bun test
-bun run smoke:packaged
+bun run lint:all      # ✅ clean
+bun run typecheck     # ✅ clean
+bun test              # ✅ 105 tests pass
+bun run build         # ✅ dist/main.mjs produced
+bun run smoke:packaged # ✅ packaged CLI smoke test passes
 ```

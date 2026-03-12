@@ -1,5 +1,3 @@
-import type { Context, MiddlewareHandler } from 'hono'
-
 import consola from 'consola'
 import { colorize } from 'consola/utils'
 
@@ -91,26 +89,4 @@ export function logRequest(
  */
 export function computeElapsed(start: number): string {
   return formatElapsed(start)
-}
-
-/**
- * Hono middleware wrapper for request logging.
- */
-export const requestLogger: MiddlewareHandler = async (c, next) => {
-  const { method, url } = c.req
-  const start = Date.now()
-
-  try {
-    await next()
-  }
-  finally {
-    const elapsed = formatElapsed(start)
-    const status = c.res.status
-    const modelInfo = c.get('modelMappingInfo')
-    logRequest(method, url, status, elapsed, modelInfo)
-  }
-}
-
-export function setModelMappingInfo(c: Context, info: ModelMappingInfo) {
-  c.set('modelMappingInfo', info)
 }

@@ -1,7 +1,3 @@
-import type { Context } from 'hono'
-
-import { streamSSE } from 'hono/streaming'
-
 export interface SSEOutput {
   id?: string
   event?: string
@@ -77,28 +73,6 @@ export async function runStrategy<TResult, TChunk>(
   }
 
   return { kind: 'stream', generator: generateSSE() }
-}
-
-/**
- * Hono-specific wrapper around runStrategy. Converts ExecutionResult
- * to a Hono Response using c.json() or streamSSE().
- */
-export async function executeStrategy<TResult, TChunk>(
-  c: Context,
-  strategy: ExecutionStrategy<TResult, TChunk>,
-  signal: { signal: AbortSignal, cleanup: () => void },
-): Promise<Response> {
-  const executionResult = await runStrategy(strategy, signal)
-
-  if (executionResult.kind === 'json') {
-    return c.json(executionResult.data)
-  }
-
-  return streamSSE(c, async (stream) => {
-    for await (const output of executionResult.generator) {
-      await stream.writeSSE(output)
-    }
-  })
 }
 
 function normalizeOutputs(value: SSEOutput | SSEOutput[] | null): SSEOutput[] {

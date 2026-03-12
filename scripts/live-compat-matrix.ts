@@ -766,7 +766,7 @@ async function dispatchRequest(request: {
     : undefined
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await server.request(new Request(`http://matrix.local${request.path}`, {
+    const response = await server.handle(new Request(`http://matrix.local${request.path}`, {
       method,
       headers: {
         'content-type': 'application/json',

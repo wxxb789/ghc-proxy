@@ -8,7 +8,7 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 
 - **Runtime:** Bun >= 1.2 (first-class), Node.js compatible output
 - **Language:** TypeScript (ESNext, strict mode)
-- **Framework:** Hono (HTTP server), citty (CLI), Zod (validation)
+- **Framework:** Elysia (HTTP server), citty (CLI), Zod (validation)
 - **Published as:** `ghc-proxy` npm package (single-file CLI at `dist/main.mjs`)
 
 ## Commands
@@ -37,7 +37,7 @@ bun run release:patch                # Bump patch, commit, tag (then git push ma
 ### Request Flow
 
 ```text
-Client Request -> Hono Route Handler -> Zod Validation -> Execution Strategy Selection -> Adapter/Translator -> Copilot Client -> Response Translation -> Client
+Client Request -> Elysia Route Handler -> Zod Validation -> Execution Strategy Selection -> Adapter/Translator -> Copilot Client -> Response Translation -> Client
 ```
 
 ### Three Execution Paths for `/v1/messages`

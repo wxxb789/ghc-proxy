@@ -1,18 +1,10 @@
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
-import { state } from '~/lib/state'
+import { handleTokenCore } from './handler'
 
-/**
- * Framework-agnostic handler for retrieving the token.
- */
-export function handleTokenCore(): object {
-  return {
-    token: state.auth.copilotToken,
-  }
-}
+export { handleTokenCore } from './handler'
 
-export const tokenRoute = new Hono()
-
-tokenRoute.get('/', (c) => {
-  return c.json(handleTokenCore())
-})
+export const tokenRoute = new Elysia()
+  .get('/token', () => {
+    return handleTokenCore()
+  })

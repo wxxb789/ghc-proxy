@@ -14,10 +14,10 @@ import type {
 } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
-import { forwardError } from '~/lib/error'
+import { createErrorResponse } from '~/lib/error'
 import { state } from '~/lib/state'
 import { completionRoutes } from '~/routes/chat-completions/route'
 import { messageRoutes } from '~/routes/messages/route'
@@ -81,11 +81,10 @@ function buildModelsResponse(...models: Array<Model>): ModelsResponse {
 }
 
 function createApp() {
-  const app = new Hono()
-  app.onError((error, c) => forwardError(c, error))
-  app.route('/v1/messages', messageRoutes)
-  app.route('/v1/chat/completions', completionRoutes)
-  return app
+  return new Elysia()
+    .onError(async ({ error }) => createErrorResponse(error))
+    .use(messageRoutes)
+    .use(completionRoutes)
 }
 
 function parseSse(body: string): Array<ParsedSseEvent> {
@@ -216,7 +215,7 @@ describe('API smoke', () => {
       },
     }, calls)
 
-    const response = await app.request('/v1/messages', {
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -245,7 +244,7 @@ describe('API smoke', () => {
           { role: 'user', content: 'Inspect src/main.ts' },
         ],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     const json = await response.json() as AnthropicResponse
@@ -376,7 +375,7 @@ describe('API smoke', () => {
       '[DONE]',
     ], calls)
 
-    const response = await app.request('/v1/messages', {
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -403,7 +402,7 @@ describe('API smoke', () => {
           { role: 'user', content: 'Inspect src/main.ts' },
         ],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     const body = await response.text()
@@ -472,7 +471,7 @@ describe('API smoke', () => {
       },
     }, calls)
 
-    const response = await app.request('/v1/chat/completions', {
+    const response = await app.handle(new Request('http://localhost/v1/chat/completions', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -504,7 +503,7 @@ describe('API smoke', () => {
           },
         ],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     const json = await response.json() as ChatCompletionResponse
@@ -552,7 +551,7 @@ describe('API smoke', () => {
       choices: [],
     }, calls)
 
-    const response = await app.request('/v1/chat/completions', {
+    const response = await app.handle(new Request('http://localhost/v1/chat/completions', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -563,7 +562,7 @@ describe('API smoke', () => {
         n: '2',
         response_format: { type: 'json_schema' },
       }),
-    })
+    }))
 
     expect(response.status).toBe(400)
     expect(await response.text()).toContain('Invalid request payload')
@@ -634,7 +633,7 @@ describe('API smoke', () => {
       '[DONE]',
     ], calls)
 
-    const response = await app.request('/v1/chat/completions', {
+    const response = await app.handle(new Request('http://localhost/v1/chat/completions', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -661,7 +660,7 @@ describe('API smoke', () => {
           },
         ],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     const body = await response.text()
@@ -688,7 +687,7 @@ describe('API smoke', () => {
   test('Anthropic count_tokens works through the shared planning core for Claude Code style requests', async () => {
     const app = createApp()
 
-    const response = await app.request('/v1/messages/count_tokens', {
+    const response = await app.handle(new Request('http://localhost/v1/messages/count_tokens', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -716,7 +715,7 @@ describe('API smoke', () => {
           { role: 'user', content: 'Inspect src/main.ts' },
         ],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     const json = await response.json() as { input_tokens: number }

@@ -1,5 +1,3 @@
-import type { Context } from 'hono'
-
 import consola from 'consola'
 
 import { AnthropicMessagesAdapter } from '~/adapters'
@@ -104,15 +102,4 @@ export async function handleCountTokensCore(
   return {
     input_tokens: finalTokenCount,
   }
-}
-
-/**
- * Hono-specific handler wrapper.
- */
-export async function handleCountTokens(c: Context) {
-  const result = await handleCountTokensCore({
-    body: await c.req.json(),
-    headers: c.req.raw.headers,
-  })
-  return c.json(result)
 }

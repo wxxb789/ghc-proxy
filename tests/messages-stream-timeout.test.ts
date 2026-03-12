@@ -1,11 +1,13 @@
 import type { ServerSentEventMessage } from 'fetch-event-stream'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
-import { forwardError } from '~/lib/error'
-import { handleCompletion } from '~/routes/messages/handler'
+import { createErrorResponse } from '~/lib/error'
+import { sseAdapter } from '~/lib/sse-adapter'
+import { handleMessagesCore } from '~/routes/messages/handler'
+import { runRequestGuard } from '~/routes/middleware/request-guard'
 
 let originalCreateChatCompletions: typeof CopilotClient.prototype.createChatCompletions
 
@@ -51,11 +53,22 @@ describe('POST /v1/messages streaming error handling', () => {
   test('converts TimeoutError to Anthropic SSE error event', async () => {
     CopilotClient.prototype.createChatCompletions = timeoutCreateChatCompletions
 
-    const app = new Hono()
-    app.onError((error, c) => forwardError(c, error))
-    app.post('/v1/messages', c => handleCompletion(c))
+    const app = new Elysia()
+      .onError(async ({ error }) => createErrorResponse(error))
+      .post('/v1/messages', async function* ({ body, request }) {
+        await runRequestGuard()
+        const { result } = await handleMessagesCore({
+          body,
+          signal: request.signal,
+          headers: request.headers,
+        })
+        if (result.kind === 'json') {
+          return result.data
+        }
+        yield* sseAdapter(result.generator)
+      })
 
-    const response = await app.request('/v1/messages', {
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -66,7 +79,7 @@ describe('POST /v1/messages streaming error handling', () => {
         stream: true,
         messages: [{ role: 'user', content: 'Hello!' }],
       }),
-    })
+    }))
 
     expect(response.status).toBe(200)
     const body = await response.text()

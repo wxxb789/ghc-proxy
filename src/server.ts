@@ -1,8 +1,8 @@
-import { Hono } from 'hono'
-import { cors } from 'hono/cors'
+import { cors } from '@elysiajs/cors'
+import { Elysia } from 'elysia'
 
-import { forwardError } from './lib/error'
-import { requestLogger } from './lib/request-logger'
+import { createErrorResponse } from './lib/error'
+import { computeElapsed, logRequest } from './lib/request-logger'
 import { completionRoutes } from './routes/chat-completions/route'
 import { embeddingRoutes } from './routes/embeddings/route'
 import { messageRoutes } from './routes/messages/route'
@@ -11,26 +11,31 @@ import { responsesRoutes } from './routes/responses/route'
 import { tokenRoute } from './routes/token/route'
 import { usageRoute } from './routes/usage/route'
 
-export const server = new Hono()
-
-server.use(requestLogger)
-server.use(cors())
-server.onError((error, c) => forwardError(c, error))
-
-server.get('/', c => c.text('Server running'))
-
-server.route('/chat/completions', completionRoutes)
-server.route('/models', modelRoutes)
-server.route('/embeddings', embeddingRoutes)
-server.route('/usage', usageRoute)
-server.route('/token', tokenRoute)
-server.route('/responses', responsesRoutes)
-
-// Compatibility with tools that expect v1/ prefix
-server.route('/v1/chat/completions', completionRoutes)
-server.route('/v1/models', modelRoutes)
-server.route('/v1/embeddings', embeddingRoutes)
-server.route('/v1/responses', responsesRoutes)
-
-// Anthropic compatible endpoints
-server.route('/v1/messages', messageRoutes)
+export const server = new Elysia()
+  .use(cors())
+  .derive(({ request }) => {
+    return {
+      requestStart: Date.now(),
+      requestMethod: request.method,
+      requestUrl: request.url,
+      modelMappingInfo: undefined as
+      | { originalModel?: string, mappedModel?: string }
+      | undefined,
+    }
+  })
+  .onAfterHandle(({ requestMethod, requestUrl, requestStart, modelMappingInfo, set }) => {
+    const elapsed = computeElapsed(requestStart)
+    const status = typeof set.status === 'number' ? set.status : 200
+    logRequest(requestMethod, requestUrl, status, elapsed, modelMappingInfo)
+  })
+  .onError(async ({ error }) => {
+    return createErrorResponse(error)
+  })
+  .get('/', () => 'Server running')
+  .use(completionRoutes)
+  .use(modelRoutes)
+  .use(embeddingRoutes)
+  .use(usageRoute)
+  .use(tokenRoute)
+  .use(responsesRoutes)
+  .use(messageRoutes)

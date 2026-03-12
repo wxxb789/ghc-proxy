@@ -1,9 +1,32 @@
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
-import { requestGuard } from '~/routes/middleware/request-guard'
+import { sseAdapter } from '~/lib/sse-adapter'
+import { runRequestGuard } from '~/routes/middleware/request-guard'
 
-import { handleCompletion } from './handler'
+import { handleCompletionCore } from './handler'
 
-export const completionRoutes = new Hono()
-
-completionRoutes.post('/', requestGuard, c => handleCompletion(c))
+export const completionRoutes = new Elysia()
+  .post('/chat/completions', async function* ({ body, request }) {
+    await runRequestGuard()
+    const result = await handleCompletionCore({
+      body,
+      signal: request.signal,
+      headers: request.headers,
+    })
+    if (result.kind === 'json') {
+      return result.data
+    }
+    yield* sseAdapter(result.generator)
+  })
+  .post('/v1/chat/completions', async function* ({ body, request }) {
+    await runRequestGuard()
+    const result = await handleCompletionCore({
+      body,
+      signal: request.signal,
+      headers: request.headers,
+    })
+    if (result.kind === 'json') {
+      return result.data
+    }
+    yield* sseAdapter(result.generator)
+  })

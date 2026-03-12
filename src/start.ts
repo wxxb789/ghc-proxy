@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import type { ServerHandler } from 'srvx'
 import type { RuntimeConfig } from './lib/state'
 import { defineCommand } from 'citty'
 import clipboard from 'clipboardy'
@@ -152,7 +151,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   }
 
   serve({
-    fetch: server.fetch as ServerHandler,
+    fetch: (req: Request) => server.handle(req) as Promise<Response>,
     port: options.port,
     bun:
       options.idleTimeoutSeconds === undefined

@@ -1,4 +1,3 @@
-import type { Context } from 'hono'
 import type { ExecutionResult } from '~/lib/execution-strategy'
 
 import type { ResponsesPayload } from '~/types'
@@ -6,7 +5,7 @@ import { CopilotClient } from '~/clients'
 import { readCapiRequestContext } from '~/core/capi'
 import { shouldUseFunctionApplyPatch } from '~/lib/config'
 import { throwInvalidRequestError } from '~/lib/error'
-import { executeStrategy, runStrategy } from '~/lib/execution-strategy'
+import { runStrategy } from '~/lib/execution-strategy'
 import { findModelById, modelSupportsEndpoint } from '~/lib/model-capabilities'
 import { getClientConfig, state } from '~/lib/state'
 import { createUpstreamSignal } from '~/lib/upstream-signal'
@@ -71,54 +70,6 @@ export async function handleResponsesCore(
   })
 
   return runStrategy(strategy, upstreamSignal)
-}
-
-/**
- * Hono-specific handler wrapper.
- */
-export async function handleResponses(c: Context) {
-  const payload = parseResponsesPayload(await c.req.json())
-
-  applyResponsesToolTransforms(payload)
-  applyResponsesInputPolicies(payload)
-  compactInputByLatestCompaction(payload)
-
-  const selectedModel = findModelById(payload.model)
-  if (!selectedModel) {
-    throwInvalidRequestError(
-      'The selected model could not be resolved.',
-      'model',
-    )
-  }
-  if (!modelSupportsEndpoint(selectedModel, RESPONSES_ENDPOINT)) {
-    throwInvalidRequestError(
-      'The selected model does not support the responses endpoint.',
-      'model',
-    )
-  }
-
-  applyContextManagement(
-    payload,
-    selectedModel.capabilities.limits.max_prompt_tokens,
-  )
-
-  const { vision, initiator } = getResponsesRequestOptions(payload)
-  const upstreamSignal = createUpstreamSignal(
-    c.req.raw.signal,
-    state.config.upstreamTimeoutSeconds !== undefined
-      ? state.config.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-
-  const strategy = createResponsesPassthroughStrategy(copilotClient, payload, {
-    vision,
-    initiator,
-    requestContext: readCapiRequestContext(c.req.raw.headers),
-    signal: upstreamSignal.signal,
-  })
-
-  return executeStrategy(c, strategy, upstreamSignal)
 }
 
 function applyResponsesToolTransforms(payload: ResponsesPayload): void {
