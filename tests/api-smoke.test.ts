@@ -1,190 +1,34 @@
-import type { ServerSentEventMessage } from 'fetch-event-stream'
-import type {
-  CapiChatCompletionChunk,
-  CapiChatCompletionResponse,
-  CapiChatCompletionsPayload,
-  CapiRequestContext,
-} from '~/core/capi'
+import type { CapturedChatCall } from './helpers'
 import type { AnthropicResponse } from '~/translator'
 import type {
   ChatCompletionChunk,
   ChatCompletionResponse,
-  Model,
-  ModelsResponse,
 } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
-import { HTTPError } from '~/lib/error'
-import { state } from '~/lib/state'
-import { createCompletionRoutes } from '~/routes/chat-completions/route'
-import { createMessageRoutes } from '~/routes/messages/route'
-
-type CreateChatCompletions = typeof CopilotClient.prototype.createChatCompletions
-
-interface CapturedChatCall {
-  payload: CapiChatCompletionsPayload
-  options?: {
-    signal?: AbortSignal
-    initiator?: 'user' | 'agent'
-    requestContext?: CapiRequestContext
-  }
-}
-
-interface ParsedSseEvent {
-  event?: string
-  data?: string
-}
+import {
+  createApp,
+  expectCacheCheckpoints,
+  mockNonStreamingResponse,
+  mockStreamingResponse,
+  parseSse,
+  restoreStateSnapshot,
+  saveStateSnapshot,
+  setupDefaultTestState,
+} from './helpers'
 
 const originalCreateChatCompletions = CopilotClient.prototype.createChatCompletions
-const originalState = {
-  auth: { ...state.auth },
-  config: { ...state.config },
-  cache: { ...state.cache },
-  rateLimit: { ...state.rateLimit },
-}
-
-function buildModel(id: string): Model {
-  return {
-    id,
-    model_picker_enabled: true,
-    name: id,
-    object: 'model',
-    preview: false,
-    vendor: 'anthropic',
-    version: '1',
-    capabilities: {
-      family: 'claude',
-      limits: {
-        max_context_window_tokens: 200000,
-        max_output_tokens: 8192,
-        max_prompt_tokens: 180000,
-      },
-      object: 'model_capabilities',
-      supports: {
-        tool_calls: true,
-        parallel_tool_calls: true,
-      },
-      tokenizer: 'o200k_base',
-      type: 'chat',
-    },
-  }
-}
-
-function buildModelsResponse(...models: Array<Model>): ModelsResponse {
-  return {
-    object: 'list',
-    data: models,
-  }
-}
-
-function createApp() {
-  return new Elysia()
-    .error({ HTTP: HTTPError })
-    .onError(({ code, error }) => {
-      if (code === 'HTTP')
-        return
-      if (error instanceof Error && error.name === 'AbortError') {
-        return Response.json(
-          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
-          { status: 504 },
-        )
-      }
-      const message = error instanceof Error ? error.message : String(error)
-      return Response.json(
-        { error: { message, type: 'error' } },
-        { status: 500 },
-      )
-    })
-    .group('/v1', (app) => {
-      return app
-        .use(createMessageRoutes())
-        .use(createCompletionRoutes())
-    })
-}
-
-function parseSse(body: string): Array<ParsedSseEvent> {
-  return body
-    .split(/\r?\n\r?\n/)
-    .map((chunk) => {
-      const event: ParsedSseEvent = {}
-      for (const line of chunk.split(/\r?\n/)) {
-        if (line.startsWith('event: ')) {
-          event.event = line.slice('event: '.length)
-        }
-        else if (line.startsWith('data: ')) {
-          event.data = event.data
-            ? `${event.data}\n${line.slice('data: '.length)}`
-            : line.slice('data: '.length)
-        }
-      }
-      return event
-    })
-    .filter(event => event.event || event.data)
-}
-
-function createStream(
-  chunks: Array<CapiChatCompletionChunk | '[DONE]'>,
-): AsyncGenerator<ServerSentEventMessage, void, unknown> {
-  return (async function* () {
-    for (const chunk of chunks) {
-      yield {
-        data: chunk === '[DONE]' ? chunk : JSON.stringify(chunk),
-      }
-    }
-  })()
-}
-
-function mockNonStreamingResponse(
-  response: CapiChatCompletionResponse,
-  calls: Array<CapturedChatCall>,
-): CreateChatCompletions {
-  return ((payload, options) => {
-    calls.push({ payload, options })
-    return Promise.resolve(response)
-  }) as CreateChatCompletions
-}
-
-function mockStreamingResponse(
-  chunks: Array<CapiChatCompletionChunk | '[DONE]'>,
-  calls: Array<CapturedChatCall>,
-): CreateChatCompletions {
-  return ((payload, options) => {
-    calls.push({ payload, options })
-    return Promise.resolve(createStream(chunks))
-  }) as CreateChatCompletions
-}
-
-function expectCacheCheckpoints(payload: CapiChatCompletionsPayload) {
-  expect(payload.messages[0]?.copilot_cache_control).toEqual({ type: 'ephemeral' })
-  expect(payload.tools?.at(-1)?.copilot_cache_control).toEqual({ type: 'ephemeral' })
-  expect(
-    payload.messages.some(message =>
-      message.role !== 'user'
-      && message.copilot_cache_control?.type === 'ephemeral',
-    ),
-  ).toBe(true)
-}
+const originalState = saveStateSnapshot()
 
 beforeEach(() => {
-  state.auth.copilotToken = 'test-token'
-  state.cache.vsCodeVersion = '1.99.0'
-  state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5'))
-  state.config.accountType = 'individual'
-  state.config.manualApprove = false
-  state.config.rateLimitSeconds = undefined
-  state.config.rateLimitWait = false
-  state.rateLimit.lastRequestTimestamp = undefined
+  setupDefaultTestState()
 })
 
 afterEach(() => {
   CopilotClient.prototype.createChatCompletions = originalCreateChatCompletions
-  state.auth = { ...originalState.auth }
-  state.config = { ...originalState.config }
-  state.cache = { ...originalState.cache }
-  state.rateLimit = { ...originalState.rateLimit }
+  restoreStateSnapshot(originalState)
 })
 
 describe('API smoke', () => {
@@ -700,43 +544,5 @@ describe('API smoke', () => {
     expect(chunks[1]?.choices[0]?.delta.tool_calls?.[0]?.function?.name).toBe('read_file')
     expect(chunks[1]?.choices[0]?.finish_reason).toBe('tool_calls')
     expect(chunks[1]?.usage?.prompt_tokens_details?.cached_tokens).toBe(35)
-  })
-
-  test('Anthropic count_tokens works through the shared planning core for Claude Code style requests', async () => {
-    const app = createApp()
-
-    const response = await app.handle(new Request('http://localhost/v1/messages/count_tokens', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'anthropic-beta': 'claude-code-1',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4.5',
-        system: 'You are Claude Code.',
-        thinking: {
-          type: 'adaptive',
-        },
-        tools: [
-          {
-            name: 'read_file',
-            input_schema: {
-              type: 'object',
-              properties: {
-                path: { type: 'string' },
-              },
-            },
-          },
-        ],
-        messages: [
-          { role: 'assistant', content: 'I can continue.' },
-          { role: 'user', content: 'Inspect src/main.ts' },
-        ],
-      }),
-    }))
-
-    expect(response.status).toBe(200)
-    const json = await response.json() as { input_tokens: number }
-    expect(json.input_tokens).toBeGreaterThan(0)
   })
 })

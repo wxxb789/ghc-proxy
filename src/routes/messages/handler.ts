@@ -47,7 +47,8 @@ export async function handleMessagesCore(
   { body, signal, headers }: MessagesCoreParams,
 ): Promise<MessagesCoreResult> {
   const anthropicPayload = parseAnthropicMessagesPayload(body)
-  consola.debug('Anthropic request payload:', JSON.stringify(anthropicPayload))
+  if (consola.level >= 4)
+    consola.debug('Anthropic request payload:', JSON.stringify(anthropicPayload))
 
   const anthropicBetaHeader = headers.get('anthropic-beta') ?? undefined
   const modelRouting = applyMessagesModelPolicy(
@@ -151,10 +152,12 @@ export async function handleMessagesCore(
     '-> Copilot model:',
     plan.resolvedModel,
   )
-  consola.debug(
-    'Planned Copilot request payload:',
-    JSON.stringify(plan.payload),
-  )
+  if (consola.level >= 4) {
+    consola.debug(
+      'Planned Copilot request payload:',
+      JSON.stringify(plan.payload),
+    )
+  }
 
   const transport = new CopilotTransport(copilotClient)
   const strategy = createMessagesViaChatCompletionsStrategy(

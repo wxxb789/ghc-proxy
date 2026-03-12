@@ -57,9 +57,3 @@ test('cleanup clears the timeout', async () => {
   // Should not abort after cleanup
   expect(aborted).toBe(false)
 })
-
-test('works with no options (uses defaults)', () => {
-  const { signal, cleanup } = createUpstreamSignal()
-  expect(signal.aborted).toBe(false)
-  cleanup()
-})

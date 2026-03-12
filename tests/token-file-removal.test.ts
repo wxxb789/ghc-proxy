@@ -70,7 +70,7 @@ describe('Token file removal (RED phase)', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('1. ensurePaths() should NOT create the old token file', async () => {
+  test('ensurePaths() should NOT create the old token file', async () => {
     await ensurePaths()
 
     const appDirExists = await fs
@@ -80,7 +80,7 @@ describe('Token file removal (RED phase)', () => {
     expect(appDirExists).toBe(true)
   })
 
-  test('2. setupGitHubToken() should NOT read from the old token file', async () => {
+  test('setupGitHubToken() should NOT read from the old token file', async () => {
     await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({}))
     await readConfig()
 
@@ -89,7 +89,7 @@ describe('Token file removal (RED phase)', () => {
     expect(state.auth.githubToken).toBe('new-test-token')
   })
 
-  test('3. setupGitHubToken() should write to config.json only', async () => {
+  test('setupGitHubToken() should write to config.json only', async () => {
     await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({}))
     await readConfig()
 

@@ -4,11 +4,10 @@ import type { Model, ResponsesResult } from '~/types'
 
 import process from 'node:process'
 import consola from 'consola'
-import { readConfig } from '~/lib/config'
-import { ensurePaths } from '~/lib/paths'
-import { cacheModels, cacheVSCodeVersion, state } from '~/lib/state'
-import { setupCopilotToken, setupGitHubToken } from '~/lib/token'
+import { state } from '~/lib/state'
 import { createServer } from '~/server'
+
+import { bootstrapProbe, pickFirstMessagesModel, runMain } from './lib/probe-harness'
 
 const server = createServer()
 
@@ -450,7 +449,7 @@ async function main() {
   const models = state.cache.models?.data ?? []
   const selectedResponsesModels = resolveResponsesModels(models)
   const selectedResponsesTranslationModel = pickResponsesTranslationModel(models)
-  const selectedMessagesModel = pickMessagesModel(models)
+  const selectedMessagesModel = pickFirstMessagesModel(models)
   const selectedChatFallbackModel = pickChatFallbackModel(models)
   const activeResponsesCases = resolveResponsesCases()
 
@@ -535,24 +534,10 @@ async function main() {
 }
 
 async function bootstrap() {
+  await bootstrapProbe({ silent: jsonMode, timeoutMs: REQUEST_TIMEOUT_MS })
   if (jsonMode) {
     silenceConsola()
   }
-  else {
-    consola.level = 0
-  }
-  state.config.accountType = 'enterprise'
-  state.config.manualApprove = false
-  state.config.rateLimitWait = false
-  state.config.showToken = false
-  state.config.upstreamTimeoutSeconds = Math.floor(REQUEST_TIMEOUT_MS / 1000)
-
-  await ensurePaths()
-  await readConfig()
-  await cacheVSCodeVersion()
-  await setupGitHubToken()
-  await setupCopilotToken()
-  await cacheModels()
 }
 
 function silenceConsola() {
@@ -839,10 +824,6 @@ function resolveResponsesCases(): Array<RequestCase> {
   return responsesCases
 }
 
-function pickMessagesModel(models: Array<Model>): Model | undefined {
-  return models.find(model => model.supported_endpoints?.includes('/v1/messages'))
-}
-
 function pickResponsesTranslationModel(models: Array<Model>): Model | undefined {
   return models.find((model) => {
     const endpoints = new Set(model.supported_endpoints ?? [])
@@ -907,12 +888,4 @@ function getResponseId(payload: unknown): string | undefined {
     : undefined
 }
 
-void main()
-  .then(() => {
-    process.exit(0)
-  })
-  .catch((error) => {
-    const message = error instanceof Error ? error.stack ?? error.message : String(error)
-    process.stderr.write(`${message}\n`)
-    process.exit(1)
-  })
+runMain(main)

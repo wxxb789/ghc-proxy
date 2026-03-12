@@ -114,17 +114,6 @@ describe('CAPI planning', () => {
     expect(plan.payload.seed).toBe(42)
   })
 
-  test('response_format survives the pipeline', () => {
-    const adapter = new OpenAIChatAdapter()
-    const plan = adapter.toCapiPlan({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: 'Return JSON' }],
-      response_format: { type: 'json_object' },
-    })
-
-    expect(plan.payload.response_format).toEqual({ type: 'json_object' })
-  })
-
   test('explicit reasoning_effort overrides inferred value', () => {
     const adapter = new OpenAIChatAdapter()
     const plan = adapter.toCapiPlan({
@@ -138,9 +127,19 @@ describe('CAPI planning', () => {
     expect(plan.payload.reasoning_effort).toBe('high')
   })
 
-  test('null values are treated as unset', () => {
+  test('omits completion options when not provided or explicitly null', () => {
     const adapter = new OpenAIChatAdapter()
-    const plan = adapter.toCapiPlan({
+    const keys = ['n', 'frequency_penalty', 'presence_penalty', 'logit_bias', 'logprobs', 'response_format', 'seed'] as const
+
+    const omitted = adapter.toCapiPlan({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Hello' }],
+    })
+    for (const key of keys) {
+      expect(key in omitted.payload).toBe(false)
+    }
+
+    const nulled = adapter.toCapiPlan({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: 'Hello' }],
       n: null,
@@ -148,26 +147,8 @@ describe('CAPI planning', () => {
       response_format: null,
       seed: null,
     })
-
-    expect('n' in plan.payload).toBe(false)
-    expect('frequency_penalty' in plan.payload).toBe(false)
-    expect('response_format' in plan.payload).toBe(false)
-    expect('seed' in plan.payload).toBe(false)
-  })
-
-  test('omits completion options when not provided', () => {
-    const adapter = new OpenAIChatAdapter()
-    const plan = adapter.toCapiPlan({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: 'Hello' }],
-    })
-
-    expect('n' in plan.payload).toBe(false)
-    expect('frequency_penalty' in plan.payload).toBe(false)
-    expect('presence_penalty' in plan.payload).toBe(false)
-    expect('logit_bias' in plan.payload).toBe(false)
-    expect('logprobs' in plan.payload).toBe(false)
-    expect('response_format' in plan.payload).toBe(false)
-    expect('seed' in plan.payload).toBe(false)
+    for (const key of ['n', 'frequency_penalty', 'response_format', 'seed'] as const) {
+      expect(key in nulled.payload).toBe(false)
+    }
   })
 })

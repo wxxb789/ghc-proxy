@@ -1,3 +1,5 @@
+import type { ServerSentEventMessage } from 'fetch-event-stream'
+
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Elysia } from 'elysia'
 
@@ -26,12 +28,6 @@ beforeEach(() => {
 afterEach(() => {
   CopilotClient.prototype.createChatCompletions = originalCreateChatCompletions
 })
-
-function createAbortErrorAsError(): Error {
-  const error = new Error('The operation was aborted.')
-  error.name = 'AbortError'
-  return error
-}
 
 function createTestApp() {
   return new Elysia()
@@ -65,17 +61,23 @@ function createTestApp() {
     })
 }
 
-function makeRequest(app: ReturnType<typeof createTestApp>) {
+function makeRequest(app: ReturnType<typeof createTestApp>, options?: { stream?: boolean }) {
   return app.handle(new Request('http://localhost/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-haiku-4.5',
       max_tokens: 64,
-      stream: false,
+      stream: options?.stream ?? false,
       messages: [{ role: 'user', content: 'Hello!' }],
     }),
   }))
+}
+
+function createAbortErrorAsError(): Error {
+  const error = new Error('The operation was aborted.')
+  error.name = 'AbortError'
+  return error
 }
 
 describe('Error classification in onError handler', () => {
@@ -133,5 +135,39 @@ describe('Error classification in onError handler', () => {
         type: 'error',
       },
     })
+  })
+})
+
+describe('Streaming error handling', () => {
+  function createTimeoutError(): DOMException {
+    const DOMExceptionCtor = DOMException as unknown as {
+      new (message?: string, name?: string): DOMException
+    }
+    return new DOMExceptionCtor('The operation timed out.', 'TimeoutError')
+  }
+
+  async function* createTimeoutStream(): AsyncGenerator<
+    ServerSentEventMessage,
+    void,
+    unknown
+  > {
+    await Promise.resolve()
+    throw createTimeoutError()
+    yield { data: '' }
+  }
+
+  test('converts TimeoutError to Anthropic SSE error event', async () => {
+    CopilotClient.prototype.createChatCompletions = (_payload, _options) =>
+      Promise.resolve(createTimeoutStream())
+
+    const app = createTestApp()
+    const response = await makeRequest(app, { stream: true })
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('event: error')
+    expect(body).toContain(
+      'Upstream streaming request timed out. Please retry.',
+    )
   })
 })

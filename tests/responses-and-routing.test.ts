@@ -1,55 +1,36 @@
-import type { ServerSentEventMessage } from 'fetch-event-stream'
-import type { CapiChatCompletionResponse, CapiChatCompletionsPayload } from '~/core/capi'
-import type { AnthropicMessagesPayload, AnthropicResponse } from '~/translator'
-import type { Model, ModelsResponse, ResponsesPayload, ResponsesResult, ResponseStreamEvent } from '~/types'
+import type { CapturedChatCall, CapturedMessagesCall, CapturedResponsesCall } from './helpers'
+import type { CapiChatCompletionResponse } from '~/core/capi'
+import type { AnthropicResponse } from '~/translator'
+import type { ResponseStreamEvent } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
 import { getCachedConfig } from '~/lib/config'
-import { HTTPError } from '~/lib/error'
 import { state } from '~/lib/state'
-import { createMessageRoutes } from '~/routes/messages/route'
-import { createResponsesRoutes } from '~/routes/responses/route'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 import { ResponsesStreamTranslator } from '~/translator/responses/responses-stream-translator'
 
-type CreateResponses = typeof CopilotClient.prototype.createResponses
-type CreateMessages = typeof CopilotClient.prototype.createMessages
+import {
+  buildModel,
+  buildModelsResponse,
+  buildVisionModel,
+  createApp,
+  mockMessages,
+  mockResponses,
+  restoreStateSnapshot,
+  saveStateSnapshot,
+  setupDefaultTestState,
+} from './helpers'
+
+// ── Types unique to this test file ──
+
 type CreateChatCompletions = typeof CopilotClient.prototype.createChatCompletions
 type GetResponse = typeof CopilotClient.prototype.getResponse
 type GetResponseInputItems = typeof CopilotClient.prototype.getResponseInputItems
 type CreateResponseInputTokens = typeof CopilotClient.prototype.createResponseInputTokens
 type DeleteResponse = typeof CopilotClient.prototype.deleteResponse
-
-const originalCreateResponses = CopilotClient.prototype.createResponses
-const originalCreateMessages = CopilotClient.prototype.createMessages
-const originalCreateChatCompletions = CopilotClient.prototype.createChatCompletions
-const originalGetResponse = CopilotClient.prototype.getResponse
-const originalGetResponseInputItems = CopilotClient.prototype.getResponseInputItems
-const originalCreateResponseInputTokens = CopilotClient.prototype.createResponseInputTokens
-const originalDeleteResponse = CopilotClient.prototype.deleteResponse
-const originalState = {
-  auth: { ...state.auth },
-  config: { ...state.config },
-  cache: { ...state.cache },
-  rateLimit: { ...state.rateLimit },
-}
-const originalConfig = structuredClone(getCachedConfig())
-
-interface CapturedResponsesCall {
-  payload: ResponsesPayload
-}
-
-interface CapturedMessagesCall {
-  payload: AnthropicMessagesPayload
-}
-
-interface CapturedChatCall {
-  payload: CapiChatCompletionsPayload
-}
 
 interface CapturedGetResponseCall {
   responseId: string
@@ -74,97 +55,7 @@ interface CapturedDeleteResponseCall {
   responseId: string
 }
 
-function buildModel(id: string, supportedEndpoints?: Array<string>): Model {
-  return {
-    id,
-    model_picker_enabled: true,
-    name: id,
-    object: 'model',
-    preview: false,
-    vendor: 'openai',
-    version: '1',
-    supported_endpoints: supportedEndpoints,
-    capabilities: {
-      family: 'gpt',
-      limits: {
-        max_context_window_tokens: 200000,
-        max_output_tokens: 8192,
-        max_prompt_tokens: 180000,
-      },
-      object: 'model_capabilities',
-      supports: {
-        tool_calls: true,
-        parallel_tool_calls: true,
-        adaptive_thinking: true,
-      },
-      tokenizer: 'o200k_base',
-      type: 'chat',
-    },
-  }
-}
-
-function buildVisionModel(id: string, supportedEndpoints?: Array<string>): Model {
-  const model = buildModel(id, supportedEndpoints)
-  model.capabilities.supports.vision = true
-  model.capabilities.limits.vision = {
-    max_prompt_image_size: 3145728,
-    max_prompt_images: 1,
-    supported_media_types: ['image/png'],
-  }
-  return model
-}
-
-function buildModelsResponse(...models: Array<Model>): ModelsResponse {
-  return {
-    object: 'list',
-    data: models,
-  }
-}
-
-function createApp() {
-  return new Elysia()
-    .error({ HTTP: HTTPError })
-    .onError(({ code, error }) => {
-      if (code === 'HTTP')
-        return
-      if (error instanceof Error && error.name === 'AbortError') {
-        return Response.json(
-          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
-          { status: 504 },
-        )
-      }
-      const message = error instanceof Error ? error.message : String(error)
-      return Response.json(
-        { error: { message, type: 'error' } },
-        { status: 500 },
-      )
-    })
-    .group('/v1', (app) => {
-      return app
-        .use(createMessageRoutes())
-        .use(createResponsesRoutes())
-    })
-}
-
-function mockResponses(
-  response: ResponsesResult | AsyncGenerator<ServerSentEventMessage, void, unknown>,
-  calls: Array<CapturedResponsesCall>,
-): CreateResponses {
-  return ((payload) => {
-    calls.push({ payload })
-    return Promise.resolve(response)
-  }) as CreateResponses
-}
-
-function mockMessages(
-  response: AnthropicResponse | AsyncGenerator<ServerSentEventMessage, void, unknown>,
-  calls: Array<CapturedMessagesCall>,
-): CreateMessages {
-  return ((payload) => {
-    calls.push({ payload })
-    return Promise.resolve(response)
-  }) as CreateMessages
-}
+// ── Mock factories unique to this test file ──
 
 function mockChatCompletions(
   response: CapiChatCompletionResponse,
@@ -216,17 +107,22 @@ function mockDeleteResponse(
   }) as DeleteResponse
 }
 
+// ── State setup / teardown ──
+
+const originalCreateResponses = CopilotClient.prototype.createResponses
+const originalCreateMessages = CopilotClient.prototype.createMessages
+const originalCreateChatCompletions = CopilotClient.prototype.createChatCompletions
+const originalGetResponse = CopilotClient.prototype.getResponse
+const originalGetResponseInputItems = CopilotClient.prototype.getResponseInputItems
+const originalCreateResponseInputTokens = CopilotClient.prototype.createResponseInputTokens
+const originalDeleteResponse = CopilotClient.prototype.deleteResponse
+const stateSnapshot = saveStateSnapshot()
+const originalConfig = structuredClone(getCachedConfig())
+
 beforeEach(() => {
-  state.auth.copilotToken = 'test-token'
-  state.cache.vsCodeVersion = '1.99.0'
-  state.cache.models = buildModelsResponse()
-  state.config.accountType = 'individual'
-  state.config.manualApprove = false
-  state.config.rateLimitSeconds = undefined
-  state.config.rateLimitWait = false
+  setupDefaultTestState()
   state.config.showToken = false
   state.config.upstreamTimeoutSeconds = undefined
-  state.rateLimit.lastRequestTimestamp = undefined
 
   const config = getCachedConfig()
   for (const key of Object.keys(config)) {
@@ -242,10 +138,7 @@ afterEach(() => {
   CopilotClient.prototype.getResponseInputItems = originalGetResponseInputItems
   CopilotClient.prototype.createResponseInputTokens = originalCreateResponseInputTokens
   CopilotClient.prototype.deleteResponse = originalDeleteResponse
-  state.auth = { ...originalState.auth }
-  state.config = { ...originalState.config }
-  state.cache = { ...originalState.cache }
-  state.rateLimit = { ...originalState.rateLimit }
+  restoreStateSnapshot(stateSnapshot)
 
   const config = getCachedConfig()
   for (const key of Object.keys(config)) {
@@ -258,7 +151,7 @@ describe('responses and routing', () => {
   test('/v1/responses transforms apply_patch before forwarding', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
-    state.cache.models = buildModelsResponse(buildModel('gpt-4.1', ['/responses']))
+    state.cache.models = buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] }))
 
     CopilotClient.prototype.createResponses = mockResponses({
       id: 'resp_1',
@@ -303,7 +196,7 @@ describe('responses and routing', () => {
   test('/v1/responses rejects unsupported builtin tools explicitly', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
-    state.cache.models = buildModelsResponse(buildModel('gpt-4.1', ['/responses']))
+    state.cache.models = buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] }))
 
     CopilotClient.prototype.createResponses = mockResponses({
       id: 'resp_unused',
@@ -349,7 +242,7 @@ describe('responses and routing', () => {
   test('/v1/responses rejects external image URLs explicitly', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
-    state.cache.models = buildModelsResponse(buildVisionModel('gpt-5', ['/responses']))
+    state.cache.models = buildModelsResponse(buildVisionModel('gpt-5', { supported_endpoints: ['/responses'] }))
 
     CopilotClient.prototype.createResponses = mockResponses({
       id: 'resp_unused',
@@ -398,7 +291,7 @@ describe('responses and routing', () => {
 
   test('/v1/responses validates payload shape before mutation', async () => {
     const app = createApp()
-    state.cache.models = buildModelsResponse(buildModel('gpt-4.1', ['/responses']))
+    state.cache.models = buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] }))
 
     const response = await app.handle(new Request('http://localhost/v1/responses', {
       method: 'POST',
@@ -528,7 +421,7 @@ describe('responses and routing', () => {
   test('/v1/messages uses responses translation path for responses-only models', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
-    state.cache.models = buildModelsResponse(buildModel('gpt-5', ['/responses']))
+    state.cache.models = buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] }))
 
     CopilotClient.prototype.createResponses = mockResponses({
       id: 'resp_1',
@@ -579,7 +472,7 @@ describe('responses and routing', () => {
   test('/v1/messages uses native messages path when model supports it', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []
-    state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5', ['/v1/messages']))
+    state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5', { supported_endpoints: ['/v1/messages'] }))
 
     CopilotClient.prototype.createMessages = mockMessages({
       id: 'msg_1',
@@ -612,7 +505,7 @@ describe('responses and routing', () => {
   test('/v1/messages native path does not inject thinking or output_config', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []
-    state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5', ['/v1/messages']))
+    state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5', { supported_endpoints: ['/v1/messages'] }))
 
     CopilotClient.prototype.createMessages = mockMessages({
       id: 'msg_1',
@@ -646,7 +539,7 @@ describe('responses and routing', () => {
   test('/v1/messages native messages path preserves explicit thinking configuration', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []
-    state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5', ['/v1/messages']))
+    state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5', { supported_endpoints: ['/v1/messages'] }))
 
     CopilotClient.prototype.createMessages = mockMessages({
       id: 'msg_1',
@@ -793,7 +686,7 @@ describe('responses and routing', () => {
 
   test('/v1/messages responses streaming path emits anthropic error event on malformed upstream chunk', async () => {
     const app = createApp()
-    state.cache.models = buildModelsResponse(buildModel('gpt-5', ['/responses']))
+    state.cache.models = buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] }))
 
     CopilotClient.prototype.createResponses = mockResponses((async function* () {
       yield {
