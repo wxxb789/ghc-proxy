@@ -3,9 +3,10 @@ import { Hono } from 'hono'
 import { CopilotClient } from '~/clients'
 import { cacheModels, getClientConfig, state } from '~/lib/state'
 
-export const modelRoutes = new Hono()
-
-modelRoutes.get('/', async (c) => {
+/**
+ * Framework-agnostic handler for listing models.
+ */
+export async function handleModelsCore(): Promise<object> {
   if (!state.cache.models) {
     // This should be handled by startup logic, but as a fallback.
     const copilotClient = new CopilotClient(state.auth, getClientConfig())
@@ -22,9 +23,15 @@ modelRoutes.get('/', async (c) => {
     display_name: model.name,
   }))
 
-  return c.json({
+  return {
     object: 'list',
     data: models,
     has_more: false,
-  })
+  }
+}
+
+export const modelRoutes = new Hono()
+
+modelRoutes.get('/', async (c) => {
+  return c.json(await handleModelsCore())
 })

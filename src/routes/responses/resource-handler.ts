@@ -11,59 +11,125 @@ import { throwInvalidRequestError } from '~/lib/error'
 import { getClientConfig, state } from '~/lib/state'
 import { parseResponsesInputTokensPayload } from '~/lib/validation'
 
-export async function handleRetrieveResponse(c: Context) {
-  const responseId = getRequiredResponseId(c)
+// --- Core request parameter interfaces ---
+
+export interface ResourceHandlerParams {
+  params: { responseId?: string }
+  url: string
+  headers: Headers
+  signal: AbortSignal
+}
+
+export interface ResourceHandlerBodyParams {
+  body: unknown
+  headers: Headers
+  signal: AbortSignal
+}
+
+// --- Framework-agnostic Core functions ---
+
+export async function handleRetrieveResponseCore(
+  { params, url, headers, signal }: ResourceHandlerParams,
+): Promise<object> {
+  const responseId = requireResponseId(params.responseId)
   const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.getResponse(responseId, {
-    params: getRetrieveParams(c),
-    requestContext: readCapiRequestContext(c.req.raw.headers),
+  return await copilotClient.getResponse(responseId, {
+    params: getRetrieveParamsFromUrl(url),
+    requestContext: readCapiRequestContext(headers),
+    signal,
+  })
+}
+
+export async function handleListResponseInputItemsCore(
+  { params, url, headers, signal }: ResourceHandlerParams,
+): Promise<object> {
+  const responseId = requireResponseId(params.responseId)
+  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  return await copilotClient.getResponseInputItems(
+    responseId,
+    getInputItemsParamsFromUrl(url),
+    {
+      requestContext: readCapiRequestContext(headers),
+      signal,
+    },
+  )
+}
+
+export async function handleCreateResponseInputTokensCore(
+  { body, headers, signal }: ResourceHandlerBodyParams,
+): Promise<object> {
+  const payload = parseResponsesInputTokensPayload(body) as ResponsesInputTokensPayload
+  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  return await copilotClient.createResponseInputTokens(payload, {
+    requestContext: readCapiRequestContext(headers),
+    signal,
+  })
+}
+
+export async function handleDeleteResponseCore(
+  { params, headers, signal }: Omit<ResourceHandlerParams, 'url'>,
+): Promise<object> {
+  const responseId = requireResponseId(params.responseId)
+  const copilotClient = new CopilotClient(state.auth, getClientConfig())
+  return await copilotClient.deleteResponse(responseId, {
+    requestContext: readCapiRequestContext(headers),
+    signal,
+  })
+}
+
+// --- Hono-specific wrappers ---
+
+export async function handleRetrieveResponse(c: Context) {
+  const result = await handleRetrieveResponseCore({
+    params: { responseId: c.req.param('responseId') },
+    url: c.req.url,
+    headers: c.req.raw.headers,
     signal: c.req.raw.signal,
   })
-  return c.json(response)
+  return c.json(result)
 }
 
 export async function handleListResponseInputItems(c: Context) {
-  const responseId = getRequiredResponseId(c)
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.getResponseInputItems(responseId, getInputItemsParams(c), {
-    requestContext: readCapiRequestContext(c.req.raw.headers),
+  const result = await handleListResponseInputItemsCore({
+    params: { responseId: c.req.param('responseId') },
+    url: c.req.url,
+    headers: c.req.raw.headers,
     signal: c.req.raw.signal,
   })
-  return c.json(response)
+  return c.json(result)
 }
 
 export async function handleCreateResponseInputTokens(c: Context) {
-  const payload = parseResponsesInputTokensPayload(await c.req.json()) as ResponsesInputTokensPayload
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.createResponseInputTokens(payload, {
-    requestContext: readCapiRequestContext(c.req.raw.headers),
+  const result = await handleCreateResponseInputTokensCore({
+    body: await c.req.json(),
+    headers: c.req.raw.headers,
     signal: c.req.raw.signal,
   })
-  return c.json(response)
+  return c.json(result)
 }
 
 export async function handleDeleteResponse(c: Context) {
-  const responseId = getRequiredResponseId(c)
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.deleteResponse(responseId, {
-    requestContext: readCapiRequestContext(c.req.raw.headers),
+  const result = await handleDeleteResponseCore({
+    params: { responseId: c.req.param('responseId') },
+    headers: c.req.raw.headers,
     signal: c.req.raw.signal,
   })
-  return c.json(response)
+  return c.json(result)
 }
 
-function getRequiredResponseId(c: Context): string {
-  const responseId = c.req.param('responseId')
+// --- Shared helpers (now framework-agnostic, accept url string) ---
+
+function requireResponseId(responseId: string | undefined): string {
   if (!responseId) {
     throwInvalidRequestError('Response id is required.', 'response_id')
   }
   return responseId
 }
 
-function getRetrieveParams(c: Context): ResponseRetrieveParams {
-  const url = new URL(c.req.url)
+function getRetrieveParamsFromUrl(rawUrl: string): ResponseRetrieveParams {
+  const url = new URL(rawUrl)
   const params: ResponseRetrieveParams = {
-    include: getIncludeParams(c),
+    include: getIncludeParamsFromUrl(rawUrl),
   }
 
   const startingAfter = url.searchParams.get('starting_after')
@@ -105,13 +171,13 @@ function getRetrieveParams(c: Context): ResponseRetrieveParams {
   return params
 }
 
-function getInputItemsParams(c: Context): ResponseInputItemsListParams {
-  const url = new URL(c.req.url)
+function getInputItemsParamsFromUrl(rawUrl: string): ResponseInputItemsListParams {
+  const url = new URL(rawUrl)
   const limit = url.searchParams.get('limit')
   const order = url.searchParams.get('order')
   const params: ResponseInputItemsListParams = {
     after: url.searchParams.get('after') ?? undefined,
-    include: getIncludeParams(c),
+    include: getIncludeParamsFromUrl(rawUrl),
   }
 
   if (limit !== null) {
@@ -138,8 +204,8 @@ function getInputItemsParams(c: Context): ResponseInputItemsListParams {
   return params
 }
 
-function getIncludeParams(c: Context): Array<string> | undefined {
-  const url = new URL(c.req.url)
+function getIncludeParamsFromUrl(rawUrl: string): Array<string> | undefined {
+  const url = new URL(rawUrl)
   const includes = url.searchParams.getAll('include')
     .flatMap(value => value.split(','))
     .map(value => value.trim())

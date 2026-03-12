@@ -12,6 +12,58 @@ export class HTTPError extends Error {
   }
 }
 
+/**
+ * Framework-agnostic error response builder.
+ * Returns a standard Response object using the Web API directly.
+ */
+export async function createErrorResponse(error: unknown): Promise<Response> {
+  consola.error('Error occurred:', error)
+
+  if (error instanceof HTTPError) {
+    const errorText = await error.response.text()
+    let errorJson: unknown
+    try {
+      errorJson = JSON.parse(errorText)
+    }
+    catch {
+      errorJson = errorText
+    }
+    consola.error('HTTP error:', errorJson)
+    if (isStructuredErrorPayload(errorJson)) {
+      return Response.json(errorJson, { status: error.response.status })
+    }
+    return Response.json(
+      {
+        error: {
+          message: errorText,
+          type: 'error',
+        },
+      },
+      { status: error.response.status },
+    )
+  }
+
+  if (error instanceof Error && error.name === 'AbortError') {
+    return Response.json(
+      { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
+      { status: 504 },
+    )
+  }
+
+  return Response.json(
+    {
+      error: {
+        message: (error as Error).message,
+        type: 'error',
+      },
+    },
+    { status: 500 },
+  )
+}
+
+/**
+ * Hono-specific error handler wrapper around createErrorResponse.
+ */
 export async function forwardError(c: Context, error: unknown) {
   consola.error('Error occurred:', error)
 

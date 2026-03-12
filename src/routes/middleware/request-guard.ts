@@ -4,12 +4,22 @@ import { awaitApproval } from '~/lib/approval'
 import { checkRateLimit } from '~/lib/rate-limit'
 import { state } from '~/lib/state'
 
-export const requestGuard: MiddlewareHandler = async (_c, next) => {
+/**
+ * Framework-agnostic request guard logic.
+ * Checks rate limits and optionally awaits manual approval.
+ */
+export async function runRequestGuard(): Promise<void> {
   await checkRateLimit(state)
 
   if (state.config.manualApprove) {
     await awaitApproval()
   }
+}
 
+/**
+ * Hono middleware wrapper for the request guard.
+ */
+export const requestGuard: MiddlewareHandler = async (_c, next) => {
+  await runRequestGuard()
   await next()
 }

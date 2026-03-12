@@ -63,9 +63,41 @@ function formatModelMapping(info: ModelMappingInfo | undefined): string {
   return ` ${colorize('dim', 'model=')}${colorize('blueBright', original)} ${colorize('dim', '→')} ${colorize('greenBright', mapped)}`
 }
 
+/**
+ * Framework-agnostic request logging function.
+ * Logs a formatted request line with method, path, status, elapsed time,
+ * and optional model mapping info.
+ */
+export function logRequest(
+  method: string,
+  url: string,
+  status: number,
+  elapsed: string,
+  modelInfo?: ModelMappingInfo,
+): void {
+  const path = formatPath(url)
+  const line = [
+    colorizeMethod(method),
+    colorize('white', path),
+    colorizeStatus(status),
+    colorize('dim', elapsed),
+  ].join(' ')
+
+  consola.info(`${line}${formatModelMapping(modelInfo)}`)
+}
+
+/**
+ * Computes a human-readable elapsed time string from a start timestamp.
+ */
+export function computeElapsed(start: number): string {
+  return formatElapsed(start)
+}
+
+/**
+ * Hono middleware wrapper for request logging.
+ */
 export const requestLogger: MiddlewareHandler = async (c, next) => {
   const { method, url } = c.req
-  const path = formatPath(url)
   const start = Date.now()
 
   try {
@@ -75,15 +107,7 @@ export const requestLogger: MiddlewareHandler = async (c, next) => {
     const elapsed = formatElapsed(start)
     const status = c.res.status
     const modelInfo = c.get('modelMappingInfo')
-
-    const line = [
-      colorizeMethod(method),
-      colorize('white', path),
-      colorizeStatus(status),
-      colorize('dim', elapsed),
-    ].join(' ')
-
-    consola.info(`${line}${formatModelMapping(modelInfo)}`)
+    logRequest(method, url, status, elapsed, modelInfo)
   }
 }
 
