@@ -22,6 +22,9 @@ export interface AnthropicMessagesPayload {
     | { type: 'enabled', budget_tokens: number }
     | { type: 'disabled' }
     | { type: 'adaptive' }
+  output_config?: {
+    effort?: 'low' | 'medium' | 'high' | 'max'
+  }
   service_tier?: 'auto' | 'standard_only'
 }
 
@@ -211,15 +214,15 @@ export interface AnthropicStreamState {
   openThinkingBlockIndex: number | null
   toolCalls: Record<number, AnthropicStreamToolCallState>
   lastUsage?: {
-    prompt_tokens: number
-    completion_tokens: number
-    total_tokens: number
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
     prompt_tokens_details?: {
-      cached_tokens: number
+      cached_tokens?: number
     }
     completion_tokens_details?: {
-      accepted_prediction_tokens: number
-      rejected_prediction_tokens: number
+      accepted_prediction_tokens?: number
+      rejected_prediction_tokens?: number
     }
   }
   pendingStopReason?:
@@ -228,6 +231,12 @@ export interface AnthropicStreamState {
     | 'tool_calls'
     | 'content_filter'
     | null
+  lastMetadata?: {
+    reasoningOpaque?: string
+    encryptedContent?: string | null
+    phase?: string
+    copilotAnnotations?: unknown
+  }
   messageStopSent: boolean
 }
 

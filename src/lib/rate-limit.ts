@@ -31,10 +31,9 @@ export async function checkRateLimit(state: AppState) {
     consola.warn(
       `Rate limit exceeded. Need to wait ${waitTimeSeconds} more seconds.`,
     )
-    throw new HTTPError(
-      'Rate limit exceeded',
-      Response.json({ message: 'Rate limit exceeded' }, { status: 429 }),
-    )
+    throw new HTTPError(429, {
+      error: { message: 'Rate limit exceeded', type: 'rate_limit_error' },
+    })
   }
 
   const waitTimeMs = waitTimeSeconds * 1000

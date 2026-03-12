@@ -1,5 +1,3 @@
-import type { Context, MiddlewareHandler } from 'hono'
-
 import consola from 'consola'
 import { colorize } from 'consola/utils'
 
@@ -8,7 +6,7 @@ export interface ModelMappingInfo {
   mappedModel?: string
 }
 
-function formatElapsed(start: number) {
+export function formatElapsed(start: number) {
   const delta = Date.now() - start
   return delta < 1000 ? `${delta}ms` : `${Math.round(delta / 1000)}s`
 }
@@ -63,30 +61,25 @@ function formatModelMapping(info: ModelMappingInfo | undefined): string {
   return ` ${colorize('dim', 'model=')}${colorize('blueBright', original)} ${colorize('dim', '→')} ${colorize('greenBright', mapped)}`
 }
 
-export const requestLogger: MiddlewareHandler = async (c, next) => {
-  const { method, url } = c.req
+/**
+ * Request logging function.
+ * Logs a formatted request line with method, path, status, elapsed time,
+ * and optional model mapping info.
+ */
+export function logRequest(
+  method: string,
+  url: string,
+  status: number,
+  elapsed: string,
+  modelInfo?: ModelMappingInfo,
+): void {
   const path = formatPath(url)
-  const start = Date.now()
+  const line = [
+    colorizeMethod(method),
+    colorize('white', path),
+    colorizeStatus(status),
+    colorize('dim', elapsed),
+  ].join(' ')
 
-  try {
-    await next()
-  }
-  finally {
-    const elapsed = formatElapsed(start)
-    const status = c.res.status
-    const modelInfo = c.get('modelMappingInfo')
-
-    const line = [
-      colorizeMethod(method),
-      colorize('white', path),
-      colorizeStatus(status),
-      colorize('dim', elapsed),
-    ].join(' ')
-
-    consola.info(`${line}${formatModelMapping(modelInfo)}`)
-  }
-}
-
-export function setModelMappingInfo(c: Context, info: ModelMappingInfo) {
-  c.set('modelMappingInfo', info)
+  consola.info(`${line}${formatModelMapping(modelInfo)}`)
 }

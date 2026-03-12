@@ -13,9 +13,7 @@ import type {
   AnthropicToolResultBlock,
 } from './types'
 
-function assertNever(value: never): never {
-  throw new Error(`Unexpected Anthropic block: ${JSON.stringify(value)}`)
-}
+import { assertNever } from '~/lib/assert-never'
 
 function textBlock(text: string): NormalizedTextBlock {
   return { kind: 'text', text }

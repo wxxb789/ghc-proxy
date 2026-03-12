@@ -9,6 +9,8 @@ import type {
 import type { TranslationContext } from './translation-policy'
 import type { ChatCompletionsPayload, ContentPart, Message, Tool } from '~/types'
 
+import { assertNever } from '~/lib/assert-never'
+
 export interface ModelCapabilities {
   supportsThinkingBudget: boolean
 }
@@ -16,10 +18,6 @@ export interface ModelCapabilities {
 export interface AnthropicOpenAIMapperOptions {
   resolveModel: (model: string) => string
   getModelCapabilities: (model: string) => ModelCapabilities
-}
-
-function assertNever(value: never): never {
-  throw new Error(`Unexpected normalized value: ${JSON.stringify(value)}`)
 }
 
 function asContentPart(

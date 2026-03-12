@@ -5,7 +5,11 @@ import type {
 } from './ir'
 
 import type { TranslationContext } from './translation-policy'
-import type { ChatCompletionResponse, ContentPart, Message, ToolCall } from '~/types'
+import type {
+  CapiChatCompletionResponse,
+  CapiResponseMessage,
+} from '~/core/capi'
+import type { ContentPart, Message, ToolCall } from '~/types'
 import { TranslationFailure } from './translation-issue'
 
 function normalizeContentPart(part: ContentPart): NormalizedBlock {
@@ -76,18 +80,30 @@ function parseToolCall(toolCall: ToolCall): NormalizedBlock {
 }
 
 function normalizeAssistantTurn(
-  message: ChatCompletionResponse['choices'][number]['message'],
+  message: CapiResponseMessage,
 ): NormalizedTurn {
   const contentBlocks = normalizeMessageContent(message.content)
   const toolBlocks = message.tool_calls?.map(parseToolCall) ?? []
+  const thinkingBlocks: Array<NormalizedBlock> = message.reasoning_text
+    ? [{
+        kind: 'thinking',
+        thinking: message.reasoning_text,
+      }]
+    : []
   return {
     role: 'assistant',
-    blocks: [...contentBlocks, ...toolBlocks],
+    blocks: [...thinkingBlocks, ...contentBlocks, ...toolBlocks],
+    meta: {
+      reasoningOpaque: message.reasoning_opaque,
+      encryptedContent: message.encrypted_content,
+      phase: message.phase,
+      copilotAnnotations: message.copilot_annotations,
+    },
   }
 }
 
 export function normalizeOpenAIResponse(
-  response: ChatCompletionResponse,
+  response: CapiChatCompletionResponse,
   context: TranslationContext,
 ): NormalizedOpenAIResponse {
   if (response.choices.length === 0) {

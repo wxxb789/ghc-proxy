@@ -1,3 +1,5 @@
+import type { GetCopilotTokenResponse } from '~/types'
+
 import consola from 'consola'
 
 import { GitHubClient } from '~/clients'
@@ -13,25 +15,24 @@ async function writeGithubToken(token: string): Promise<void> {
 export async function setupCopilotToken() {
   await ensureVSCodeVersion()
   const githubClient = createGitHubClient()
-  const { token, refresh_in } = await githubClient.getCopilotToken()
-  state.auth.copilotToken = token
+  const response = await githubClient.getCopilotToken()
+  applyCopilotTokenState(response)
 
-  // Display the Copilot token to the screen
   consola.debug('GitHub Copilot Token fetched successfully!')
   if (state.config.showToken) {
-    consola.info('Copilot token:', token)
+    consola.info('Copilot token:', response.token)
   }
 
   const REFRESH_BUFFER_SECONDS = 60
-  const refreshInterval = (refresh_in - REFRESH_BUFFER_SECONDS) * 1000
+  const refreshInterval = (response.refresh_in - REFRESH_BUFFER_SECONDS) * 1000
   const refreshCopilotToken = async () => {
     consola.debug('Refreshing Copilot token')
     try {
-      const { token } = await githubClient.getCopilotToken()
-      state.auth.copilotToken = token
+      const refreshed = await githubClient.getCopilotToken()
+      applyCopilotTokenState(refreshed)
       consola.debug('Copilot token refreshed')
       if (state.config.showToken) {
-        consola.info('Refreshed Copilot token:', token)
+        consola.info('Refreshed Copilot token:', refreshed.token)
       }
     }
     catch (error) {
@@ -98,7 +99,7 @@ export async function setupGitHubToken(
   }
   catch (error) {
     if (error instanceof HTTPError) {
-      consola.error('Failed to get GitHub token:', await error.response.json())
+      consola.error('Failed to get GitHub token:', error.body)
       throw error
     }
 
@@ -109,7 +110,7 @@ export async function setupGitHubToken(
 
 function isAuthError(error: unknown) {
   return error instanceof HTTPError
-    && (error.response.status === 401 || error.response.status === 403)
+    && (error.status === 401 || error.status === 403)
 }
 
 async function logUser() {
@@ -120,6 +121,18 @@ async function logUser() {
 
 function createGitHubClient() {
   return new GitHubClient(state.auth, getClientConfig())
+}
+
+function applyCopilotTokenState(response: GetCopilotTokenResponse) {
+  state.auth.copilotToken = response.token
+  state.auth.copilotApiBase = normalizeCopilotApiBase(response.endpoints?.api)
+}
+
+function normalizeCopilotApiBase(value?: string): string | undefined {
+  if (!value) {
+    return undefined
+  }
+  return value.replace(/\/+$/, '')
 }
 
 async function ensureVSCodeVersion() {

@@ -1,15 +1,10 @@
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
-import { CopilotClient } from '~/clients'
-import { getClientConfig, state } from '~/lib/state'
-import { parseEmbeddingRequest } from '~/lib/validation'
+import { handleEmbeddingsCore } from './handler'
 
-export const embeddingRoutes = new Hono()
-
-embeddingRoutes.post('/', async (c) => {
-  const payload = parseEmbeddingRequest(await c.req.json())
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.createEmbeddings(payload)
-
-  return c.json(response)
-})
+export function createEmbeddingRoutes() {
+  return new Elysia()
+    .post('/embeddings', async ({ body }) => {
+      return handleEmbeddingsCore(body)
+    })
+}

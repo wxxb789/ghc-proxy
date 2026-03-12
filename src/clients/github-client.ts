@@ -16,7 +16,7 @@ import {
   githubHeaders,
   standardHeaders,
 } from '~/lib/api-config'
-import { HTTPError } from '~/lib/error'
+import { throwUpstreamError } from '~/lib/error'
 
 import { sleep } from '~/lib/sleep'
 
@@ -40,7 +40,7 @@ export class GitHubClient {
     )
 
     if (!response.ok) {
-      throw new HTTPError('Failed to get Copilot usage', response)
+      await throwUpstreamError('Failed to get Copilot usage', response)
     }
 
     return (await response.json()) as CopilotUsageResponse
@@ -55,7 +55,7 @@ export class GitHubClient {
     )
 
     if (!response.ok) {
-      throw new HTTPError('Failed to get Copilot token', response)
+      await throwUpstreamError('Failed to get Copilot token', response)
     }
 
     return (await response.json()) as GetCopilotTokenResponse
@@ -75,7 +75,7 @@ export class GitHubClient {
     )
 
     if (!response.ok) {
-      throw new HTTPError('Failed to get device code', response)
+      await throwUpstreamError('Failed to get device code', response)
     }
 
     return (await response.json()) as DeviceCodeResponse
@@ -128,7 +128,7 @@ export class GitHubClient {
     })
 
     if (!response.ok) {
-      throw new HTTPError('Failed to get GitHub user', response)
+      await throwUpstreamError('Failed to get GitHub user', response)
     }
 
     return (await response.json()) as GithubUserResponse

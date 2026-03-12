@@ -1,6 +1,8 @@
 # Anthropic Translation Matrix
 
-This matrix documents the current Anthropic translator behavior in `ghc-proxy`.
+This matrix documents the current Anthropic translator behavior for the chat-completions fallback path in `ghc-proxy`.
+
+For the newer per-model routing behavior, including the Anthropic <-> Responses path, see [Messages Routing and Translation](./messages-routing-and-translation.md).
 
 ## Anthropic Request -> OpenAI Request
 

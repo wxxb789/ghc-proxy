@@ -1,9 +1,9 @@
+import type { CapiChatCompletionResponse } from '~/core/capi'
 import type { AnthropicResponse } from '~/translator'
-import type { ChatCompletionResponse } from '~/types'
 
 export interface OpenAIToAnthropicFixture {
   name: string
-  input: ChatCompletionResponse
+  input: CapiChatCompletionResponse
   expected?: Partial<AnthropicResponse>
   expectedIssues: Array<string>
   expectedError?: {
@@ -13,6 +13,48 @@ export interface OpenAIToAnthropicFixture {
 }
 
 export const openAIToAnthropicFixtures: Array<OpenAIToAnthropicFixture> = [
+  {
+    name: 'reasoning-text-becomes-thinking-block',
+    input: {
+      id: 'chatcmpl-thinking',
+      object: 'chat.completion',
+      created: 1,
+      model: 'claude-sonnet-4.5',
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            reasoning_text: 'Need to inspect the repo state first.',
+            reasoning_opaque: 'opaque-state',
+            encrypted_content: 'encrypted-state',
+            content: 'Here is the answer.',
+          },
+          logprobs: null,
+          finish_reason: 'stop',
+        },
+      ],
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 12,
+        total_tokens: 22,
+      },
+    },
+    expected: {
+      content: [
+        {
+          type: 'thinking',
+          thinking: 'Need to inspect the repo state first.',
+        },
+        {
+          type: 'text',
+          text: 'Here is the answer.',
+        },
+      ],
+      stop_reason: 'end_turn',
+    },
+    expectedIssues: [],
+  },
   {
     name: 'text-response',
     input: {

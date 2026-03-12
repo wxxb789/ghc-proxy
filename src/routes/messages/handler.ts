@@ -1,160 +1,205 @@
-import type { Context } from 'hono'
-
-import type { ChatCompletionChunk } from '~/types'
+import type { ExecutionResult } from '~/lib/execution-strategy'
+import type { ModelMappingInfo } from '~/lib/request-logger'
+import type { Model } from '~/types'
 import consola from 'consola'
 
-import { streamSSE } from 'hono/streaming'
-
-import { CopilotClient, isNonStreamingResponse } from '~/clients'
-import { HTTPError } from '~/lib/error'
-import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
-import { setModelMappingInfo } from '~/lib/request-logger'
-import { getClientConfig, state } from '~/lib/state'
-import { createUpstreamSignal } from '~/lib/upstream-signal'
+import { CopilotTransport } from '~/adapters'
+import { readCapiRequestContext } from '~/core/capi'
+import { getReasoningEffortForModel } from '~/lib/config'
+import { fromTranslationFailure } from '~/lib/error'
+import { runStrategy } from '~/lib/execution-strategy'
+import {
+  findModelById,
+  MESSAGES_ENDPOINT,
+  modelSupportsEndpoint,
+  RESPONSES_ENDPOINT,
+} from '~/lib/model-capabilities'
+import { applyMessagesModelPolicy } from '~/lib/request-model-policy'
+import { createCopilotClient } from '~/lib/state'
+import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 import { parseAnthropicMessagesPayload } from '~/lib/validation'
-import { AnthropicTranslator } from '~/translator'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
+import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
+import { SignatureCodec } from '~/translator/responses/signature-codec'
 
-function createAnthropicTranslator() {
-  const knownModelIds = state.cache.models
-    ? new Set(state.cache.models.data.map(model => model.id))
-    : undefined
-  const fallbackConfig = getModelFallbackConfig()
+import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '../responses/context-management'
+import { createAnthropicAdapter } from './shared'
+import { createMessagesViaChatCompletionsStrategy } from './strategies/chat-completions'
+import { createNativeMessagesStrategy } from './strategies/native-messages'
+import { createMessagesViaResponsesStrategy } from './strategies/responses-api'
 
-  return new AnthropicTranslator({
-    modelResolver: model => resolveModel(model, knownModelIds, fallbackConfig),
-    getModelCapabilities: model => ({
-      supportsThinkingBudget: model.startsWith('claude'),
-    }),
-  })
+export interface MessagesCoreParams {
+  body: unknown
+  signal: AbortSignal
+  headers: Headers
 }
 
-function toHTTPError(error: TranslationFailure): HTTPError {
-  return new HTTPError(
-    error.message,
-    new Response(error.message, {
-      status: error.status,
-    }),
+export interface MessagesCoreResult {
+  result: ExecutionResult
+  modelMapping?: ModelMappingInfo
+}
+
+/**
+ * Core handler for Anthropic messages endpoint.
+ * Returns both the execution result and model mapping info.
+ */
+export async function handleMessagesCore(
+  { body, signal, headers }: MessagesCoreParams,
+): Promise<MessagesCoreResult> {
+  const anthropicPayload = parseAnthropicMessagesPayload(body)
+  if (consola.level >= 4)
+    consola.debug('Anthropic request payload:', JSON.stringify(anthropicPayload))
+
+  const anthropicBetaHeader = headers.get('anthropic-beta') ?? undefined
+  const modelRouting = applyMessagesModelPolicy(
+    anthropicPayload,
+    anthropicBetaHeader,
   )
-}
+  let modelMapping: ModelMappingInfo = {
+    originalModel: modelRouting.originalModel,
+    mappedModel: modelRouting.routedModel,
+  }
 
-export async function handleCompletion(c: Context) {
-  const anthropicPayload = parseAnthropicMessagesPayload(await c.req.json())
-  consola.debug('Anthropic request payload:', JSON.stringify(anthropicPayload))
+  if (modelRouting.reason) {
+    consola.debug(
+      `Routed anthropic request to small model via ${modelRouting.reason}:`,
+      `${modelRouting.originalModel} -> ${modelRouting.routedModel}`,
+    )
+  }
 
-  const translator = createAnthropicTranslator()
-  let openAIPayload
+  const selectedModel = findModelById(anthropicPayload.model)
+
+  const upstreamSignal = createUpstreamSignalFromConfig(signal)
+
+  const copilotClient = createCopilotClient()
+
+  if (shouldUseMessagesApi(selectedModel)) {
+    filterThinkingBlocksForNativeMessages(anthropicPayload)
+
+    const strategy = createNativeMessagesStrategy(
+      copilotClient,
+      anthropicPayload,
+      anthropicBetaHeader,
+      {
+        signal: upstreamSignal.signal,
+        requestContext: readCapiRequestContext(headers),
+      },
+    )
+    const result = await runStrategy(strategy, upstreamSignal)
+    return { result, modelMapping }
+  }
+
+  if (shouldUseResponsesApi(selectedModel)) {
+    let responsesPayload
+    try {
+      responsesPayload = translateAnthropicToResponsesPayload(anthropicPayload, {
+        reasoningEffortResolver: getReasoningEffortForModel,
+      })
+    }
+    catch (error) {
+      if (error instanceof TranslationFailure) {
+        throw fromTranslationFailure(error)
+      }
+      throw error
+    }
+    modelMapping = {
+      originalModel: modelRouting.originalModel,
+      mappedModel: responsesPayload.model,
+    }
+
+    applyContextManagement(
+      responsesPayload,
+      selectedModel?.capabilities.limits.max_prompt_tokens,
+    )
+    compactInputByLatestCompaction(responsesPayload)
+
+    const { vision, initiator } = getResponsesRequestOptions(responsesPayload)
+    const strategy = createMessagesViaResponsesStrategy(
+      copilotClient,
+      responsesPayload,
+      {
+        vision,
+        initiator,
+        signal: upstreamSignal.signal,
+        requestContext: readCapiRequestContext(headers),
+      },
+    )
+    const result = await runStrategy(strategy, upstreamSignal)
+    return { result, modelMapping }
+  }
+
+  const adapter = createAnthropicAdapter()
+  let plan
   try {
-    openAIPayload = translator.toOpenAI(anthropicPayload)
+    plan = adapter.toCapiPlan(anthropicPayload, {
+      requestContext: readCapiRequestContext(headers),
+    })
   }
   catch (error) {
     if (error instanceof TranslationFailure) {
-      throw toHTTPError(error)
+      throw fromTranslationFailure(error)
     }
     throw error
   }
-  setModelMappingInfo(c, {
-    originalModel: anthropicPayload.model,
-    mappedModel: openAIPayload.model,
-  })
+
+  modelMapping = {
+    originalModel: modelRouting.originalModel,
+    mappedModel: plan.resolvedModel,
+  }
   consola.debug(
     'Claude Code requested model:',
     anthropicPayload.model,
     '-> Copilot model:',
-    openAIPayload.model,
+    plan.resolvedModel,
   )
-  consola.debug(
-    'Translated OpenAI request payload:',
-    JSON.stringify(openAIPayload),
-  )
-
-  const { signal, cleanup } = createUpstreamSignal(
-    c.req.raw.signal,
-    state.config.upstreamTimeoutSeconds !== undefined
-      ? state.config.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
-
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.createChatCompletions(openAIPayload, {
-    signal,
-  })
-
-  if (isNonStreamingResponse(response)) {
+  if (consola.level >= 4) {
     consola.debug(
-      'Non-streaming response from Copilot (full):',
-      JSON.stringify(response, null, 2),
+      'Planned Copilot request payload:',
+      JSON.stringify(plan.payload),
     )
-    let anthropicResponse
-    try {
-      anthropicResponse = translator.fromOpenAI(response)
-    }
-    catch (error) {
-      cleanup()
-      if (error instanceof TranslationFailure) {
-        throw toHTTPError(error)
-      }
-      throw error
-    }
-    consola.debug(
-      'Translated Anthropic response:',
-      JSON.stringify(anthropicResponse),
-    )
-    cleanup()
-    return c.json(anthropicResponse)
   }
 
-  consola.debug('Streaming response from Copilot')
-  return streamSSE(c, async (stream) => {
-    const streamTranslator = translator.createStreamTranslator()
+  const transport = new CopilotTransport(copilotClient)
+  const strategy = createMessagesViaChatCompletionsStrategy(
+    transport,
+    adapter,
+    plan,
+    upstreamSignal.signal,
+  )
+  const result = await runStrategy(strategy, upstreamSignal)
+  return { result, modelMapping }
+}
 
-    try {
-      for await (const rawEvent of response) {
-        consola.debug('Copilot raw stream event:', JSON.stringify(rawEvent))
-        if (rawEvent.data === '[DONE]') {
-          const finalEvents = streamTranslator.onDone()
-          for (const event of finalEvents) {
-            await stream.writeSSE({
-              event: event.type,
-              data: JSON.stringify(event),
-            })
-          }
-          break
-        }
-
-        if (!rawEvent.data) {
-          continue
-        }
-
-        const chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
-        const events = streamTranslator.onChunk(chunk)
-
-        for (const event of events) {
-          consola.debug('Translated Anthropic event:', JSON.stringify(event))
-          await stream.writeSSE({
-            event: event.type,
-            data: JSON.stringify(event),
-          })
-        }
-      }
+function filterThinkingBlocksForNativeMessages(
+  anthropicPayload: ReturnType<typeof parseAnthropicMessagesPayload>,
+) {
+  for (const message of anthropicPayload.messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) {
+      continue
     }
-    catch (error) {
-      if (c.req.raw.signal.aborted) {
-        consola.debug('Client disconnected during Anthropic stream')
-        return
+    message.content = message.content.filter((block) => {
+      if (block.type !== 'thinking') {
+        return true
       }
+      return Boolean(
+        block.thinking
+        && block.thinking !== 'Thinking...'
+        && block.signature
+        && !SignatureCodec.isReasoningSignature(block.signature)
+        && !SignatureCodec.isCompactionSignature(block.signature),
+      )
+    })
+  }
+}
 
-      consola.error('Error streaming Anthropic response:', error)
-      const errorEvents = streamTranslator.onError(error)
-      for (const event of errorEvents) {
-        await stream.writeSSE({
-          event: event.type,
-          data: JSON.stringify(event),
-        })
-      }
-    }
-    finally {
-      cleanup()
-    }
-  })
+function shouldUseResponsesApi(
+  selectedModel: Model | undefined,
+): boolean {
+  return modelSupportsEndpoint(selectedModel, RESPONSES_ENDPOINT)
+}
+
+function shouldUseMessagesApi(
+  selectedModel: Model | undefined,
+): boolean {
+  return modelSupportsEndpoint(selectedModel, MESSAGES_ENDPOINT)
 }

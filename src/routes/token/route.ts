@@ -1,11 +1,8 @@
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
-import { state } from '~/lib/state'
+import { handleTokenCore } from './handler'
 
-export const tokenRoute = new Hono()
-
-tokenRoute.get('/', (c) => {
-  return c.json({
-    token: state.auth.copilotToken,
-  })
-})
+export function createTokenRoute() {
+  return new Elysia()
+    .get('/token', () => handleTokenCore())
+}

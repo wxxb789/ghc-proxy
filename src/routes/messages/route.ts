@@ -1,12 +1,33 @@
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
-import { requestGuard } from '~/routes/middleware/request-guard'
+import { sseAdapter } from '~/lib/sse-adapter'
+import { requestGuardPlugin } from '~/routes/middleware/request-guard'
 
-import { handleCountTokens } from './count-tokens-handler'
-import { handleCompletion } from './handler'
+import { handleCountTokensCore } from './count-tokens-handler'
+import { handleMessagesCore } from './handler'
 
-export const messageRoutes = new Hono()
-
-messageRoutes.post('/', requestGuard, c => handleCompletion(c))
-
-messageRoutes.post('/count_tokens', c => handleCountTokens(c))
+export function createMessageRoutes() {
+  return new Elysia()
+    .use(requestGuardPlugin)
+    .post('/messages', async function* (ctx) {
+      const { body, request } = ctx
+      const { result, modelMapping } = await handleMessagesCore({
+        body,
+        signal: request.signal,
+        headers: request.headers,
+      })
+      if ('requestMeta' in ctx && ctx.requestMeta && typeof ctx.requestMeta === 'object') {
+        (ctx.requestMeta as { modelMapping: unknown }).modelMapping = modelMapping
+      }
+      if (result.kind === 'json') {
+        return result.data
+      }
+      yield* sseAdapter(result.generator)
+    }, { guarded: true })
+    .post('/messages/count_tokens', async ({ body, request }) => {
+      return handleCountTokensCore({
+        body,
+        headers: request.headers,
+      })
+    }, { guarded: true })
+}

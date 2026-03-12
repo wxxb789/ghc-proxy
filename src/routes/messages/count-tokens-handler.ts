@@ -1,14 +1,12 @@
-import type { Context } from 'hono'
-
 import consola from 'consola'
 
-import { HTTPError } from '~/lib/error'
-import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
+import { fromTranslationFailure, HTTPError } from '~/lib/error'
 import { state } from '~/lib/state'
 import { getTokenCount } from '~/lib/tokenizer'
 import { parseAnthropicCountTokensPayload } from '~/lib/validation'
-import { AnthropicTranslator } from '~/translator'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
+
+import { createAnthropicAdapter } from './shared'
 
 // Token estimation constants
 const CLAUDE_TOOL_OVERHEAD_TOKENS = 346
@@ -16,34 +14,29 @@ const GROK_TOOL_OVERHEAD_TOKENS = 480
 const CLAUDE_ESTIMATION_FACTOR = 1.15
 const GROK_ESTIMATION_FACTOR = 1.03
 
-/**
- * Handles token counting for Anthropic messages
- */
-export async function handleCountTokens(c: Context) {
-  const anthropicBeta = c.req.header('anthropic-beta')
-  const anthropicPayload = parseAnthropicCountTokensPayload(await c.req.json())
+export interface CountTokensCoreParams {
+  body: unknown
+  headers: Headers
+}
 
-  const knownModelIds = state.cache.models
-    ? new Set(state.cache.models.data.map(model => model.id))
-    : undefined
-  const fallbackConfig = getModelFallbackConfig()
-  const translator = new AnthropicTranslator({
-    modelResolver: model => resolveModel(model, knownModelIds, fallbackConfig),
-    getModelCapabilities: model => ({
-      supportsThinkingBudget: model.startsWith('claude'),
-    }),
-  })
+/**
+ * Core handler for counting tokens.
+ */
+export async function handleCountTokensCore(
+  { body, headers }: CountTokensCoreParams,
+): Promise<{ input_tokens: number }> {
+  const anthropicBeta = headers.get('anthropic-beta') ?? undefined
+  const anthropicPayload = parseAnthropicCountTokensPayload(body)
+
+  const adapter = createAnthropicAdapter()
 
   let openAIPayload
   try {
-    openAIPayload = translator.toOpenAI(anthropicPayload)
+    openAIPayload = adapter.toTokenCountPayload(anthropicPayload)
   }
   catch (error) {
     if (error instanceof TranslationFailure) {
-      throw new HTTPError(
-        error.message,
-        new Response(error.message, { status: error.status }),
-      )
+      throw fromTranslationFailure(error)
     }
     throw error
   }
@@ -53,15 +46,12 @@ export async function handleCountTokens(c: Context) {
   )
 
   if (!selectedModel) {
-    throw new HTTPError(
-      `Model not found for token counting: "${openAIPayload.model}"`,
-      new Response(
-        `Model not found for token counting: "${openAIPayload.model}"`,
-        {
-          status: 400,
-        },
-      ),
-    )
+    throw new HTTPError(400, {
+      error: {
+        message: `Model not found for token counting: "${openAIPayload.model}"`,
+        type: 'invalid_request_error',
+      },
+    })
   }
 
   const tokenCount = await getTokenCount(openAIPayload, selectedModel)
@@ -94,7 +84,7 @@ export async function handleCountTokens(c: Context) {
 
   consola.info('Token count:', finalTokenCount)
 
-  return c.json({
+  return {
     input_tokens: finalTokenCount,
-  })
+  }
 }

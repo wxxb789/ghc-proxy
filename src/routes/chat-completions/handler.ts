@@ -1,26 +1,42 @@
-import type { Context } from 'hono'
-
-import type { SSEMessage } from 'hono/streaming'
-
+import type { ExecutionResult } from '~/lib/execution-strategy'
+import type { ModelMappingInfo } from '~/lib/request-logger'
 import consola from 'consola'
-import { streamSSE } from 'hono/streaming'
 
-import { CopilotClient, isNonStreamingResponse } from '~/clients'
-import { getClientConfig, state } from '~/lib/state'
+import { CopilotTransport, OpenAIChatAdapter } from '~/adapters'
+import { readCapiRequestContext } from '~/core/capi'
+import { runStrategy } from '~/lib/execution-strategy'
+import { findModelById } from '~/lib/model-capabilities'
+import { createCopilotClient } from '~/lib/state'
 import { getTokenCount } from '~/lib/tokenizer'
-import { createUpstreamSignal } from '~/lib/upstream-signal'
+import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 import { parseOpenAIChatPayload } from '~/lib/validation'
 
-export async function handleCompletion(c: Context) {
-  let payload = parseOpenAIChatPayload(await c.req.json())
+import { createChatCompletionsStrategy } from './strategy'
+
+export interface CompletionCoreParams {
+  body: unknown
+  signal: AbortSignal
+  headers: Headers
+}
+
+export interface CompletionCoreResult {
+  result: ExecutionResult
+  modelMapping?: ModelMappingInfo
+}
+
+/**
+ * Core handler for chat completions.
+ */
+export async function handleCompletionCore(
+  { body, signal, headers }: CompletionCoreParams,
+): Promise<CompletionCoreResult> {
+  const adapter = new OpenAIChatAdapter()
+  let payload = parseOpenAIChatPayload(body)
   consola.debug('Request payload:', JSON.stringify(payload).slice(-400))
 
-  // Find the selected model
-  const selectedModel = state.cache.models?.data.find(
-    model => model.id === payload.model,
-  )
+  const originalModel = payload.model
+  const selectedModel = findModelById(payload.model)
 
-  // Calculate and display token count
   try {
     if (selectedModel) {
       const tokenCount = await getTokenCount(payload, selectedModel)
@@ -42,34 +58,22 @@ export async function handleCompletion(c: Context) {
     consola.debug('Set max_tokens to:', JSON.stringify(payload.max_tokens))
   }
 
-  const { signal, cleanup } = createUpstreamSignal(
-    c.req.raw.signal,
-    state.config.upstreamTimeoutSeconds !== undefined
-      ? state.config.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
+  const upstreamSignal = createUpstreamSignalFromConfig(signal)
 
-  const copilotClient = new CopilotClient(state.auth, getClientConfig())
-  const response = await copilotClient.createChatCompletions(payload, {
-    signal,
+  const plan = adapter.toCapiPlan(payload, {
+    requestContext: readCapiRequestContext(headers),
   })
 
-  if (isNonStreamingResponse(response)) {
-    consola.debug('Non-streaming response:', JSON.stringify(response))
-    cleanup()
-    return c.json(response)
+  const modelMapping: ModelMappingInfo = {
+    originalModel,
+    mappedModel: plan.resolvedModel,
   }
 
+  const copilotClient = createCopilotClient()
+  const transport = new CopilotTransport(copilotClient)
+
   consola.debug('Streaming response')
-  return streamSSE(c, async (stream) => {
-    try {
-      for await (const chunk of response) {
-        consola.debug('Streaming chunk:', JSON.stringify(chunk))
-        await stream.writeSSE(chunk as SSEMessage)
-      }
-    }
-    finally {
-      cleanup()
-    }
-  })
+  const strategy = createChatCompletionsStrategy(transport, adapter, plan, upstreamSignal.signal)
+  const result = await runStrategy(strategy, upstreamSignal)
+  return { result, modelMapping }
 }

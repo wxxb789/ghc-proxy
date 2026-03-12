@@ -73,6 +73,9 @@ interface ChoiceNonStreaming {
   finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter'
 }
 
+export const REASONING_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high'] as const
+export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
+
 // Payload types
 export interface ChatCompletionsPayload {
   messages: Array<Message>
@@ -98,7 +101,7 @@ export interface ChatCompletionsPayload {
     | { type: 'function', function: { name: string } }
     | null
   user?: string | null
-  reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high' | null
+  reasoning_effort?: ReasoningEffort | null
   thinking_budget?: number | null
 }
 
@@ -177,12 +180,22 @@ interface ModelLimits {
   max_output_tokens?: number
   max_prompt_tokens?: number
   max_inputs?: number
+  vision?: {
+    max_prompt_image_size?: number
+    max_prompt_images?: number
+    supported_media_types?: Array<string>
+  }
 }
 
 interface ModelSupports {
   tool_calls?: boolean
   parallel_tool_calls?: boolean
   dimensions?: boolean
+  adaptive_thinking?: boolean
+  vision?: boolean
+  streaming?: boolean
+  structured_outputs?: boolean
+  reasoning_effort?: Array<string>
 }
 
 interface ModelCapabilities {
@@ -207,4 +220,5 @@ export interface Model {
     state: string
     terms: string
   }
+  supported_endpoints?: Array<string>
 }

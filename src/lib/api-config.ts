@@ -1,4 +1,5 @@
 import type { ClientAuth, ClientConfig } from '~/clients'
+import type { CapiRequestContext } from '~/core/capi'
 
 import { randomUUID } from 'node:crypto'
 
@@ -16,11 +17,25 @@ const USER_AGENT = `GitHubCopilotChat/${COPILOT_VERSION}`
 const API_VERSION = '2025-04-01'
 
 export function copilotBaseUrl(config: ClientConfig) {
+  if (config.copilotApiBase) {
+    return config.copilotApiBase.replace(/\/+$/, '')
+  }
   return config.accountType === 'individual'
     ? 'https://api.githubcopilot.com'
     : `https://api.${config.accountType}.githubcopilot.com`
 }
-export function copilotHeaders(auth: ClientAuth, config: ClientConfig, vision: boolean = false) {
+export interface CopilotHeaderOptions {
+  initiator?: 'user' | 'agent'
+  requestContext?: Partial<CapiRequestContext>
+  vision?: boolean
+}
+
+export function copilotHeaders(
+  auth: ClientAuth,
+  config: ClientConfig,
+  options: CopilotHeaderOptions = {},
+) {
+  const requestContext = options.requestContext
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${auth.copilotToken}`,
     'content-type': standardHeaders()['content-type'],
@@ -34,8 +49,31 @@ export function copilotHeaders(auth: ClientAuth, config: ClientConfig, vision: b
     'x-vscode-user-agent-library-version': 'electron-fetch',
   }
 
-  if (vision)
+  if (options.vision)
     headers['copilot-vision-request'] = 'true'
+
+  if (options.initiator) {
+    headers['X-Initiator'] = options.initiator
+  }
+
+  if (requestContext?.interactionType) {
+    headers['X-Interaction-Type'] = requestContext.interactionType
+  }
+  if (requestContext?.agentTaskId) {
+    headers['X-Agent-Task-Id'] = requestContext.agentTaskId
+  }
+  if (requestContext?.parentAgentTaskId) {
+    headers['X-Parent-Agent-Id'] = requestContext.parentAgentTaskId
+  }
+  if (requestContext?.clientSessionId) {
+    headers['X-Client-Session-Id'] = requestContext.clientSessionId
+  }
+  if (requestContext?.interactionId) {
+    headers['X-Interaction-Id'] = requestContext.interactionId
+  }
+  if (requestContext?.clientMachineId) {
+    headers['X-Client-Machine-Id'] = requestContext.clientMachineId
+  }
 
   return headers
 }

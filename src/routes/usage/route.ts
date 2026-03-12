@@ -1,12 +1,8 @@
-import { Hono } from 'hono'
+import { Elysia } from 'elysia'
 
-import { GitHubClient } from '~/clients'
-import { getClientConfig, state } from '~/lib/state'
+import { handleUsageCore } from './handler'
 
-export const usageRoute = new Hono()
-
-usageRoute.get('/', async (c) => {
-  const githubClient = new GitHubClient(state.auth, getClientConfig())
-  const usage = await githubClient.getCopilotUsage()
-  return c.json(usage)
-})
+export function createUsageRoute() {
+  return new Elysia()
+    .get('/usage', async () => handleUsageCore())
+}
