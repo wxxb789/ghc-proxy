@@ -7,6 +7,7 @@ import consola from 'consola'
 
 import { getCachedConfig } from './lib/config'
 import { PATHS } from './lib/paths'
+import { VERSION } from './lib/version'
 
 interface DebugInfo {
   version: string
@@ -26,21 +27,6 @@ interface DebugInfo {
 
 interface RunDebugOptions {
   json: boolean
-}
-
-async function getPackageVersion(): Promise<string> {
-  try {
-    const packageJsonPath = new URL('../package.json', import.meta.url).pathname
-    // @ts-expect-error https://github.com/sindresorhus/eslint-plugin-unicorn/blob/v59.0.1/docs/rules/prefer-json-parse-buffer.md
-    // JSON.parse() can actually parse buffers
-    const packageJson = JSON.parse(await fs.readFile(packageJsonPath)) as {
-      version: string
-    }
-    return packageJson.version
-  }
-  catch {
-    return 'unknown'
-  }
 }
 
 function getRuntimeInfo() {
@@ -77,13 +63,10 @@ async function checkConfigExists(): Promise<boolean> {
 }
 
 async function getDebugInfo(): Promise<DebugInfo> {
-  const [version, configExists] = await Promise.all([
-    getPackageVersion(),
-    checkConfigExists(),
-  ])
+  const configExists = await checkConfigExists()
 
   return {
-    version,
+    version: VERSION,
     runtime: getRuntimeInfo(),
     paths: {
       APP_DIR: PATHS.APP_DIR,
