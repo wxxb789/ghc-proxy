@@ -30,11 +30,20 @@ export function createServer(options?: ServerOptions) {
     .use(cors())
     .error({ HTTP: HTTPError })
     .derive(() => {
+      const requestMeta: { modelMapping: ModelMappingInfo | undefined } = {
+        modelMapping: undefined,
+      }
       return {
         requestStart: Date.now(),
-        requestMeta: {
-          modelMapping: undefined as ModelMappingInfo | undefined,
-        },
+        requestMeta,
+      }
+    })
+    .onBeforeHandle(({ body, requestMeta }) => {
+      if (body && typeof body === 'object' && 'model' in body) {
+        const model = (body as { model: string }).model
+        if (typeof model === 'string') {
+          requestMeta.modelMapping = { originalModel: model, mappedModel: model }
+        }
       }
     })
     .onAfterHandle(({ request, requestStart, requestMeta, set }) => {

@@ -9,16 +9,12 @@ import { handleMessagesCore } from './handler'
 export function createMessageRoutes() {
   return new Elysia()
     .use(requestGuardPlugin)
-    .post('/messages', async function* (ctx) {
-      const { body, request } = ctx
-      const { result, modelMapping } = await handleMessagesCore({
+    .post('/messages', async function* ({ body, request }) {
+      const { result } = await handleMessagesCore({
         body,
         signal: request.signal,
         headers: request.headers,
       })
-      if ('requestMeta' in ctx && ctx.requestMeta && typeof ctx.requestMeta === 'object') {
-        (ctx.requestMeta as { modelMapping: unknown }).modelMapping = modelMapping
-      }
       if (result.kind === 'json') {
         return result.data
       }
