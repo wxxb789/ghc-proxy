@@ -16,3 +16,4 @@ dist/
 # sisyphus
 .sisyphus/
 /.claude/settings.local.json
+/plans
