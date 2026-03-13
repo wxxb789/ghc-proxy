@@ -136,9 +136,11 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   await cacheModels(copilotClient)
 
   consola.info(`ghc-proxy v${VERSION}`)
-  consola.info(
-    `Available models: \n${state.cache.models?.data.map(model => `- ${model.id}`).join('\n')}`,
-  )
+  const modelsList = state.cache.models?.data
+    .map(model => `- ${model.id}`)
+    .join('\n')
+    ?? '(none)'
+  consola.info(`Available models:\n${modelsList}`)
   const fallbacks = getModelFallbackConfig()
   consola.info(
     `Model fallbacks:\n`

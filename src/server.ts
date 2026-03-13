@@ -39,11 +39,11 @@ export function createServer(options?: ServerOptions) {
       }
     })
     .onBeforeHandle(({ body, requestMeta }) => {
-      if (body && typeof body === 'object' && 'model' in body) {
-        const model = (body as { model: string }).model
-        if (typeof model === 'string') {
-          requestMeta.modelMapping = { originalModel: model, mappedModel: model }
-        }
+      const model = body && typeof body === 'object' && 'model' in body
+        ? (body as Record<string, unknown>).model
+        : undefined
+      if (typeof model === 'string') {
+        requestMeta.modelMapping = { originalModel: model, mappedModel: model }
       }
     })
     .onAfterHandle(({ request, requestStart, requestMeta, set }) => {
