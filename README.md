@@ -62,7 +62,6 @@ Create or edit `~/.claude/settings.json` (this applies globally to all projects)
     "ANTHROPIC_MODEL": "claude-opus-4.6",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4.6",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
-    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   },
   "permissions": {
@@ -86,7 +85,6 @@ bunx ghc-proxy@latest start --wait
 | `ANTHROPIC_MODEL` | The model Claude Code uses for primary/Opus tasks |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | The model used for Sonnet-tier tasks |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | The model used for Haiku-tier (fast/cheap) tasks |
-| `DISABLE_NON_ESSENTIAL_MODEL_CALLS` | Prevents Claude Code from making extra API calls |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | Disables telemetry and non-essential network traffic |
 
 > **Tip:** The model names above (e.g. `claude-opus-4.6`) are mapped to actual Copilot models by the proxy. See [Model Mapping](#model-mapping) below for details.
@@ -112,7 +110,7 @@ The proxy authenticates with GitHub using the [device code OAuth flow](https://d
 
 When the Copilot token response includes `endpoints.api`, `ghc-proxy` now prefers that runtime API base automatically instead of relying only on the configured account type. This keeps enterprise/business routing aligned with the endpoint GitHub actually returned for the current token.
 
-Incoming requests hit a [Hono](https://hono.dev/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use a native Responses path with explicit compatibility policies. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
+Incoming requests hit an [Elysia](https://elysiajs.com/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use a native Responses path with explicit compatibility policies. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
 
 ### Request Routing
 
@@ -186,7 +184,7 @@ bunx ghc-proxy@latest debug          # Print diagnostic info (version, paths, to
 | `--github-token` | `-g` | -- | Pass a GitHub token directly (from `auth`) |
 | `--claude-code` | `-c` | `false` | Generate a Claude Code launch command |
 | `--show-token` | -- | `false` | Display tokens on auth and refresh |
-| `--proxy-env` | -- | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from env |
+| `--proxy-env` | -- | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from env (Node.js only; Bun reads proxy env natively) |
 | `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds |
 | `--upstream-timeout` | -- | `300` | Upstream request timeout in seconds (0 to disable) |
 
@@ -228,7 +226,7 @@ When Claude Code sends a request for a model like `claude-sonnet-4.6`, the proxy
 | Prefix | Default Fallback |
 |--------|-----------------|
 | `claude-opus-*` | `claude-opus-4.6` |
-| `claude-sonnet-*` | `claude-sonnet-4.5` |
+| `claude-sonnet-*` | `claude-sonnet-4.6` |
 | `claude-haiku-*` | `claude-haiku-4.5` |
 
 ### Customizing Fallbacks
@@ -237,7 +235,7 @@ You can override the defaults with **environment variables**:
 
 ```bash
 MODEL_FALLBACK_CLAUDE_OPUS=claude-opus-4.6
-MODEL_FALLBACK_CLAUDE_SONNET=claude-sonnet-4.5
+MODEL_FALLBACK_CLAUDE_SONNET=claude-sonnet-4.6
 MODEL_FALLBACK_CLAUDE_HAIKU=claude-haiku-4.5
 ```
 
@@ -247,13 +245,15 @@ Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
 {
   "modelFallback": {
     "claudeOpus": "claude-opus-4.6",
-    "claudeSonnet": "claude-sonnet-4.5",
+    "claudeSonnet": "claude-sonnet-4.6",
     "claudeHaiku": "claude-haiku-4.5"
   }
 }
 ```
 
 **Priority order:** environment variable > config.json > built-in default.
+
+> **Note:** Model fallbacks only apply to the **chat completions translation path**. The native Messages and Responses API strategies pass the model ID through to Copilot as-is.
 
 ### Small-Model Routing
 

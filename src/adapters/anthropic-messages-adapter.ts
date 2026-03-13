@@ -39,7 +39,7 @@ interface NormalizedAnthropicConversation {
   issues: Array<TranslationIssue>
 }
 
-function toConversationBlock(block: NormalizedBlock): ConversationBlock {
+export function toConversationBlock(block: NormalizedBlock): ConversationBlock {
   switch (block.kind) {
     case 'text':
       return {
@@ -75,14 +75,14 @@ function toConversationBlock(block: NormalizedBlock): ConversationBlock {
   }
 }
 
-function toConversationTurn(turn: NormalizedTurn): ConversationTurn {
+export function toConversationTurn(turn: NormalizedTurn): ConversationTurn {
   return {
     role: turn.role,
     blocks: turn.blocks.map(toConversationBlock),
   }
 }
 
-function recordAnthropicRequestIssues(
+export function recordAnthropicRequestIssues(
   request: NormalizedAnthropicRequest,
   context: TranslationContext,
 ) {
@@ -165,7 +165,7 @@ function recordAnthropicRequestIssues(
   }
 }
 
-function applyThinkingBudgetOverride(
+export function applyThinkingBudgetOverride(
   plan: CapiExecutionPlan,
   request: NormalizedAnthropicRequest,
   options: Required<Pick<AnthropicMessagesAdapterOptions, 'getModelCapabilities'>>,
@@ -189,7 +189,7 @@ function applyThinkingBudgetOverride(
   }
 }
 
-function normalizeAnthropicConversation(
+export function normalizeAnthropicConversation(
   payload: AnthropicMessagesPayload | AnthropicCountTokensPayload,
   policy: TranslationPolicy,
 ): NormalizedAnthropicConversation {
