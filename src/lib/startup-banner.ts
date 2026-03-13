@@ -74,7 +74,7 @@ function groupAndSortModels(models: Model[]): Map<string, Model[]> {
 }
 
 function formatContextWindow(model: Model): string {
-  const tokens = model.capabilities.limits.max_context_window_tokens
+  const tokens = model.capabilities?.limits?.max_context_window_tokens
   if (!tokens)
     return ''
   const k = Math.round(tokens / 1000)
