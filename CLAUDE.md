@@ -48,7 +48,7 @@ The proxy uses a per-model strategy pattern (`src/routes/messages/strategies/`) 
 2. **Responses Translation** — Anthropic -> Responses -> Anthropic when only `/responses` is available
 3. **Chat Completions Fallback** — Anthropic -> OpenAI Chat -> Anthropic (legacy)
 
-See `docs/design/` for full architecture and design documentation, `docs/messages-routing-and-translation.md` for routing logic, and `docs/anthropic-translation-matrix.md` for translation coverage.
+See `docs/design/` for full architecture and design documentation, `docs/research/` for investigation notes, `docs/messages-routing-and-translation.md` for routing logic, and `docs/anthropic-translation-matrix.md` for translation coverage.
 
 **Important:** When making architectural changes, update the relevant docs in `docs/design/` to keep them in sync with the code.
 
@@ -70,7 +70,7 @@ See `docs/design/` for full architecture and design documentation, `docs/message
 
 - **ExecutionStrategy** (`src/lib/execution-strategy.ts`) — Unifies request body prep, endpoint selection, response processing, and error handling across all route handlers
 - **TranslationPolicy** (`src/translator/anthropic/translation-policy.ts`) — Tracks exact vs lossy vs unsupported behavior explicitly; validation rejects unsupported fields with 400 instead of silently dropping them
-- **ModelResolver** (`src/lib/model-resolver.ts`) — Maps model IDs (e.g. `claude-sonnet-4.6` -> actual Copilot model) with configurable fallbacks
+- **ModelResolver** (`src/lib/model-resolver.ts`) — Maps model IDs (e.g. `claude-sonnet-4.6` -> actual Copilot model) with configurable fallbacks. Only applies to the chat completions strategy path; native Messages and Responses strategies pass model IDs through as-is
 - **Global State** (`src/lib/state.ts`) — Cached models list, VS Code version, request counters, config
 
 ## Code Conventions
