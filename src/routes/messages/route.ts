@@ -1,5 +1,6 @@
 import { Elysia } from 'elysia'
 
+import { setRequestModelMapping } from '~/lib/request-logger'
 import { sseAdapter } from '~/lib/sse-adapter'
 import { requestGuardPlugin } from '~/routes/middleware/request-guard'
 
@@ -10,11 +11,13 @@ export function createMessageRoutes() {
   return new Elysia()
     .use(requestGuardPlugin)
     .post('/messages', async function* ({ body, request }) {
-      const { result } = await handleMessagesCore({
+      const { result, modelMapping } = await handleMessagesCore({
         body,
         signal: request.signal,
         headers: request.headers,
       })
+      if (modelMapping)
+        setRequestModelMapping(request, modelMapping)
       if (result.kind === 'json') {
         return result.data
       }

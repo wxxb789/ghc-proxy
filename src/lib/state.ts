@@ -23,6 +23,7 @@ export interface RuntimeConfig {
 export interface CacheState {
   models?: ModelsResponse
   vsCodeVersion?: string
+  githubLogin?: string
 }
 
 export interface RateLimitState {
@@ -72,5 +73,5 @@ export async function cacheVSCodeVersion() {
   const response = await getVSCodeVersion()
   state.cache.vsCodeVersion = response
 
-  consola.info(`Using VSCode version: ${response}`)
+  consola.debug(`Using VSCode version: ${response}`)
 }

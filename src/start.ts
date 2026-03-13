@@ -6,13 +6,12 @@ import clipboard from 'clipboardy'
 import consola from 'consola'
 
 import { readConfig } from './lib/config'
-import { getModelFallbackConfig } from './lib/model-resolver'
 import { ensurePaths } from './lib/paths'
 import { initProxyFromEnv } from './lib/proxy'
 import { generateEnvScript } from './lib/shell'
+import { printStartupBanner } from './lib/startup-banner'
 import { cacheModels, cacheVSCodeVersion, createCopilotClient, state } from './lib/state'
 import { setupCopilotToken, setupGitHubToken } from './lib/token'
-import { VERSION } from './lib/version'
 import { createServer } from './server'
 
 interface RunServerOptions {
@@ -135,20 +134,6 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   const copilotClient = createCopilotClient()
   await cacheModels(copilotClient)
 
-  consola.info(`ghc-proxy v${VERSION}`)
-  const modelsList = state.cache.models?.data
-    .map(model => `- ${model.id}`)
-    .join('\n')
-    ?? '(none)'
-  consola.info(`Available models:\n${modelsList}`)
-  const fallbacks = getModelFallbackConfig()
-  consola.info(
-    `Model fallbacks:\n`
-    + `  claude-opus-*   -> ${fallbacks.claudeOpus}\n`
-    + `  claude-sonnet-* -> ${fallbacks.claudeSonnet}\n`
-    + `  claude-haiku-*  -> ${fallbacks.claudeHaiku}`,
-  )
-
   const serverUrl = `http://localhost:${options.port}`
 
   if (options.claudeCode) {
@@ -157,6 +142,8 @@ export async function runServer(options: RunServerOptions): Promise<void> {
     }
     await maybeCopyClaudeCodeCommand(serverUrl)
   }
+
+  printStartupBanner(serverUrl)
 
   const app = createServer({ idleTimeout: options.idleTimeoutSeconds })
   app.listen(options.port)

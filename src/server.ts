@@ -1,11 +1,9 @@
-import type { ModelMappingInfo } from './lib/request-logger'
-
 import { cors } from '@elysiajs/cors'
 import { node } from '@elysiajs/node'
 import { Elysia } from 'elysia'
 
 import { HTTPError } from './lib/error'
-import { formatElapsed, logRequest } from './lib/request-logger'
+import { formatElapsed, getRequestModelMapping, logRequest, setRequestModelMapping } from './lib/request-logger'
 import { createCompletionRoutes } from './routes/chat-completions/route'
 import { createEmbeddingRoutes } from './routes/embeddings/route'
 import { createMessageRoutes } from './routes/messages/route'
@@ -29,27 +27,23 @@ export function createServer(options?: ServerOptions) {
   })
     .use(cors())
     .error({ HTTP: HTTPError })
-    .derive(() => {
-      const requestMeta: { modelMapping: ModelMappingInfo | undefined } = {
-        modelMapping: undefined,
-      }
-      return {
-        requestStart: Date.now(),
-        requestMeta,
-      }
-    })
-    .onBeforeHandle(({ body, requestMeta }) => {
+    .derive(() => ({
+      requestStart: Date.now(),
+    }))
+    .onBeforeHandle(({ body, request }) => {
+      if (request.method !== 'POST')
+        return
       const model = body && typeof body === 'object' && 'model' in body
         ? (body as Record<string, unknown>).model
         : undefined
       if (typeof model === 'string') {
-        requestMeta.modelMapping = { originalModel: model, mappedModel: model }
+        setRequestModelMapping(request, { originalModel: model, mappedModel: model })
       }
     })
-    .onAfterHandle(({ request, requestStart, requestMeta, set }) => {
+    .onAfterResponse(({ request, requestStart, set }) => {
       const elapsed = formatElapsed(requestStart)
       const status = typeof set.status === 'number' ? set.status : 200
-      logRequest(request.method, request.url, status, elapsed, requestMeta.modelMapping)
+      logRequest(request.method, request.url, status, elapsed, getRequestModelMapping(request))
     })
     .onError(({ code, error }) => {
       // HTTPError is auto-handled via toResponse() — just let it through

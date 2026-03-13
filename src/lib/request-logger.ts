@@ -1,9 +1,23 @@
-import consola from 'consola'
 import { colorize } from 'consola/utils'
 
 export interface ModelMappingInfo {
   originalModel?: string
   mappedModel?: string
+}
+
+/**
+ * Per-request model mapping store.
+ * Route handlers write to this; the after-response hook reads from it.
+ * Uses WeakMap so entries are GC'd when the Request is collected.
+ */
+const requestModelMapping = new WeakMap<Request, ModelMappingInfo>()
+
+export function setRequestModelMapping(request: Request, info: ModelMappingInfo): void {
+  requestModelMapping.set(request, info)
+}
+
+export function getRequestModelMapping(request: Request): ModelMappingInfo | undefined {
+  return requestModelMapping.get(request)
 }
 
 export function formatElapsed(start: number) {
@@ -75,11 +89,13 @@ export function logRequest(
 ): void {
   const path = formatPath(url)
   const line = [
+    colorize('dim', '<-'),
     colorizeMethod(method),
     colorize('white', path),
     colorizeStatus(status),
     colorize('dim', elapsed),
   ].join(' ')
 
-  consola.info(`${line}${formatModelMapping(modelInfo)}`)
+  // eslint-disable-next-line no-console
+  console.log(`${line}${formatModelMapping(modelInfo)}`)
 }
