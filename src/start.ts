@@ -2,7 +2,6 @@
 
 import type { RuntimeConfig } from './lib/state'
 import { defineCommand } from 'citty'
-import clipboard from 'clipboardy'
 import consola from 'consola'
 
 import { readConfig } from './lib/config'
@@ -68,16 +67,7 @@ async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
     'claude',
   )
 
-  try {
-    clipboard.writeSync(command)
-    consola.success('Copied Claude Code command to clipboard!')
-  }
-  catch {
-    consola.warn(
-      'Failed to copy to clipboard. Here is the Claude Code command:',
-    )
-    consola.log(command)
-  }
+  consola.info(`Claude Code command:\n${command}`)
 }
 
 export async function runServer(options: RunServerOptions): Promise<void> {

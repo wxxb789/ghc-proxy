@@ -3,13 +3,15 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
+const TRAILING_JSON_ARRAY_RE = /(\[\s*\{[\s\S]*\}\s*\])\s*$/
+
 interface NpmPackResult {
   filename: string
 }
 
 function extractPackJson(output: string): string {
   const trimmed = output.trim()
-  const trailingJsonMatch = trimmed.match(/(\[\s*\{[\s\S]*\}\s*\])\s*$/)
+  const trailingJsonMatch = trimmed.match(TRAILING_JSON_ARRAY_RE)
 
   if (trailingJsonMatch?.[1]) {
     return trailingJsonMatch[1]

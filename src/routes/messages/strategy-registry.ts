@@ -59,7 +59,7 @@ export function selectStrategy(
     }
   }
   // Should never happen if registry has a fallback, but just in case
-  return registry[registry.length - 1]
+  return registry.at(-1)!
 }
 
 function filterThinkingBlocksForNativeMessages(

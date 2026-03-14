@@ -23,6 +23,9 @@ import { createCompletionRoutes } from '~/routes/chat-completions/route'
 import { createMessageRoutes } from '~/routes/messages/route'
 import { createResponsesRoutes } from '~/routes/responses/route'
 
+const SSE_BLOCK_SEPARATOR_RE = /\r?\n\r?\n/
+const SSE_LINE_SEPARATOR_RE = /\r?\n/
+
 // ── Shared Interfaces ──
 
 export interface CapturedChatCall {
@@ -163,10 +166,10 @@ export function createApp(routes: 'all' | 'messages' | 'responses' | 'completion
 
 export function parseSse(body: string): Array<ParsedSseEvent> {
   return body
-    .split(/\r?\n\r?\n/)
+    .split(SSE_BLOCK_SEPARATOR_RE)
     .map((chunk) => {
       const event: ParsedSseEvent = {}
-      for (const line of chunk.split(/\r?\n/)) {
+      for (const line of chunk.split(SSE_LINE_SEPARATOR_RE)) {
         if (line.startsWith('event: ')) {
           event.event = line.slice('event: '.length)
         }

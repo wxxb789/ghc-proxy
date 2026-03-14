@@ -352,7 +352,7 @@ export class AnthropicStreamTranslator {
       return []
     }
 
-    const sortedChoices = [...chunk.choices].sort((left, right) => left.index - right.index)
+    const sortedChoices = chunk.choices.toSorted((left, right) => left.index - right.index)
     const choice = sortedChoices[0]
     const deltas: Array<ConversationDelta> = []
 

@@ -7,12 +7,15 @@ import { promisify } from 'node:util'
 
 const FALLBACK = '1.104.3'
 const execFileAsync = promisify(execFile)
+const NEWLINE_RE = /\r?\n/
+const SEMVER_RE = /^\d+\.\d+\.\d+$/
+const PKGVER_RE = /pkgver=([0-9.]+)/
 
 function extractVersion(text: string): string | undefined {
   const versionLine = text
-    .split(/\r?\n/)
+    .split(NEWLINE_RE)
     .map(line => line.trim())
-    .find(line => /^\d+\.\d+\.\d+$/.test(line))
+    .find(line => SEMVER_RE.test(line))
 
   return versionLine || undefined
 }
@@ -32,7 +35,7 @@ async function getRemoteVSCodeVersion(): Promise<string | undefined> {
     )
 
     const pkgbuild = await response.text()
-    const pkgverRegex = /pkgver=([0-9.]+)/
+    const pkgverRegex = PKGVER_RE
     const match = pkgbuild.match(pkgverRegex)
 
     return match?.[1]

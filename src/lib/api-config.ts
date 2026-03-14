@@ -15,6 +15,7 @@ const EDITOR_PLUGIN_VERSION = `copilot-chat/${COPILOT_VERSION}`
 const USER_AGENT = `GitHubCopilotChat/${COPILOT_VERSION}`
 
 const API_VERSION = '2025-04-01'
+const TRAILING_SLASHES_RE = /\/+$/
 
 /** Headers shared by both Copilot and GitHub API requests (editor identity + versioning) */
 function editorHeaders(config: ClientConfig) {
@@ -29,7 +30,7 @@ function editorHeaders(config: ClientConfig) {
 
 export function copilotBaseUrl(config: ClientConfig) {
   if (config.copilotApiBase) {
-    return config.copilotApiBase.replace(/\/+$/, '')
+    return config.copilotApiBase.replace(TRAILING_SLASHES_RE, '')
   }
   return config.accountType === 'individual'
     ? 'https://api.githubcopilot.com'
