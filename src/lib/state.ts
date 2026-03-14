@@ -27,7 +27,7 @@ export interface CacheState {
 }
 
 export interface RateLimitState {
-  lastRequestTimestamp?: number
+  nextAvailableAt?: number
 }
 
 export interface AppState {

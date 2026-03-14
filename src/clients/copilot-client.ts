@@ -4,6 +4,7 @@ import type {
   CapiChatCompletionsPayload,
   CapiRequestContext,
 } from '~/core/capi'
+import type { CopilotHeaderOptions } from '~/lib/api-config'
 import type { AnthropicMessagesPayload } from '~/translator'
 import type {
   EmbeddingRequest,
@@ -22,9 +23,18 @@ import type {
 import consola from 'consola'
 
 import { events } from 'fetch-event-stream'
+
 import { copilotBaseUrl, copilotHeaders } from '~/lib/api-config'
 
 import { throwUpstreamError } from '~/lib/error'
+
+interface RequestOptions {
+  method?: string
+  body?: string
+  signal?: AbortSignal
+  headerOptions?: CopilotHeaderOptions
+  extraHeaders?: Record<string, string>
+}
 
 export class CopilotClient {
   private auth: ClientAuth
@@ -43,6 +53,66 @@ export class CopilotClient {
     }
   }
 
+  /** Low-level fetch with token check, header injection, and error handling */
+  private async request(
+    path: string,
+    errorMessage: string,
+    options: RequestOptions = {},
+  ): Promise<Response> {
+    this.requireToken()
+
+    const headers = options.extraHeaders
+      ? { ...copilotHeaders(this.auth, this.config, options.headerOptions), ...options.extraHeaders }
+      : copilotHeaders(this.auth, this.config, options.headerOptions)
+
+    const response = await this.fetchImpl(
+      `${copilotBaseUrl(this.config)}${path}`,
+      {
+        method: options.method,
+        headers,
+        body: options.body,
+        signal: options.signal,
+      },
+    )
+
+    if (!response.ok) {
+      consola.error(errorMessage, response)
+      await throwUpstreamError(errorMessage, response)
+    }
+
+    return response
+  }
+
+  /** Fetch and parse JSON response */
+  private async requestJson<T>(
+    path: string,
+    errorMessage: string,
+    options?: RequestOptions,
+  ): Promise<T> {
+    const response = await this.request(path, errorMessage, options)
+    return (await response.json()) as T
+  }
+
+  /** POST payload, return parsed JSON or SSE stream based on payload.stream */
+  private async requestStreamable<T>(
+    path: string,
+    payload: { stream?: boolean | null },
+    errorMessage: string,
+    options?: Omit<RequestOptions, 'method' | 'body'>,
+  ) {
+    const response = await this.request(path, errorMessage, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      ...options,
+    })
+
+    if (payload.stream) {
+      return events(response)
+    }
+
+    return (await response.json()) as T
+  }
+
   async createChatCompletions(
     payload: CapiChatCompletionsPayload,
     options?: {
@@ -51,8 +121,6 @@ export class CopilotClient {
       requestContext?: CapiRequestContext
     },
   ) {
-    this.requireToken()
-
     const enableVision = payload.messages.some(
       x =>
         typeof x.content !== 'string'
@@ -64,67 +132,36 @@ export class CopilotClient {
         ? 'agent'
         : 'user')
 
-    const headers = copilotHeaders(this.auth, this.config, {
-      vision: enableVision,
-      initiator,
-      requestContext: options?.requestContext,
-    })
-
-    const response = await this.fetchImpl(
-      `${copilotBaseUrl(this.config)}/chat/completions`,
+    return this.requestStreamable<CapiChatCompletionResponse>(
+      '/chat/completions',
+      payload,
+      'Failed to create chat completions',
       {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
         signal: options?.signal,
+        headerOptions: {
+          vision: enableVision,
+          initiator,
+          requestContext: options?.requestContext,
+        },
       },
     )
-
-    if (!response.ok) {
-      consola.error('Failed to create chat completions', response)
-      await throwUpstreamError('Failed to create chat completions', response)
-    }
-
-    if (payload.stream) {
-      return events(response)
-    }
-
-    return (await response.json()) as CapiChatCompletionResponse
   }
 
   async createEmbeddings(
     payload: EmbeddingRequest,
   ): Promise<EmbeddingResponse> {
-    this.requireToken()
-
-    const response = await this.fetchImpl(
-      `${copilotBaseUrl(this.config)}/embeddings`,
-      {
-        method: 'POST',
-        headers: copilotHeaders(this.auth, this.config),
-        body: JSON.stringify(payload),
-      },
+    return this.requestJson<EmbeddingResponse>(
+      '/embeddings',
+      'Failed to create embeddings',
+      { method: 'POST', body: JSON.stringify(payload) },
     )
-
-    if (!response.ok) {
-      await throwUpstreamError('Failed to create embeddings', response)
-    }
-
-    return (await response.json()) as EmbeddingResponse
   }
 
   async getModels(): Promise<ModelsResponse> {
-    const response = await this.fetchImpl(
-      `${copilotBaseUrl(this.config)}/models`,
-      {
-        headers: copilotHeaders(this.auth, this.config),
-      },
+    return this.requestJson<ModelsResponse>(
+      '/models',
+      'Failed to get models',
     )
-
-    if (!response.ok)
-      await throwUpstreamError('Failed to get models', response)
-
-    return (await response.json()) as ModelsResponse
   }
 
   async createResponses(
@@ -136,34 +173,19 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ) {
-    this.requireToken()
-
-    const headers = copilotHeaders(this.auth, this.config, {
-      vision: options?.vision,
-      initiator: options?.initiator,
-      requestContext: options?.requestContext,
-    })
-
-    const response = await this.fetchImpl(
-      `${copilotBaseUrl(this.config)}/responses`,
+    return this.requestStreamable<ResponsesResult>(
+      '/responses',
+      payload,
+      'Failed to create responses',
       {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
         signal: options?.signal,
+        headerOptions: {
+          vision: options?.vision,
+          initiator: options?.initiator,
+          requestContext: options?.requestContext,
+        },
       },
     )
-
-    if (!response.ok) {
-      consola.error('Failed to create responses', response)
-      await throwUpstreamError('Failed to create responses', response)
-    }
-
-    if (payload.stream) {
-      return events(response)
-    }
-
-    return (await response.json()) as ResponsesResult
   }
 
   async getResponse(
@@ -174,24 +196,14 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ): Promise<ResponsesResult | Record<string, unknown>> {
-    this.requireToken()
-
-    const response = await this.fetchImpl(
+    return this.requestJson<ResponsesResult | Record<string, unknown>>(
       this.buildResponsesUrl(responseId, options?.params),
+      'Failed to get response',
       {
-        headers: copilotHeaders(this.auth, this.config, {
-          requestContext: options?.requestContext,
-        }),
         signal: options?.signal,
+        headerOptions: { requestContext: options?.requestContext },
       },
     )
-
-    if (!response.ok) {
-      consola.error('Failed to get response', response)
-      await throwUpstreamError('Failed to get response', response)
-    }
-
-    return await response.json() as ResponsesResult | Record<string, unknown>
   }
 
   async getResponseInputItems(
@@ -202,24 +214,14 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ): Promise<ResponseInputItemsListResult | Record<string, unknown>> {
-    this.requireToken()
-
-    const response = await this.fetchImpl(
+    return this.requestJson<ResponseInputItemsListResult | Record<string, unknown>>(
       this.buildResponseInputItemsUrl(responseId, params),
+      'Failed to get response input items',
       {
-        headers: copilotHeaders(this.auth, this.config, {
-          requestContext: options?.requestContext,
-        }),
         signal: options?.signal,
+        headerOptions: { requestContext: options?.requestContext },
       },
     )
-
-    if (!response.ok) {
-      consola.error('Failed to get response input items', response)
-      await throwUpstreamError('Failed to get response input items', response)
-    }
-
-    return await response.json() as ResponseInputItemsListResult | Record<string, unknown>
   }
 
   async createResponseInputTokens(
@@ -229,26 +231,16 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ): Promise<ResponseInputTokensResult | Record<string, unknown>> {
-    this.requireToken()
-
-    const response = await this.fetchImpl(
-      `${copilotBaseUrl(this.config)}/responses/input_tokens`,
+    return this.requestJson<ResponseInputTokensResult | Record<string, unknown>>(
+      '/responses/input_tokens',
+      'Failed to create response input tokens',
       {
         method: 'POST',
-        headers: copilotHeaders(this.auth, this.config, {
-          requestContext: options?.requestContext,
-        }),
         body: JSON.stringify(payload),
         signal: options?.signal,
+        headerOptions: { requestContext: options?.requestContext },
       },
     )
-
-    if (!response.ok) {
-      consola.error('Failed to create response input tokens', response)
-      await throwUpstreamError('Failed to create response input tokens', response)
-    }
-
-    return await response.json() as ResponseInputTokensResult | Record<string, unknown>
   }
 
   async deleteResponse(
@@ -258,25 +250,15 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ): Promise<ResponseDeletionResult | Record<string, unknown>> {
-    this.requireToken()
-
-    const response = await this.fetchImpl(
+    return this.requestJson<ResponseDeletionResult | Record<string, unknown>>(
       this.buildResponsesUrl(responseId),
+      'Failed to delete response',
       {
         method: 'DELETE',
-        headers: copilotHeaders(this.auth, this.config, {
-          requestContext: options?.requestContext,
-        }),
         signal: options?.signal,
+        headerOptions: { requestContext: options?.requestContext },
       },
     )
-
-    if (!response.ok) {
-      consola.error('Failed to delete response', response)
-      await throwUpstreamError('Failed to delete response', response)
-    }
-
-    return await response.json() as ResponseDeletionResult | Record<string, unknown>
   }
 
   async createMessages(
@@ -287,37 +269,21 @@ export class CopilotClient {
       requestContext?: Partial<CapiRequestContext>
     },
   ) {
-    this.requireToken()
-
-    const headers = copilotHeaders(this.auth, this.config, {
-      initiator: 'agent',
-      requestContext: options?.requestContext,
-    })
-
-    if (anthropicBetaHeader) {
-      headers['anthropic-beta'] = anthropicBetaHeader
-    }
-
-    const response = await this.fetchImpl(
-      `${copilotBaseUrl(this.config)}/v1/messages`,
+    return this.requestStreamable(
+      '/v1/messages',
+      payload,
+      'Failed to create messages',
       {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
         signal: options?.signal,
+        extraHeaders: anthropicBetaHeader
+          ? { 'anthropic-beta': anthropicBetaHeader }
+          : undefined,
+        headerOptions: {
+          initiator: 'agent',
+          requestContext: options?.requestContext,
+        },
       },
     )
-
-    if (!response.ok) {
-      consola.error('Failed to create messages', response)
-      await throwUpstreamError('Failed to create messages', response)
-    }
-
-    if (payload.stream) {
-      return events(response)
-    }
-
-    return await response.json()
   }
 
   private buildResponsesUrl(
@@ -325,8 +291,8 @@ export class CopilotClient {
     params?: ResponseRetrieveParams,
   ): string {
     const base = responseId
-      ? `${copilotBaseUrl(this.config)}/responses/${encodeURIComponent(responseId)}`
-      : `${copilotBaseUrl(this.config)}/responses`
+      ? `/responses/${encodeURIComponent(responseId)}`
+      : `/responses`
 
     const searchParams = new URLSearchParams()
     if (params?.include?.length) {
@@ -352,7 +318,7 @@ export class CopilotClient {
     responseId: string,
     params?: ResponseInputItemsListParams,
   ): string {
-    const base = `${copilotBaseUrl(this.config)}/responses/${encodeURIComponent(responseId)}/input_items`
+    const base = `/responses/${encodeURIComponent(responseId)}/input_items`
     const searchParams = new URLSearchParams()
 
     if (params?.include?.length) {

@@ -10,22 +10,17 @@ export async function checkRateLimit(state: AppState) {
     return
 
   const now = Date.now()
+  const intervalMs = state.config.rateLimitSeconds * 1000
 
-  if (!state.rateLimit.lastRequestTimestamp) {
-    state.rateLimit.lastRequestTimestamp = now
+  // First request or interval already passed — claim slot synchronously
+  if (!state.rateLimit.nextAvailableAt || now >= state.rateLimit.nextAvailableAt) {
+    state.rateLimit.nextAvailableAt = now + intervalMs
     return
   }
 
-  const elapsedSeconds = (now - state.rateLimit.lastRequestTimestamp) / 1000
-
-  if (elapsedSeconds > state.config.rateLimitSeconds) {
-    state.rateLimit.lastRequestTimestamp = now
-    return
-  }
-
-  const waitTimeSeconds = Math.ceil(
-    state.config.rateLimitSeconds - elapsedSeconds,
-  )
+  // Slot is occupied — need to wait or reject
+  const waitMs = state.rateLimit.nextAvailableAt - now
+  const waitTimeSeconds = Math.ceil(waitMs / 1000)
 
   if (!state.config.rateLimitWait) {
     consola.warn(
@@ -36,12 +31,14 @@ export async function checkRateLimit(state: AppState) {
     })
   }
 
-  const waitTimeMs = waitTimeSeconds * 1000
+  // Claim the NEXT slot synchronously BEFORE awaiting, preventing TOCTOU race
+  const claimedSlot = state.rateLimit.nextAvailableAt
+  state.rateLimit.nextAvailableAt = claimedSlot + intervalMs
+
   consola.warn(
     `Rate limit reached. Waiting ${waitTimeSeconds} seconds before proceeding...`,
   )
-  await sleep(waitTimeMs)
+  await sleep(waitMs)
 
-  state.rateLimit.lastRequestTimestamp = now
   consola.info('Rate limit wait completed, proceeding with request')
 }

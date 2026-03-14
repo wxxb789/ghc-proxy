@@ -283,5 +283,5 @@ export function setupDefaultTestState() {
   state.config.manualApprove = false
   state.config.rateLimitSeconds = undefined
   state.config.rateLimitWait = false
-  state.rateLimit.lastRequestTimestamp = undefined
+  state.rateLimit.nextAvailableAt = undefined
 }

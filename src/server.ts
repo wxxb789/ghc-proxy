@@ -64,12 +64,18 @@ export function createServer(options?: ServerOptions) {
       )
     })
     .get('/', () => 'Server running')
+    // Root-level routes: completions, models, embeddings, responses are registered here
+    // for clients that omit the /v1 prefix. Token and usage routes are root-only
+    // because they are proxy-specific endpoints, not part of any upstream API spec.
     .use(createCompletionRoutes())
     .use(createModelRoutes())
     .use(createEmbeddingRoutes())
     .use(createResponsesRoutes())
     .use(createTokenRoute())
     .use(createUsageRoute())
+    // /v1-prefixed routes: mirrors the root-level API routes under /v1 for clients
+    // that include the standard OpenAI/Anthropic prefix. Messages (Anthropic native)
+    // is /v1-only since Anthropic clients always use /v1/messages.
     .group('/v1', (app) => {
       return app
         .use(createCompletionRoutes())
