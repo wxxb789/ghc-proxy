@@ -13,6 +13,8 @@ import { parseResponsesPayload } from '~/lib/validation'
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from './context-management'
 import { createResponsesPassthroughStrategy } from './strategy'
 
+const HTTP_URL_RE = /^https?:\/\//i
+
 export interface ResponsesCoreParams {
   body: unknown
   signal: AbortSignal
@@ -149,7 +151,7 @@ function containsRemoteImageUrl(value: unknown): boolean {
   if (
     record.type === 'input_image'
     && typeof record.image_url === 'string'
-    && /^https?:\/\//i.test(record.image_url)
+    && HTTP_URL_RE.test(record.image_url)
   ) {
     return true
   }

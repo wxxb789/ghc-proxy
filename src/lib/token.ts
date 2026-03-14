@@ -8,6 +8,8 @@ import { getCachedConfig, writeConfigField } from './config'
 import { HTTPError } from './error'
 import { cacheVSCodeVersion, getClientConfig, state } from './state'
 
+const TRAILING_SLASHES_RE = /\/+$/
+
 async function writeGithubToken(token: string): Promise<void> {
   await writeConfigField('githubToken', token)
 }
@@ -133,7 +135,7 @@ function normalizeCopilotApiBase(value?: string): string | undefined {
   if (!value) {
     return undefined
   }
-  return value.replace(/\/+$/, '')
+  return value.replace(TRAILING_SLASHES_RE, '')
 }
 
 async function ensureVSCodeVersion() {

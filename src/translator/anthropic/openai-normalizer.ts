@@ -12,12 +12,14 @@ import type {
 import type { ContentPart, Message, ToolCall } from '~/types'
 import { TranslationFailure } from './translation-issue'
 
+const DATA_URL_RE = /^data:(.+);base64,(.+)$/
+
 function normalizeContentPart(part: ContentPart): NormalizedBlock {
   switch (part.type) {
     case 'text':
       return { kind: 'text', text: part.text }
     case 'image_url': {
-      const match = part.image_url.url.match(/^data:(.+);base64,(.+)$/)
+      const match = part.image_url.url.match(DATA_URL_RE)
       if (!match) {
         throw new TranslationFailure('OpenAI image_url must be a data URL', {
           status: 502,
@@ -113,7 +115,7 @@ export function normalizeOpenAIResponse(
     })
   }
 
-  const firstChoice = [...response.choices].sort((left, right) => left.index - right.index)[0]
+  const firstChoice = response.choices.toSorted((left, right) => left.index - right.index)[0]
   if (response.choices.length > 1) {
     context.record(
       {

@@ -11,6 +11,8 @@ import { bootstrapProbe, pickFirstMessagesModel, runMain } from './lib/probe-har
 
 const server = createServer()
 
+const WHITESPACE_RE = /\s+/g
+
 type MatrixStatus
   = | 'supported'
     | 'proxy_rejected'
@@ -774,7 +776,7 @@ async function dispatchRequest(request: {
 }
 
 function summarizeText(text: string): string {
-  return text.replaceAll(/\s+/g, ' ').trim().slice(0, 240)
+  return text.replaceAll(WHITESPACE_RE, ' ').trim().slice(0, 240)
 }
 
 async function safeJson(response: Response): Promise<unknown> {

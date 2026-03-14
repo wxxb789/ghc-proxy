@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import process from 'node:process'
 
+const EXE_EXTENSION_RE = /\.exe$/i
+
 type ShellName = 'bash' | 'zsh' | 'fish' | 'powershell' | 'cmd' | 'sh'
 type EnvVars = Record<string, string | undefined>
 
@@ -10,7 +12,7 @@ function normalizeShellName(raw: string | undefined): ShellName | undefined {
     return undefined
   }
 
-  const normalized = path.basename(raw).toLowerCase().replace(/\.exe$/i, '')
+  const normalized = path.basename(raw).toLowerCase().replace(EXE_EXTENSION_RE, '')
 
   switch (normalized) {
     case 'pwsh':
