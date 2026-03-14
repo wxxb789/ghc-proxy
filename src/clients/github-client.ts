@@ -31,38 +31,39 @@ export class GitHubClient {
     this.fetchImpl = deps?.fetch ?? fetch
   }
 
-  async getCopilotUsage(): Promise<CopilotUsageResponse> {
-    const response = await this.fetchImpl(
-      `${GITHUB_API_BASE_URL}/copilot_internal/user`,
-      {
-        headers: githubHeaders(this.auth, this.config),
-      },
-    )
+  /** Fetch JSON from a GitHub API endpoint with standard github headers and error handling */
+  private async requestJson<T>(
+    url: string,
+    init: RequestInit,
+    errorMessage: string,
+  ): Promise<T> {
+    const response = await this.fetchImpl(url, init)
 
     if (!response.ok) {
-      await throwUpstreamError('Failed to get Copilot usage', response)
+      await throwUpstreamError(errorMessage, response)
     }
 
-    return (await response.json()) as CopilotUsageResponse
+    return (await response.json()) as T
+  }
+
+  async getCopilotUsage(): Promise<CopilotUsageResponse> {
+    return this.requestJson<CopilotUsageResponse>(
+      `${GITHUB_API_BASE_URL}/copilot_internal/user`,
+      { headers: githubHeaders(this.auth, this.config) },
+      'Failed to get Copilot usage',
+    )
   }
 
   async getCopilotToken(): Promise<GetCopilotTokenResponse> {
-    const response = await this.fetchImpl(
+    return this.requestJson<GetCopilotTokenResponse>(
       `${GITHUB_API_BASE_URL}/copilot_internal/v2/token`,
-      {
-        headers: githubHeaders(this.auth, this.config),
-      },
+      { headers: githubHeaders(this.auth, this.config) },
+      'Failed to get Copilot token',
     )
-
-    if (!response.ok) {
-      await throwUpstreamError('Failed to get Copilot token', response)
-    }
-
-    return (await response.json()) as GetCopilotTokenResponse
   }
 
   async getDeviceCode(): Promise<DeviceCodeResponse> {
-    const response = await this.fetchImpl(
+    return this.requestJson<DeviceCodeResponse>(
       `${GITHUB_BASE_URL}/login/device/code`,
       {
         method: 'POST',
@@ -72,13 +73,8 @@ export class GitHubClient {
           scope: GITHUB_APP_SCOPES,
         }),
       },
+      'Failed to get device code',
     )
-
-    if (!response.ok) {
-      await throwUpstreamError('Failed to get device code', response)
-    }
-
-    return (await response.json()) as DeviceCodeResponse
   }
 
   async pollAccessToken(deviceCode: DeviceCodeResponse): Promise<string> {
@@ -120,18 +116,16 @@ export class GitHubClient {
   }
 
   async getGitHubUser(): Promise<GithubUserResponse> {
-    const response = await this.fetchImpl(`${GITHUB_API_BASE_URL}/user`, {
-      headers: {
-        authorization: `token ${this.auth.githubToken}`,
-        ...standardHeaders(),
+    return this.requestJson<GithubUserResponse>(
+      `${GITHUB_API_BASE_URL}/user`,
+      {
+        headers: {
+          authorization: `token ${this.auth.githubToken}`,
+          ...standardHeaders(),
+        },
       },
-    })
-
-    if (!response.ok) {
-      await throwUpstreamError('Failed to get GitHub user', response)
-    }
-
-    return (await response.json()) as GithubUserResponse
+      'Failed to get GitHub user',
+    )
   }
 }
 

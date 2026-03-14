@@ -14,6 +14,7 @@ import { runStrategy } from '~/lib/execution-strategy'
 import {
   MESSAGES_ENDPOINT,
   modelSupportsEndpoint,
+  modelSupportsOutputConfig,
   RESPONSES_ENDPOINT,
 } from '~/lib/model-capabilities'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
@@ -83,11 +84,24 @@ function filterThinkingBlocksForNativeMessages(
   }
 }
 
+/**
+ * Strip `output_config` for models known to reject it.
+ */
+function sanitizeOutputConfig(
+  payload: AnthropicMessagesPayload,
+  model: Model | undefined,
+): void {
+  if (payload.output_config && !modelSupportsOutputConfig(model)) {
+    delete payload.output_config
+  }
+}
+
 const nativeMessagesEntry: StrategyEntry = {
   name: 'native-messages',
   canHandle: model => modelSupportsEndpoint(model, MESSAGES_ENDPOINT),
   async execute(ctx) {
     filterThinkingBlocksForNativeMessages(ctx.anthropicPayload)
+    sanitizeOutputConfig(ctx.anthropicPayload, ctx.selectedModel)
 
     const strategy = createNativeMessagesStrategy(
       ctx.copilotClient,

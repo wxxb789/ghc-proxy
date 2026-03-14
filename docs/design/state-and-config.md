@@ -55,7 +55,7 @@ Both are populated at startup and reused for the lifetime of the process.
 
 ```typescript
 interface RateLimitState {
-  lastRequestTimestamp?: number // Unix ms of last request
+  nextAvailableAt?: number // Unix ms when next request is allowed
 }
 ```
 

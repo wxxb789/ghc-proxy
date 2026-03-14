@@ -539,6 +539,42 @@ describe('responses and routing', () => {
   test('/v1/messages native messages path preserves explicit thinking configuration', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []
+    state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.6', { supported_endpoints: ['/v1/messages'] }))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-sonnet-4.6',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+      },
+    }, calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4.6',
+        max_tokens: 256,
+        thinking: { type: 'disabled' },
+        output_config: { effort: 'max' },
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.thinking).toEqual({ type: 'disabled' })
+    expect(calls[0]?.payload.output_config).toEqual({ effort: 'max' })
+  })
+
+  test('/v1/messages native path strips output_config for models in deny-list', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
     state.cache.models = buildModelsResponse(buildModel('claude-sonnet-4.5', { supported_endpoints: ['/v1/messages'] }))
 
     CopilotClient.prototype.createMessages = mockMessages({
@@ -561,15 +597,13 @@ describe('responses and routing', () => {
       body: JSON.stringify({
         model: 'claude-sonnet-4.5',
         max_tokens: 256,
-        thinking: { type: 'disabled' },
-        output_config: { effort: 'max' },
+        output_config: { effort: 'high' },
         messages: [{ role: 'user', content: 'hello' }],
       }),
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.thinking).toEqual({ type: 'disabled' })
-    expect(calls[0]?.payload.output_config).toEqual({ effort: 'max' })
+    expect(calls[0]?.payload.output_config).toBeUndefined()
   })
 
   test('compact and warmup routing can move /v1/messages to configured small model', async () => {

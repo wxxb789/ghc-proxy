@@ -16,6 +16,17 @@ const USER_AGENT = `GitHubCopilotChat/${COPILOT_VERSION}`
 
 const API_VERSION = '2025-04-01'
 
+/** Headers shared by both Copilot and GitHub API requests (editor identity + versioning) */
+function editorHeaders(config: ClientConfig) {
+  return {
+    'editor-version': `vscode/${config.vsCodeVersion ?? 'unknown'}`,
+    'editor-plugin-version': EDITOR_PLUGIN_VERSION,
+    'user-agent': USER_AGENT,
+    'x-github-api-version': API_VERSION,
+    'x-vscode-user-agent-library-version': 'electron-fetch',
+  }
+}
+
 export function copilotBaseUrl(config: ClientConfig) {
   if (config.copilotApiBase) {
     return config.copilotApiBase.replace(/\/+$/, '')
@@ -40,13 +51,9 @@ export function copilotHeaders(
     'Authorization': `Bearer ${auth.copilotToken}`,
     'content-type': standardHeaders()['content-type'],
     'copilot-integration-id': 'vscode-chat',
-    'editor-version': `vscode/${config.vsCodeVersion ?? 'unknown'}`,
-    'editor-plugin-version': EDITOR_PLUGIN_VERSION,
-    'user-agent': USER_AGENT,
+    ...editorHeaders(config),
     'openai-intent': 'conversation-panel',
-    'x-github-api-version': API_VERSION,
     'x-request-id': randomUUID(),
-    'x-vscode-user-agent-library-version': 'electron-fetch',
   }
 
   if (options.vision)
@@ -82,12 +89,8 @@ export const GITHUB_API_BASE_URL = 'https://api.github.com'
 export function githubHeaders(auth: ClientAuth, config: ClientConfig) {
   return {
     ...standardHeaders(),
-    'authorization': `token ${auth.githubToken}`,
-    'editor-version': `vscode/${config.vsCodeVersion ?? 'unknown'}`,
-    'editor-plugin-version': EDITOR_PLUGIN_VERSION,
-    'user-agent': USER_AGENT,
-    'x-github-api-version': API_VERSION,
-    'x-vscode-user-agent-library-version': 'electron-fetch',
+    authorization: `token ${auth.githubToken}`,
+    ...editorHeaders(config),
   }
 }
 

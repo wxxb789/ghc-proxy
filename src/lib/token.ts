@@ -116,7 +116,8 @@ function isAuthError(error: unknown) {
 async function logUser() {
   const githubClient = createGitHubClient()
   const user = await githubClient.getGitHubUser()
-  consola.info(`Logged in as ${user.login}`)
+  state.cache.githubLogin = user.login
+  consola.debug(`Logged in as ${user.login}`)
 }
 
 function createGitHubClient() {
