@@ -11,6 +11,7 @@ export default defineConfig({
   platform: 'node',
 
   noExternal: [/.*/],
+  inlineOnly: false,
   sourcemap: true,
   clean: true,
 
