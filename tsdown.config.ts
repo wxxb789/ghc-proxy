@@ -10,6 +10,7 @@ export default defineConfig({
   target: 'es2022',
   platform: 'node',
 
+  noExternal: [/.*/],
   sourcemap: true,
   clean: true,
 

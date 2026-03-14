@@ -48,7 +48,7 @@ This is the most common use case. There are two ways to set it up:
 bunx ghc-proxy@latest start --claude-code
 ```
 
-This starts the proxy, opens an interactive model picker, and copies a ready-to-paste environment command to your clipboard. Run that command in another terminal to launch Claude Code with the correct configuration.
+This starts the proxy, opens an interactive model picker, and prints a ready-to-paste environment command. Run that command in another terminal to launch Claude Code with the correct configuration.
 
 ### Option B: Permanent config (Recommended)
 
