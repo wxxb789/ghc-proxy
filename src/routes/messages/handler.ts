@@ -3,6 +3,8 @@ import type { ModelMappingInfo } from '~/lib/request-logger'
 import consola from 'consola'
 
 import { readCapiRequestContext } from '~/core/capi'
+import { shouldContextUpgrade } from '~/lib/config'
+import { getContextUpgradeTarget, isContextLengthError } from '~/lib/context-upgrade'
 import { findModelById } from '~/lib/model-capabilities'
 import { applyMessagesModelPolicy } from '~/lib/request-model-policy'
 import { createCopilotClient } from '~/lib/state'
@@ -45,7 +47,7 @@ export async function handleMessagesCore(
 
   if (modelRouting.reason) {
     consola.debug(
-      `Routed anthropic request to small model via ${modelRouting.reason}:`,
+      `Routed anthropic request via ${modelRouting.reason}:`,
       `${modelRouting.originalModel} -> ${modelRouting.routedModel}`,
     )
   }
@@ -55,7 +57,8 @@ export async function handleMessagesCore(
   const copilotClient = createCopilotClient()
 
   const entry = selectStrategy(defaultStrategyRegistry, selectedModel)
-  return entry.execute({
+
+  const strategyCtx = {
     copilotClient,
     anthropicPayload,
     anthropicBetaHeader,
@@ -64,5 +67,38 @@ export async function handleMessagesCore(
     headers,
     requestContext: readCapiRequestContext(headers),
     modelMapping,
-  })
+  }
+
+  let strategyResult
+  try {
+    strategyResult = await entry.execute(strategyCtx)
+  }
+  catch (error) {
+    const upgradeTarget = shouldContextUpgrade() && isContextLengthError(error)
+      ? getContextUpgradeTarget(anthropicPayload.model)
+      : undefined
+
+    if (!upgradeTarget)
+      throw error
+
+    consola.info(
+      `Context length exceeded, retrying: ${anthropicPayload.model} → ${upgradeTarget}`,
+    )
+    anthropicPayload.model = upgradeTarget
+    const retryModel = findModelById(upgradeTarget)
+    const retrySignal = createUpstreamSignalFromConfig(signal)
+    const retryEntry = selectStrategy(defaultStrategyRegistry, retryModel)
+    strategyResult = await retryEntry.execute({
+      ...strategyCtx,
+      anthropicPayload,
+      selectedModel: retryModel,
+      upstreamSignal: retrySignal,
+      modelMapping: { originalModel: modelRouting.originalModel, mappedModel: upgradeTarget },
+    })
+  }
+
+  return {
+    result: strategyResult.result,
+    modelMapping: strategyResult.modelMapping,
+  }
 }

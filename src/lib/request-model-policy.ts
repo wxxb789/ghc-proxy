@@ -1,13 +1,15 @@
 import type { AnthropicMessagesPayload } from '~/translator'
 import type { Model } from '~/types'
 
-import { getSmallModel, shouldCompactUseSmallModel, shouldWarmupUseSmallModel } from './config'
+import { getSmallModel, shouldCompactUseSmallModel, shouldContextUpgrade, shouldWarmupUseSmallModel } from './config'
+import { hasContextUpgradeRule, resolveContextUpgrade } from './context-upgrade'
 import {
   findModelById,
   modelSupportsAdaptiveThinking,
   modelSupportsToolCalls,
   modelSupportsVision,
 } from './model-capabilities'
+import { estimateAnthropicInputTokens } from './tokenizer'
 
 const COMPACT_SYSTEM_PROMPT_START
   = 'You are a helpful AI assistant tasked with summarizing conversations'
@@ -16,7 +18,7 @@ const WARMUP_BETA_MARKERS = ['warmup', 'probe', 'preflight']
 export interface ModelRoutingResult {
   originalModel: string
   routedModel: string
-  reason?: 'compact' | 'warmup'
+  reason?: 'compact' | 'warmup' | 'context-upgrade'
 }
 
 export function applyMessagesModelPolicy(
@@ -24,6 +26,21 @@ export function applyMessagesModelPolicy(
   anthropicBetaHeader: string | undefined,
 ): ModelRoutingResult {
   const originalModel = payload.model
+
+  // Context upgrade: route to extended-context variant for large payloads.
+  // Checked first because it is independent of smallModel configuration.
+  if (shouldContextUpgrade() && hasContextUpgradeRule(payload.model)) {
+    const contextUpgradeTarget = resolveContextUpgrade(
+      payload.model,
+      estimateAnthropicInputTokens(payload),
+    )
+    if (contextUpgradeTarget) {
+      payload.model = contextUpgradeTarget
+      return { originalModel, routedModel: contextUpgradeTarget, reason: 'context-upgrade' }
+    }
+  }
+
+  // Small-model routing (compact / warmup) requires a configured smallModel.
   const smallModel = getSmallModel()
   if (!smallModel) {
     return { originalModel, routedModel: originalModel }

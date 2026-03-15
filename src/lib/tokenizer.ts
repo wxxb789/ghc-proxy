@@ -1,3 +1,4 @@
+import type { AnthropicAssistantContentBlock, AnthropicMessagesPayload, AnthropicUserContentBlock } from '~/translator'
 import type {
   ChatCompletionsPayload,
   ContentPart,
@@ -310,4 +311,70 @@ export async function getTokenCount(payload: ChatCompletionsPayload, model: Mode
     input: inputTokens,
     output: outputTokens,
   }
+}
+
+/**
+ * Fast character-based token estimate for Anthropic payloads.
+ * Uses ~3.5 chars/token ratio (conservative for Claude's tokenizer).
+ * Intentionally over-estimates to favor proactive routing.
+ */
+export function estimateAnthropicInputTokens(payload: AnthropicMessagesPayload): number {
+  let chars = 0
+
+  // system prompt
+  if (typeof payload.system === 'string') {
+    chars += payload.system.length
+  }
+  else if (Array.isArray(payload.system)) {
+    for (const block of payload.system) {
+      chars += block.text?.length ?? 0
+    }
+  }
+
+  // messages
+  for (const msg of payload.messages) {
+    if (typeof msg.content === 'string') {
+      chars += msg.content.length
+    }
+    else if (Array.isArray(msg.content)) {
+      chars += estimateContentBlockChars(msg.content)
+    }
+  }
+
+  // tools
+  if (payload.tools?.length) {
+    chars += JSON.stringify(payload.tools).length
+  }
+
+  return Math.ceil(chars / 3.5)
+}
+
+function estimateContentBlockChars(
+  blocks: Array<AnthropicUserContentBlock | AnthropicAssistantContentBlock>,
+): number {
+  let chars = 0
+  for (const block of blocks) {
+    switch (block.type) {
+      case 'text':
+        chars += block.text.length
+        break
+      case 'thinking':
+        chars += block.thinking.length
+        break
+      case 'tool_use':
+        chars += JSON.stringify(block.input).length
+        break
+      case 'tool_result':
+        chars += typeof block.content === 'string'
+          ? block.content.length
+          : JSON.stringify(block.content ?? '').length
+        break
+      case 'image':
+        // Base64 images are large but already counted in context;
+        // approximate the overhead without re-measuring the data string
+        chars += 1000
+        break
+    }
+  }
+  return chars
 }
