@@ -26,6 +26,21 @@ export function applyMessagesModelPolicy(
   anthropicBetaHeader: string | undefined,
 ): ModelRoutingResult {
   const originalModel = payload.model
+
+  // Context upgrade: route to extended-context variant for large payloads.
+  // Checked first because it is independent of smallModel configuration.
+  if (shouldContextUpgrade() && hasContextUpgradeRule(payload.model)) {
+    const contextUpgradeTarget = resolveContextUpgrade(
+      payload.model,
+      estimateAnthropicInputTokens(payload),
+    )
+    if (contextUpgradeTarget) {
+      payload.model = contextUpgradeTarget
+      return { originalModel, routedModel: contextUpgradeTarget, reason: 'context-upgrade' }
+    }
+  }
+
+  // Small-model routing (compact / warmup) requires a configured smallModel.
   const smallModel = getSmallModel()
   if (!smallModel) {
     return { originalModel, routedModel: originalModel }
@@ -57,18 +72,6 @@ export function applyMessagesModelPolicy(
       originalModel,
       routedModel: smallModel,
       reason: 'warmup',
-    }
-  }
-
-  // Context upgrade: route to extended-context variant for large payloads
-  if (shouldContextUpgrade() && hasContextUpgradeRule(payload.model)) {
-    const contextUpgradeTarget = resolveContextUpgrade(
-      payload.model,
-      estimateAnthropicInputTokens(payload),
-    )
-    if (contextUpgradeTarget) {
-      payload.model = contextUpgradeTarget
-      return { originalModel, routedModel: contextUpgradeTarget, reason: 'context-upgrade' }
     }
   }
 
