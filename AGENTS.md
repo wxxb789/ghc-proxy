@@ -1,8 +1,16 @@
 # AGENTS.md
 
+> **Convention**: `CLAUDE.md` in this repo is a **symlink → `AGENTS.md`** (git
+> mode `120000`). Same applies to every nested `**/CLAUDE.md`. Edit
+> `AGENTS.md` only; never `Write`/`Edit` `CLAUDE.md` (it would replace the
+> symlink with a regular file on Windows). Recreation recipe at the bottom.
+
+This file is for agentic coding tools (Claude Code, Codex, Cursor, GitHub
+Copilot, etc.) working in this repository.
+
 ## Project Overview
 
-ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Copilot's API into OpenAI and Anthropic compatible formats. **Unofficial, may break at any time.**
+ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Copilot's API into OpenAI- and Anthropic-compatible formats. It enables Claude Code, Cursor, and any OpenAI/Anthropic-speaking client to use a GitHub Copilot subscription. **Unofficial, may break at any time.**
 
 - **Runtime:** Bun >= 1.2 (first-class), Node.js compatible via `@elysiajs/node` fallback
 - **Language:** TypeScript (ESNext, strict mode)
@@ -20,134 +28,140 @@ bun run lint:all                     # ESLint full scan (used in CI)
 bun run typecheck                    # tsc --noEmit
 bun test                             # Run all tests (Bun native test runner)
 bun test tests/validation.test.ts    # Run a single test file
-bun test tests/api-smoke.test.ts     # Run API compatibility smoke tests
+bun test tests/api-smoke.test.ts     # Publish gate for public schema compatibility
 bun run start                        # Production server (NODE_ENV=production)
-bun run matrix:live                  # End-to-end Copilot upstream compatibility (uses real quota)
+bun run matrix:live                  # End-to-end Copilot upstream check (uses real quota — do not use as a sanity check)
 bun run smoke:packaged               # Smoke test the packaged CLI
 bun run release:patch                # Bump patch, commit, tag (then git push manually)
 ```
 
-**CI pipeline:** lint:all → typecheck → test → build → smoke:packaged
+**CI pipeline order:** `lint:all → typecheck → test → build → smoke:packaged`
 
-**Validation after non-trivial changes:** `bun run lint:all && bun run typecheck && bun test && bun run build`
+**Local validation after non-trivial changes:** `bun run lint:all && bun run typecheck && bun test && bun run build` (same order as CI — fails fast before the slowest step).
 
 ## Compatibility Contract
 
 All public ghc-proxy endpoints must match the official client-facing schema they expose.
 
-- OpenAI-facing routes must stay OpenAI-compatible at the proxy boundary.
-- Anthropic-facing routes must stay Anthropic-compatible at the proxy boundary.
-- Copilot-specific quirks must be handled inside the proxy via normalization, validation, routing, or translation.
+- OpenAI-facing routes stay OpenAI-compatible at the proxy boundary.
+- Anthropic-facing routes stay Anthropic-compatible at the proxy boundary.
+- Copilot-specific quirks are handled **inside** the proxy via normalization, validation, routing, or translation — never leaked outward.
 
-## Architecture
-
-### Request Flow
+## Architecture (overview)
 
 ```text
-Client Request → Elysia Route Handler → Zod Validation → Execution Strategy Selection → Adapter/Translator → Copilot Client → Response Translation → Client
+Client → Guard → Ingest → Transform → Dispatch → Deliver → Client
+                 (parse)  (model chain) (strategy) (SSE/JSON)
 ```
 
-### Three Execution Paths for `/v1/messages`
+Every route handler is a thin orchestrator of this 5-layer pipeline. Routes live in `src/routes/<endpoint>/` as a `route.ts` + `handler.ts` + `strategy.ts` triple (`messages/` has multiple strategies under `strategies/`).
 
-The proxy uses a per-model strategy pattern (`src/routes/messages/strategies/`) to choose the best upstream path:
+`/v1/messages` has three execution strategies the registry picks between per model: **Native Messages** (direct passthrough), **Responses Translation** (Anthropic → Responses → Anthropic), and **Chat Completions Fallback** (Anthropic → OpenAI Chat → Anthropic).
 
-1. **Native Messages** — Direct `/v1/messages` passthrough when Copilot supports it
-2. **Responses Translation** — Anthropic → Responses → Anthropic when only `/responses` is available
-3. **Chat Completions Fallback** — Anthropic → OpenAI Chat → Anthropic (legacy)
+For everything beyond this overview — module map, abstractions, strategy details, routing logic, and translation coverage — see the design docs:
 
-See `docs/messages-routing-and-translation.md` for routing logic and `docs/anthropic-translation-matrix.md` for translation coverage.
+- `docs/design/execution-strategy.md` — strategy pattern and error handling
+- `docs/design/model-routing.md` — model pipeline and context upgrade mechanics
+- `docs/design/translation-pipeline.md` — full translation pipeline
+- `docs/messages-routing-and-translation.md` — `/v1/messages` routing logic
+- `docs/anthropic-translation-matrix.md` — translation coverage
+- `docs/solutions/` — documented solutions to past problems (bugs, conventions, patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
 
-### Request Pipeline
+When making architectural changes, update the relevant design doc in the same change.
 
-Every route handler is a thin orchestrator of the 5-layer pipeline:
+## Adding a New Route
 
-```
-Guard → Ingest → Transform → Dispatch → Deliver
-```
+1. Create `src/routes/<endpoint>/{route,handler,strategy}.ts` (use an existing simple route like `models/` or `embeddings/` as the template).
+2. Implement an `ExecutionStrategy` (`src/lib/execution-strategy.ts`) — body prep, endpoint selection, response processing, error mapping.
+3. Register the strategy in the route's `StrategyRegistry` and the route in the Elysia app (see `src/main.ts`).
+4. Add a test under `tests/` and ensure `bun test tests/api-smoke.test.ts` still passes.
 
-1. **Guard** (`src/guard/`) — Auth check and rate limiting, applied as an Elysia plugin.
-2. **Ingest** (`src/ingest/`) — Protocol-specific parsing, Zod validation, and metadata extraction via `ProtocolRegistry`.
-3. **Transform** (`src/transform/`) — Composable model transform chain (rewrite, beta-header processing, model policy). Messages route uses a 3-step chain; chat-completions and responses use single-step variants.
-4. **Dispatch** (`src/dispatch/`) — Strategy selection via `StrategyRegistry`, execution, and error recovery (context-length retry with model upgrade). Messages route has 3 strategies; chat-completions and responses use single-strategy registries.
-5. **Deliver** (`src/deliver/`) — Converts `ExecutionResult` into the HTTP response (SSE streaming or JSON serialization, error formatting, model mapping).
-
-### Key Modules
-
-| Directory | Purpose |
-|-----------|---------|
-| `src/routes/` | HTTP route handlers (each route is self-contained) |
-| `src/translator/anthropic/` | Anthropic ↔ OpenAI protocol translation with IR, normalization, and streaming transducers |
-| `src/translator/responses/` | Anthropic ↔ Responses format translation with signature codec |
-| `src/adapters/` | Protocol adapters (OpenAI Chat, Anthropic Messages, Copilot transport) |
-| `src/clients/` | GitHub, Copilot, and VS Code API clients |
-| `src/core/capi/` | Copilot API compatibility layer (plan builder, profiles, request context) |
-| `src/core/conversation/` | Conversation state management |
-| `src/lib/` | Utilities (state, config, tokens, errors, model resolution, rate limiting, validation) |
-| `src/types/` | TypeScript type definitions |
-| `src/state/` | Decomposed state stores (AuthStore, ModelCache, ConfigStore, RateLimiter, EmulatorStore) |
-| `src/pipeline/` | Pipeline framework: `runPipeline()` orchestrator with lifecycle hooks, StrategyContext and ModelTransformResult types |
-| `src/ingest/` | Protocol registry with per-protocol parsers and validators |
-| `src/transform/` | Composable model transform chain (rewrite, beta-headers, policy steps) |
-| `src/dispatch/` | Strategy registry, strategy runner, error recovery, ResourceDispatcher |
-| `src/deliver/` | Response delivery (SSE, JSON, error formatting, shared utilities) |
-| `src/guard/` | Request guard (auth check, rate limiting) |
-
-### Key Abstractions
-
-- **ExecutionStrategy** (`src/lib/execution-strategy.ts`) — Unifies request body prep, endpoint selection, response processing, and error handling across all route handlers.
-- **TranslationPolicy** (`src/translator/anthropic/translation-policy.ts`) — Tracks exact vs lossy vs unsupported behavior; validation rejects unsupported fields with 400 instead of silently dropping them.
-- **ModelResolver** (`src/lib/model-resolver.ts`) — Maps model IDs (e.g. `claude-sonnet-4.6` → actual Copilot model) with configurable fallbacks. Only applies to the chat completions strategy path; native Messages and Responses strategies pass model IDs through as-is.
-- **Global State** (`src/lib/state.ts`) — Cached models list, VS Code version, request counters, config.
+If the route translates between protocols, add an entry to `docs/anthropic-translation-matrix.md` so coverage stays auditable.
 
 ## Code Conventions
 
-- **Imports:** ESNext syntax only. Use `~/*` path alias for `src/*`. Prefer index exports (`~/clients`, `~/types`, `~/translator`). Use `import type` when possible.
-- **Style:** `@antfu/eslint-config` flat config. Run `bun run lint --fix` to auto-fix.
+- **Imports:** ESNext only. Use `~/*` path alias for `src/*`. Prefer index exports (`~/clients`, `~/types`, `~/translator`). Use `import type` where possible.
+- **Style:** `@antfu/eslint-config` flat config. `bun run lint --fix` auto-fixes most issues.
 - **Types:** Strict TypeScript. No `any`. No unused locals/parameters. No switch fallthrough. `verbatimModuleSyntax` enabled.
 - **Naming:** `camelCase` for variables/functions, `PascalCase` for types/classes.
 - **Errors:** Explicit error classes in `src/lib/error.ts` (`HTTPError`, `throwInvalidRequestError`). No silent failures.
 - **Logging:** `consola` for human-readable output. For machine-readable output (e.g. `--json`), write clean data directly to stdout.
-- **Testing:** Bun's built-in test runner (`bun:test`). Tests in `tests/*.test.ts`. Use `describe`/`test`/`expect` pattern.
 - **CLI:** `start` must remain an explicit subcommand. No default command.
-- **Complexity:** Favor direct implementation over unnecessary abstractions.
-- **Runtime:** Bun is first-class. Prefer Bun-native APIs unless cross-runtime support is explicitly needed.
+- **Complexity:** Favor direct implementation over unnecessary abstractions. Three similar lines is better than a premature helper.
+- **Scope discipline:** Fix only the issue the change targets. Don't refactor pre-existing duplication or "while you're there" — small, focused diffs review better and revert cleaner.
+- **Runtime APIs:** Bun-native APIs (`Bun.file`, `Bun.serve`, `Bun.sleep`, etc.) are fine in `scripts/` and `tests/`. **Route code under `src/` must work on both Bun and Node** — use Web/Node standard APIs (`fetch`, `Response`, `crypto.subtle`, etc.). The CI smoke test runs the packaged CLI under Node via `@elysiajs/node`.
 
 ## Testing
 
-- **Runner:** Bun built-in (`bun:test`). Place tests in `tests/`, name as `*.test.ts`.
-- **Test helpers** (`tests/helpers.ts`):
-  - Model builders: `buildModel()`, `buildGptModel()`, `buildVisionModel()`, `buildModelsResponse()`
-  - Mock factories: `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()`
-  - State snapshot/restore: `saveStateSnapshot()` / `restoreStateSnapshot()` for test isolation
-  - SSE stream utilities: `parseSse()`, `createStream()`
-  - Default state setup: `setupDefaultTestState()`, `clearConfig()`
-- Tests use typed fixture arrays for parameterized cases.
-- `tests/api-smoke.test.ts` is the publish gate for public schema compatibility.
+See `tests/AGENTS.md` for the test-runner conventions, helper inventory, and fixture patterns.
+
+## Don't / Gotchas
+
+- **`dist/` is build output.** Never hand-edit; `bun run build` regenerates it from `src/`.
+- **`bun run matrix:live` burns real Copilot quota.** Don't run it as a sanity check; use `bun test` or `bun run smoke:packaged` instead.
+- **`shouldUse*()` helpers are legacy.** New feature-flag queries go through `ConfigStore` (`src/state/config-store.ts`). Don't add new `shouldUse*` call sites.
+- **Don't silently drop unsupported fields in translators.** Use `TranslationPolicy` to mark behavior `exact`/`lossy`/`unsupported`; validation returns 400 for `unsupported`. Silent drops mask client bugs and bite later.
+- **Conventional commits.** `fix:`, `feat:`, `docs:`, `chore:`, `refactor:`, `test:`. Squash-merge to `main` preserves the prefix in history.
+- **Don't bypass `simple-git-hooks` with `--no-verify`.** If `lint-staged` complains, fix the lint — don't skip it.
 
 ## Pre-commit Hooks
 
-`simple-git-hooks` runs `lint-staged` which runs `bun run lint --fix` on all staged files.
+`simple-git-hooks` runs `lint-staged`, which runs `bun run lint --fix` on staged files.
+
+## Branch & PR Workflow
+
+- Feature branches with PRs; squash-merge into `main`.
 
 ## Release Automation
 
-- **Tag-triggered release pipeline:** `.github/workflows/release-npm.yml` handles changelog + npm publish.
-- **Version contract:** The workflow validates that `vX.Y.Z` matches `package.json` `version` before publish.
-- **Publishing auth model:** npm Trusted Publishing (GitHub OIDC). No long-lived npm tokens.
-- **Typical release flow:** `bun run release:patch` (or `:minor` / `:major`) to bump, commit, and tag, then `git push && git push --tags`.
-- **Version immutability:** npm does not allow republishing an existing version. Always bump before tagging.
+- **Tag-triggered pipeline:** `.github/workflows/release-npm.yml` handles changelog + npm publish.
+- **Version contract:** Workflow validates `vX.Y.Z` matches `package.json` `version` before publish.
+- **Auth model:** npm Trusted Publishing (GitHub OIDC). No long-lived npm tokens.
+- **Typical flow:** `bun run release:patch` (or `:minor` / `:major`) to bump, commit, and tag → `git push && git push --tags`.
+- **Immutability:** npm rejects republishing an existing version. Always bump before tagging.
 
-## Design Documentation
+## Agent Instruction File Symlink (Windows-safe recipe)
 
-`docs/design/` contains architecture and design documents. When making architectural changes, update the relevant docs to keep them in sync with the code.
+`CLAUDE.md` is a git symlink (mode `120000`) pointing to `AGENTS.md`. The
+same convention applies to every nested directory: any `**/CLAUDE.md` is a
+symlink to the `AGENTS.md` in the **same** directory. See
+`docs/solutions/conventions/agent-instruction-symlink.md` for the rationale
+and the footguns this avoids.
 
-Key references:
-- `docs/solutions/` — documented solutions to past problems, organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
-- `docs/messages-routing-and-translation.md` — Routing logic for `/v1/messages`
-- `docs/anthropic-translation-matrix.md` — Translation coverage between protocols
-- `docs/design/model-routing.md` — Model pipeline design and context upgrade mechanics
-- `docs/design/execution-strategy.md` — Strategy pattern and error handling
-- `docs/design/translation-pipeline.md` — Full translation pipeline architecture
+### Golden rule
 
----
+**Edit `AGENTS.md` only.** Never `Write`/`Edit` `CLAUDE.md` — on Windows
+that replaces the symlink with a regular file and the two files drift again.
 
-This file is tailored for agentic coding agents.
+### Recreating a symlink (if it gets clobbered)
+
+```bash
+# 1. Pick the clobbered path. For nested files, the target is still AGENTS.md
+#    because each CLAUDE.md points to the AGENTS.md in the same directory.
+path=CLAUDE.md              # or tests/CLAUDE.md, docs/foo/CLAUDE.md, etc.
+
+# 2. Write target path as file content (no trailing newline)
+printf 'AGENTS.md' > "$path"
+
+# 3. Create blob WITHOUT trailing newline and register as symlink (mode 120000)
+git update-index --add --cacheinfo \
+  120000,$(printf 'AGENTS.md' | git hash-object -w --stdin),"$path"
+
+# 4. Checkout to materialize the OS-level symlink
+git checkout -- "$path"
+
+# 5. Verify
+git ls-files -s "$path"     # must show mode 120000
+```
+
+Do NOT use `ln -s` (Git Bash on Windows silently makes a copy), `cp`, or
+here-strings (`<<<`) with `git hash-object` (they append `\n` and break the
+target).
+
+### After a fresh clone on Windows
+
+```bash
+git config --local core.symlinks true
+git ls-files -z 'CLAUDE.md' '**/CLAUDE.md' | xargs -0 git checkout --
+git ls-files -s 'CLAUDE.md' '**/CLAUDE.md'   # all must show mode 120000
+```
