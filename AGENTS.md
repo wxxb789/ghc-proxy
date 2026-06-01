@@ -133,21 +133,25 @@ and the footguns this avoids.
 **Edit `AGENTS.md` only.** Never `Write`/`Edit` `CLAUDE.md` — on Windows
 that replaces the symlink with a regular file and the two files drift again.
 
-### Recreating the symlink (if it gets clobbered)
+### Recreating a symlink (if it gets clobbered)
 
 ```bash
-# 1. Write target path as file content (no trailing newline)
-printf 'AGENTS.md' > CLAUDE.md
+# 1. Pick the clobbered path. For nested files, the target is still AGENTS.md
+#    because each CLAUDE.md points to the AGENTS.md in the same directory.
+path=CLAUDE.md              # or tests/CLAUDE.md, docs/foo/CLAUDE.md, etc.
 
-# 2. Create blob WITHOUT trailing newline and register as symlink (mode 120000)
+# 2. Write target path as file content (no trailing newline)
+printf 'AGENTS.md' > "$path"
+
+# 3. Create blob WITHOUT trailing newline and register as symlink (mode 120000)
 git update-index --add --cacheinfo \
-  120000,$(printf 'AGENTS.md' | git hash-object -w --stdin),CLAUDE.md
+  120000,$(printf 'AGENTS.md' | git hash-object -w --stdin),"$path"
 
-# 3. Checkout to materialize the OS-level symlink
-git checkout -- CLAUDE.md
+# 4. Checkout to materialize the OS-level symlink
+git checkout -- "$path"
 
-# 4. Verify
-git ls-files -s CLAUDE.md   # must show mode 120000
+# 5. Verify
+git ls-files -s "$path"     # must show mode 120000
 ```
 
 Do NOT use `ln -s` (Git Bash on Windows silently makes a copy), `cp`, or
@@ -158,5 +162,6 @@ target).
 
 ```bash
 git config --local core.symlinks true
-git checkout -- CLAUDE.md
+git ls-files -z 'CLAUDE.md' '**/CLAUDE.md' | xargs -0 git checkout --
+git ls-files -s 'CLAUDE.md' '**/CLAUDE.md'   # all must show mode 120000
 ```

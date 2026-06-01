@@ -35,16 +35,18 @@ Keep **one** source of truth (`AGENTS.md`) and make `CLAUDE.md` a git
 symlink (mode `120000`) pointing at it. The link is tracked in git as a
 `120000`-mode blob whose content is the target path — every clone gets the
 same link, and on Windows it materializes as a real symlink as long as
-`core.symlinks=true` (the default in recent Git for Windows).
+`core.symlinks=true` is enabled.
 
 **Golden rule**: edit `AGENTS.md` only. Never `Write`/`Edit` `CLAUDE.md` —
 on Windows that replaces the symlink with a regular file and you're back to
 two diverging copies.
 
-The exact Windows-safe recreation recipe lives at the bottom of `AGENTS.md`
-itself (so future agents discover it when reading the file they're allowed
-to edit). This doc focuses on **why** and on the footguns to avoid; the
-recipe is not re-hosted here to prevent drift between the two.
+The exact Windows-safe recreation recipe, including the command to
+rematerialize all tracked `**/CLAUDE.md` symlinks after enabling
+`core.symlinks`, lives at the bottom of `AGENTS.md` itself (so future agents
+discover it when reading the file they're allowed to edit). This doc focuses
+on **why** and on the footguns to avoid; the recipe is not re-hosted here to
+prevent drift between the two.
 
 ### Subfolder scope
 
