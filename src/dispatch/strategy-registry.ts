@@ -5,7 +5,7 @@ import consola from 'consola'
 
 export interface StrategyEntry<TContext = unknown> {
   name: string
-  canHandle: (model: Model | undefined) => boolean
+  canHandle: (model: Model | undefined, ctx?: TContext) => boolean
   execute: (ctx: TContext) => Promise<ExecutionResult>
 }
 
@@ -16,13 +16,13 @@ export class StrategyRegistry<TContext = unknown> {
     this.entries.push(entry)
   }
 
-  select(model: Model | undefined): StrategyEntry<TContext> {
+  select(model: Model | undefined, ctx?: TContext): StrategyEntry<TContext> {
     if (this.entries.length === 0) {
       throw new Error('StrategyRegistry has no registered entries')
     }
 
     for (const entry of this.entries) {
-      if (entry.canHandle(model)) {
+      if (entry.canHandle(model, ctx)) {
         consola.debug(`Strategy selected: ${entry.name} for model: ${model?.id ?? '(unknown)'}`)
         return entry
       }

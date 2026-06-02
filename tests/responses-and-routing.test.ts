@@ -31,6 +31,7 @@ import {
 
 // ── Types unique to this test file ──
 
+type CreateMessages = typeof CopilotClient.prototype.createMessages
 type CreateChatCompletions = typeof CopilotClient.prototype.createChatCompletions
 type CreateResponses = typeof CopilotClient.prototype.createResponses
 type GetResponse = typeof CopilotClient.prototype.getResponse
@@ -2170,24 +2171,81 @@ describe('responses and routing', () => {
     expect(calls[0]?.payload.output_config).toEqual({ effort: 'max' })
   })
 
-  test('/v1/messages native path strips structured output_config fields before upstream', async () => {
+  test('/v1/messages routes structured output_config format through Responses when available', async () => {
     const app = createApp()
-    const calls: Array<CapturedMessagesCall> = []
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.7', { supported_endpoints: ['/v1/messages', '/responses'] })))
+
+    CopilotClient.prototype.createMessages = (() => {
+      throw new Error('native messages should not receive structured output_config.format')
+    }) as CreateMessages
+    CopilotClient.prototype.createResponses = mockResponses({
+      id: 'resp_1',
+      object: 'response',
+      created_at: 1,
+      model: 'claude-opus-4.7',
+      output: [{
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        status: 'completed',
+        content: [{ type: 'output_text', text: '{"title":"native"}', annotations: [] }],
+      }],
+      output_text: '{"title":"native"}',
+      status: 'completed',
+      usage: null,
+      error: null,
+      incomplete_details: null,
+      instructions: null,
+      metadata: null,
+      parallel_tool_calls: true,
+      temperature: null,
+      tool_choice: 'auto',
+      tools: [],
+      top_p: null,
+    }, calls)
+
+    const schema = {
+      type: 'object',
+      properties: { title: { type: 'string' } },
+      required: ['title'],
+      additionalProperties: false,
+    }
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-4.7',
+        max_tokens: 256,
+        output_config: {
+          effort: 'max',
+          format: {
+            type: 'json_schema',
+            schema,
+          },
+        },
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.text).toEqual({
+      format: {
+        type: 'json_schema',
+        name: 'anthropic_output',
+        schema,
+      },
+    })
+    expect(calls[0]?.payload.reasoning?.effort).toBe('xhigh')
+  })
+
+  test('/v1/messages rejects structured output_config format when Responses is unavailable', async () => {
+    const app = createApp()
     modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.7', { supported_endpoints: ['/v1/messages'] })))
 
-    CopilotClient.prototype.createMessages = mockMessages({
-      id: 'msg_1',
-      type: 'message',
-      role: 'assistant',
-      content: [{ type: 'text', text: 'native' }],
-      model: 'claude-opus-4.7',
-      stop_reason: 'end_turn',
-      stop_sequence: null,
-      usage: {
-        input_tokens: 1,
-        output_tokens: 1,
-      },
-    }, calls)
+    CopilotClient.prototype.createMessages = (() => {
+      throw new Error('unsupported structured output should fail before upstream native messages')
+    }) as CreateMessages
 
     const response = await app.handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
@@ -2199,19 +2257,17 @@ describe('responses and routing', () => {
           effort: 'max',
           format: {
             type: 'json_schema',
-            schema: {
-              type: 'object',
-              properties: { title: { type: 'string' } },
-              required: ['title'],
-            },
+            schema: { type: 'object' },
           },
         },
         messages: [{ role: 'user', content: 'hello' }],
       }),
     }))
+    const json = await response.json() as { error?: { code?: string, param?: string } }
 
-    expect(response.status).toBe(200)
-    expect(calls[0]?.payload.output_config).toEqual({ effort: 'max' })
+    expect(response.status).toBe(400)
+    expect(json.error?.code).toBe('unsupported_output_config_format')
+    expect(json.error?.param).toBe('output_config.format')
   })
   test('/v1/messages native path drops nullable output_config effort before upstream', async () => {
     const app = createApp()
@@ -2725,6 +2781,34 @@ describe('responses translation policy', () => {
     expect(translated.reasoning).toBeUndefined()
   })
 
+  test('maps Anthropic structured output_config format to Responses text format', () => {
+    const schema = {
+      type: 'object',
+      properties: { answer: { type: 'string' } },
+      required: ['answer'],
+    }
+    const translated = translateAnthropicToResponsesPayload({
+      model: 'gpt-5',
+      max_tokens: 256,
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema,
+          strict: true,
+        },
+      },
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+
+    expect(translated.text).toEqual({
+      format: {
+        type: 'json_schema',
+        name: 'anthropic_output',
+        schema,
+        strict: true,
+      },
+    })
+  })
   test('rejects Anthropic fields that cannot be preserved on the Responses path', () => {
     expect(() =>
       translateAnthropicToResponsesPayload({

@@ -66,6 +66,7 @@ export function translateAnthropicToResponsesPayload(
 
   const { safetyIdentifier, promptCacheKey } = parseUserId(payload.metadata?.user_id)
   const reasoning = resolveResponsesReasoningConfig(payload, options)
+  const text = resolveResponsesTextConfig(payload)
 
   return {
     model: payload.model,
@@ -82,6 +83,7 @@ export function translateAnthropicToResponsesPayload(
     stream: payload.stream ?? null,
     store: false,
     parallel_tool_calls: true,
+    ...(text ? { text } : {}),
     ...(reasoning
       ? {
           reasoning,
@@ -503,6 +505,27 @@ function resolveResponsesReasoningConfig(
   }
 }
 
+function resolveResponsesTextConfig(
+  payload: AnthropicMessagesPayload,
+): ResponsesPayload['text'] | undefined {
+  const format = payload.output_config?.format
+  if (!format) {
+    return undefined
+  }
+
+  switch (format.type) {
+    case 'json_schema':
+      return {
+        format: {
+          type: 'json_schema',
+          name: format.name ?? 'anthropic_output',
+          schema: format.schema,
+          ...(format.description !== undefined ? { description: format.description } : {}),
+          ...(format.strict !== undefined ? { strict: format.strict } : {}),
+        },
+      }
+  }
+}
 function resolveResponsesReasoningEffort(
   payload: AnthropicMessagesPayload,
   options?: AnthropicToResponsesOptions,

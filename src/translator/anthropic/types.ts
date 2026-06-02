@@ -24,6 +24,7 @@ export interface AnthropicMessagesPayload {
     | { type: 'adaptive' }
   output_config?: {
     effort?: 'low' | 'medium' | 'high' | 'max' | 'xhigh' | null
+    format?: AnthropicOutputFormat
   }
   service_tier?: 'auto' | 'standard_only'
 }
@@ -34,6 +35,16 @@ export type AnthropicCountTokensPayload = Omit<
 > & {
   max_tokens?: number
 }
+
+export interface AnthropicJsonSchemaOutputFormat {
+  type: 'json_schema'
+  schema: Record<string, unknown>
+  name?: string
+  description?: string | null
+  strict?: boolean
+}
+
+export type AnthropicOutputFormat = AnthropicJsonSchemaOutputFormat
 
 export interface AnthropicTextBlock {
   type: 'text'

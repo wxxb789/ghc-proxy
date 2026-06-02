@@ -11,6 +11,7 @@ export { modelPolicyStep } from './policy'
 export { rewriteStep } from './rewrite'
 export {
   filterThinkingBlocksForNativeMessages,
+  hasOutputConfigFormat,
   normalizeOutputConfigEffort,
   sanitizeCacheControl,
   sanitizeOutputConfig,

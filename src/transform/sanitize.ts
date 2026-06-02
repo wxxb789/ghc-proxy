@@ -58,6 +58,9 @@ export function normalizeOutputConfigEffort(
   })
 }
 
+export function hasOutputConfigFormat(payload: AnthropicMessagesPayload | undefined): boolean {
+  return payload?.output_config?.format != null
+}
 export function sanitizeOutputConfig(
   payload: AnthropicMessagesPayload,
   model: Model | undefined,
