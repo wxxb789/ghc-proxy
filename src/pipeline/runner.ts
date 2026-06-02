@@ -131,7 +131,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
           modelMapping: currentMapping,
         })
 
-        const entry = config.strategyRegistry.select(currentModel)
+        const entry = config.strategyRegistry.select(currentModel, ctx)
         const entryResult = await entry.execute(ctx)
 
         if (isRetry) {
@@ -145,7 +145,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   }
 
   const ctx = buildCtx()
-  const entry = config.strategyRegistry.select(selectedModel)
+  const entry = config.strategyRegistry.select(selectedModel, ctx)
   const result = await entry.execute(ctx)
 
   return { result, modelMapping }

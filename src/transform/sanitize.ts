@@ -58,6 +58,9 @@ export function normalizeOutputConfigEffort(
   })
 }
 
+export function hasOutputConfigFormat(payload: AnthropicMessagesPayload | undefined): boolean {
+  return payload?.output_config?.format != null
+}
 export function sanitizeOutputConfig(
   payload: AnthropicMessagesPayload,
   model: Model | undefined,
@@ -73,16 +76,12 @@ export function sanitizeOutputConfig(
 
   const effort = payload.output_config.effort
   if (effort == null) {
-    delete payload.output_config.effort
-    if (Object.keys(payload.output_config).length === 0) {
-      delete payload.output_config
-    }
+    delete payload.output_config
     return
   }
 
-  const normalizedEffort = normalizeOutputConfigEffort(effort, model)
-  if (normalizedEffort) {
-    payload.output_config.effort = normalizedEffort
+  payload.output_config = {
+    effort: normalizeOutputConfigEffort(effort, model) ?? effort,
   }
 }
 

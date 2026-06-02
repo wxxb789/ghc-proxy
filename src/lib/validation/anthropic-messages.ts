@@ -148,9 +148,18 @@ const anthropicAssistantMessageSchema = z.object({
   ]),
 }).loose()
 
+const anthropicSystemMessageSchema = z.object({
+  role: z.literal('system'),
+  content: z.union([
+    z.string(),
+    z.array(anthropicTextBlockSchema),
+  ]),
+}).loose()
+
 const anthropicMessageSchema = z.union([
   anthropicUserMessageSchema,
   anthropicAssistantMessageSchema,
+  anthropicSystemMessageSchema,
 ])
 
 const anthropicToolSchema = z.object({
@@ -188,9 +197,18 @@ const anthropicThinkingSchema = z.union([
   }).loose(),
 ])
 
+const anthropicOutputFormatSchema = z.object({
+  type: z.literal('json_schema'),
+  schema: jsonObjectSchema,
+  name: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  strict: z.boolean().optional(),
+}).strict()
+
 const anthropicOutputConfigSchema = z.object({
   effort: z.enum(['low', 'medium', 'high', 'max', 'xhigh']).nullable().optional(),
-}).loose()
+  format: anthropicOutputFormatSchema.optional(),
+}).strict()
 
 const anthropicMessagesBasePayloadSchema = z.object({
   model: z.string().min(1),

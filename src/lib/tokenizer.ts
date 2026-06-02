@@ -1,4 +1,4 @@
-import type { AnthropicAssistantContentBlock, AnthropicMessagesPayload, AnthropicUserContentBlock } from '~/translator'
+import type { AnthropicAssistantContentBlock, AnthropicMessagesPayload, AnthropicSystemContentBlock, AnthropicUserContentBlock } from '~/translator'
 import type {
   ChatCompletionsPayload,
   ContentPart,
@@ -360,7 +360,7 @@ export function estimateAnthropicInputTokens(payload: AnthropicMessagesPayload):
 }
 
 function estimateContentBlockChars(
-  blocks: Array<AnthropicUserContentBlock | AnthropicAssistantContentBlock>,
+  blocks: Array<AnthropicUserContentBlock | AnthropicAssistantContentBlock | AnthropicSystemContentBlock>,
 ): number {
   let chars = 0
   for (const block of blocks) {

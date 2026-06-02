@@ -23,6 +23,8 @@ export type {
   AnthropicServerToolUseBlock,
   AnthropicStreamEventData,
   AnthropicStreamState,
+  AnthropicSystemContentBlock,
+  AnthropicSystemMessage,
   AnthropicTextBlock,
   AnthropicThinkingBlock,
   AnthropicTool,

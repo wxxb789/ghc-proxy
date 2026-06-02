@@ -11,6 +11,7 @@ import type {
   AnthropicSearchResultBlock,
   AnthropicServerToolResultBlock,
   AnthropicServerToolUseBlock,
+  AnthropicSystemMessage,
   AnthropicTextBlock,
   AnthropicThinkingBlock,
   AnthropicTool,
@@ -65,6 +66,7 @@ export function translateAnthropicToResponsesPayload(
 
   const { safetyIdentifier, promptCacheKey } = parseUserId(payload.metadata?.user_id)
   const reasoning = resolveResponsesReasoningConfig(payload, options)
+  const text = resolveResponsesTextConfig(payload)
 
   return {
     model: payload.model,
@@ -81,6 +83,7 @@ export function translateAnthropicToResponsesPayload(
     stream: payload.stream ?? null,
     store: false,
     parallel_tool_calls: true,
+    ...(text ? { text } : {}),
     ...(reasoning
       ? {
           reasoning,
@@ -101,10 +104,27 @@ export function decodeCompactionCarrierSignature(
 }
 
 function translateMessage(message: AnthropicMessage): Array<ResponseInputItem> {
-  if (message.role === 'user') {
-    return translateUserMessage(message)
+  switch (message.role) {
+    case 'user':
+      return translateUserMessage(message)
+    case 'assistant':
+      return translateAssistantMessage(message)
+    case 'system':
+      return translateSystemMessage(message)
   }
-  return translateAssistantMessage(message)
+}
+
+function translateSystemMessage(
+  message: AnthropicSystemMessage,
+): Array<ResponseInputItem> {
+  if (typeof message.content === 'string') {
+    return [createMessage('system', message.content)]
+  }
+  if (!Array.isArray(message.content)) {
+    return []
+  }
+
+  return [createMessage('system', message.content.map(block => createTextContent(block.text)))]
 }
 
 function translateUserMessage(
@@ -485,6 +505,27 @@ function resolveResponsesReasoningConfig(
   }
 }
 
+function resolveResponsesTextConfig(
+  payload: AnthropicMessagesPayload,
+): ResponsesPayload['text'] | undefined {
+  const format = payload.output_config?.format
+  if (!format) {
+    return undefined
+  }
+
+  switch (format.type) {
+    case 'json_schema':
+      return {
+        format: {
+          type: 'json_schema',
+          name: format.name ?? 'anthropic_output',
+          schema: format.schema,
+          ...(format.description !== undefined ? { description: format.description } : {}),
+          ...(format.strict !== undefined ? { strict: format.strict } : {}),
+        },
+      }
+  }
+}
 function resolveResponsesReasoningEffort(
   payload: AnthropicMessagesPayload,
   options?: AnthropicToResponsesOptions,

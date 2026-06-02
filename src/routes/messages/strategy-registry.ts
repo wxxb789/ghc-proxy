@@ -9,11 +9,11 @@ import type { Model } from '~/types'
 import consola from 'consola'
 import { CopilotTransport } from '~/adapters'
 import { StrategyRegistry } from '~/dispatch'
-import { withTranslationErrors } from '~/lib/error'
+import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
 import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
 import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
-import { filterThinkingBlocksForNativeMessages, sanitizeCacheControl, sanitizeOutputConfig } from '~/transform/sanitize'
+import { filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeOutputConfig } from '~/transform/sanitize'
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '../responses/context-management'
@@ -35,7 +35,8 @@ export interface StrategyContext {
 
 const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
   name: 'native-messages',
-  canHandle: model => modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT),
+  canHandle: (model, ctx) => modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
+    && !hasOutputConfigFormat(ctx?.anthropicPayload),
   async execute(ctx) {
     filterThinkingBlocksForNativeMessages(ctx.anthropicPayload)
     sanitizeOutputConfig(ctx.anthropicPayload, ctx.selectedModel)
@@ -89,6 +90,14 @@ const chatCompletionsEntry: StrategyEntry<StrategyContext> = {
   name: 'chat-completions',
   canHandle: () => true,
   async execute(ctx) {
+    if (hasOutputConfigFormat(ctx.anthropicPayload)) {
+      throwInvalidRequestError(
+        'Anthropic output_config.format requires a model with Responses endpoint support.',
+        'output_config.format',
+        'unsupported_output_config_format',
+      )
+    }
+
     const adapter = createAnthropicAdapter()
     const plan = withTranslationErrors(() =>
       adapter.toCapiPlan(ctx.anthropicPayload, {

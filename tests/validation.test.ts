@@ -197,6 +197,61 @@ describe('Anthropic payload validation', () => {
     expect(payload.output_config?.effort).toBeNull()
   })
 
+  test('accepts structured output_config format values', () => {
+    const schema = {
+      type: 'object',
+      properties: { title: { type: 'string' } },
+      required: ['title'],
+    }
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-opus-4-8',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Hello!' }],
+      output_config: {
+        effort: 'max',
+        format: {
+          type: 'json_schema',
+          schema,
+        },
+      },
+    })
+
+    expect(payload.output_config?.format).toEqual({
+      type: 'json_schema',
+      schema,
+    })
+  })
+
+  test('rejects unsupported output_config fields explicitly', () => {
+    expect(() =>
+      parseAnthropicMessagesPayload({
+        model: 'claude-opus-4-8',
+        max_tokens: 16,
+        messages: [{ role: 'user', content: 'Hello!' }],
+        output_config: {
+          effort: 'max',
+          unsupported: true,
+        },
+      }),
+    ).toThrow('Invalid request payload')
+  })
+  test('accepts mid-conversation system messages', () => {
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-opus-4-8',
+      max_tokens: 16,
+      messages: [
+        { role: 'user', content: 'Hello!' },
+        { role: 'system', content: [{ type: 'text', text: 'Follow repository conventions.' }] },
+        { role: 'user', content: 'Continue.' },
+      ],
+    })
+
+    expect(payload.messages[1]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'Follow repository conventions.' }],
+    })
+  })
+
   test('tool_choice.tool requires a declared tool name', () => {
     expect(() =>
       parseAnthropicMessagesPayload({

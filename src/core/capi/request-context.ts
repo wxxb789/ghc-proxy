@@ -141,15 +141,9 @@ function stripSubagentMarkerFromAnthropicPayload(
     marker ??= result.marker
   }
   else if (Array.isArray(payload.system)) {
-    payload.system = payload.system
-      .map((block) => {
-        const result = stripSubagentMarkerFromText(block.text)
-        marker ??= result.marker
-        return result.text
-          ? { ...block, text: result.text }
-          : undefined
-      })
-      .filter((block): block is AnthropicTextBlock => block !== undefined)
+    const result = stripSubagentMarkerFromTextBlocks(payload.system)
+    payload.system = result.blocks
+    marker ??= result.marker
 
     if (payload.system.length === 0) {
       payload.system = undefined
@@ -204,6 +198,17 @@ function sanitizeAnthropicMessage(
     }
   }
 
+  if (message.role === 'system') {
+    const result = stripSubagentMarkerFromTextBlocks(message.content)
+
+    return {
+      marker: result.marker,
+      message: result.blocks.length > 0
+        ? { ...message, content: result.blocks }
+        : undefined,
+    }
+  }
+
   let marker: SubagentMarkerPayload | undefined
   const content: Array<AnthropicAssistantContentBlock> = message.content
     .map((block) => {
@@ -225,6 +230,23 @@ function sanitizeAnthropicMessage(
       ? { ...message, content }
       : undefined,
   }
+}
+
+function stripSubagentMarkerFromTextBlocks<T extends AnthropicTextBlock>(
+  blocks: Array<T>,
+): { blocks: Array<T>, marker?: SubagentMarkerPayload } {
+  let marker: SubagentMarkerPayload | undefined
+  const strippedBlocks = blocks
+    .map((block) => {
+      const result = stripSubagentMarkerFromText(block.text)
+      marker ??= result.marker
+      return result.text
+        ? { ...block, text: result.text }
+        : undefined
+    })
+    .filter((block): block is T => block !== undefined)
+
+  return { blocks: strippedBlocks, marker }
 }
 
 function stripSubagentMarkerFromChatPayload(

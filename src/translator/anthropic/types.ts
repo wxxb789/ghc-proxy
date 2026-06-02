@@ -24,6 +24,7 @@ export interface AnthropicMessagesPayload {
     | { type: 'adaptive' }
   output_config?: {
     effort?: 'low' | 'medium' | 'high' | 'max' | 'xhigh' | null
+    format?: AnthropicOutputFormat
   }
   service_tier?: 'auto' | 'standard_only'
 }
@@ -34,6 +35,16 @@ export type AnthropicCountTokensPayload = Omit<
 > & {
   max_tokens?: number
 }
+
+export interface AnthropicJsonSchemaOutputFormat {
+  type: 'json_schema'
+  schema: Record<string, unknown>
+  name?: string
+  description?: string | null
+  strict?: boolean
+}
+
+export type AnthropicOutputFormat = AnthropicJsonSchemaOutputFormat
 
 export interface AnthropicTextBlock {
   type: 'text'
@@ -140,6 +151,8 @@ export type AnthropicUserContentBlock
     | AnthropicServerToolResultBlock
     | AnthropicMcpToolResultBlock
 
+export type AnthropicSystemContentBlock = AnthropicTextBlock
+
 export type AnthropicAssistantContentBlock
   = | AnthropicTextBlock
     | AnthropicToolUseBlock
@@ -160,7 +173,12 @@ export interface AnthropicAssistantMessage {
   content: string | Array<AnthropicAssistantContentBlock>
 }
 
-export type AnthropicMessage = AnthropicUserMessage | AnthropicAssistantMessage
+export interface AnthropicSystemMessage {
+  role: 'system'
+  content: string | Array<AnthropicSystemContentBlock>
+}
+
+export type AnthropicMessage = AnthropicUserMessage | AnthropicAssistantMessage | AnthropicSystemMessage
 
 export interface AnthropicTool {
   name: string

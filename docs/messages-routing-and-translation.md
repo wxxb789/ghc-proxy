@@ -10,17 +10,18 @@ Incoming `POST /v1/messages` requests are parsed and validated first. After that
 2. Copilot `POST /responses` through the Anthropic <-> Responses translators
 3. Copilot `POST /chat/completions` through the existing Anthropic adapter pipeline
 
-The order matters. Native passthrough wins when the model exposes it. The Responses path is only used when it is the best available endpoint for that model. The chat-completions adapter remains the fallback path.
+The order matters. Native passthrough wins when the model exposes it, except for payloads with `output_config.format`; those require the Responses translator so schema constraints are not silently dropped. The Responses path is otherwise only used when it is the best available endpoint for that model. The chat-completions adapter remains the fallback path.
 
 ## Native Messages Path
 
 When a model supports Copilot `POST /v1/messages`, the proxy forwards the Anthropic payload with minimal mutation:
 
 - Existing assistant thinking blocks that only contain placeholder or encoded Responses state are filtered before passthrough.
-- `output_config` is stripped for models that reject it (see `MODELS_REJECTING_OUTPUT_CONFIG` in `model-capabilities.ts`). When the selected model advertises `capabilities.supports.reasoning_effort`, unsupported `output_config.effort` values are clamped to the highest advertised effort before forwarding, e.g. `max`/`xhigh` become `high` for models that only support `low`, `medium`, and `high`.
+- `output_config` is stripped for models that reject it (see `MODELS_REJECTING_OUTPUT_CONFIG` in `model-capabilities.ts`). Native forwarding only preserves `output_config.effort`; requests with structured-output `output_config.format` are routed through the Responses strategy when the selected model supports `/responses`, where the schema is translated to `text.format`. If `/responses` is unavailable, the proxy returns `400` instead of silently dropping the schema. When the selected model advertises `capabilities.supports.reasoning_effort`, unsupported `output_config.effort` values are clamped to the highest advertised effort before forwarding, e.g. `max`/`xhigh` become `high` for models that only support `low`, `medium`, and `high`.
 - `cache_control` fields on system blocks, messages, content blocks, and tools are normalized to `{ type: "ephemeral" }` — extra sub-fields like `scope` are stripped because the upstream Copilot API does not yet accept them. This is a temporary workaround; when Copilot supports `scope`, the filter (`sanitizeCacheControl` in `strategy-registry.ts`) should be removed. The `smoke-cache-control` script includes a direct upstream probe that will fail when `scope` becomes accepted, signalling the filter is no longer needed.
 - `search_result` content blocks are forwarded when Copilot accepts the shape. A live upstream probe on April 17, 2026 against `claude-opus-4.6-1m` confirmed that Copilot accepts top-level user `search_result` blocks and pure `tool_result.content[]` arrays of `search_result` blocks. The same probe showed two important native-path sanitizers are still required: top-level `citations` is stripped because Copilot rejects it, and mixed `tool_result.content[]` arrays containing both `search_result` and non-`search_result` blocks are flattened to a single text block because Copilot requires all blocks in that tool result to be `search_result` when any are.
-- All other fields — including `thinking` and any unknown fields allowed by the loose Zod schema — are passed through as-is to the upstream endpoint.
+- Anthropic beta headers that Copilot does not support, such as `context-*` and `mid-conversation-system-*`, are stripped before upstream forwarding. Context betas can still trigger configured context-upgrade routing before they are removed.
+- Other fields, including `thinking`, are passed through as-is to the upstream endpoint unless a documented sanitizer above handles a known Copilot incompatibility.
 
 Run `bun run scripts/probe-messages-search-results.ts --json` to refresh the current Copilot `search_result` support snapshot.
 
@@ -51,6 +52,7 @@ When a model supports `/responses` but not native `/v1/messages`, the proxy tran
 | `thinking: disabled` | Maps to `reasoning.effort = none` | Preserves explicit disable intent. |
 | `thinking: adaptive` with no explicit effort | Maps to `reasoning.effort = medium` | Conservative default for a request that asked for adaptive reasoning but did not fix an effort. |
 | `output_config.effort` | Maps to Responses reasoning effort | Preserves explicit caller intent. |
+| `output_config.format` | Maps JSON Schema structured output to Responses `text.format` | Preserves schema-constrained output when native `/v1/messages` cannot safely carry the field. |
 | `apply_patch` custom tool | Optional shim to function tool | Controlled by `useFunctionApplyPatch`. |
 | Responses context compaction | Optional policy | Disabled by default. Requires `responsesApiAutoContextManagement: true` and a model match in `responsesApiContextManagementModels`. |
 
