@@ -41,6 +41,10 @@ export function sanitizeNativeMessagesPayloadForCopilot(
         }
       }
 
+      if (message.role === 'system') {
+        return message
+      }
+
       return {
         ...message,
         content: message.content.map(sanitizeAssistantContentBlock),

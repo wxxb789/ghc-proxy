@@ -197,6 +197,23 @@ describe('Anthropic payload validation', () => {
     expect(payload.output_config?.effort).toBeNull()
   })
 
+  test('accepts mid-conversation system messages', () => {
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-opus-4-8',
+      max_tokens: 16,
+      messages: [
+        { role: 'user', content: 'Hello!' },
+        { role: 'system', content: [{ type: 'text', text: 'Follow repository conventions.' }] },
+        { role: 'user', content: 'Continue.' },
+      ],
+    })
+
+    expect(payload.messages[1]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'Follow repository conventions.' }],
+    })
+  })
+
   test('tool_choice.tool requires a declared tool name', () => {
     expect(() =>
       parseAnthropicMessagesPayload({

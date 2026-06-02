@@ -6,6 +6,7 @@ import type {
   AnthropicCountTokensPayload,
   AnthropicMessage,
   AnthropicMessagesPayload,
+  AnthropicSystemContentBlock,
   AnthropicTextBlock,
   AnthropicUserContentBlock,
 } from '~/translator'
@@ -195,6 +196,26 @@ function sanitizeAnthropicMessage(
           : undefined
       })
       .filter((block): block is AnthropicUserContentBlock => block !== undefined)
+
+    return {
+      marker,
+      message: content.length > 0
+        ? { ...message, content }
+        : undefined,
+    }
+  }
+
+  if (message.role === 'system') {
+    let marker: SubagentMarkerPayload | undefined
+    const content: Array<AnthropicSystemContentBlock> = message.content
+      .map((block) => {
+        const result = stripSubagentMarkerFromText(block.text)
+        marker ??= result.marker
+        return result.text
+          ? { ...block, text: result.text }
+          : undefined
+      })
+      .filter((block): block is AnthropicSystemContentBlock => block !== undefined)
 
     return {
       marker,

@@ -140,6 +140,8 @@ export type AnthropicUserContentBlock
     | AnthropicServerToolResultBlock
     | AnthropicMcpToolResultBlock
 
+export type AnthropicSystemContentBlock = AnthropicTextBlock
+
 export type AnthropicAssistantContentBlock
   = | AnthropicTextBlock
     | AnthropicToolUseBlock
@@ -160,7 +162,12 @@ export interface AnthropicAssistantMessage {
   content: string | Array<AnthropicAssistantContentBlock>
 }
 
-export type AnthropicMessage = AnthropicUserMessage | AnthropicAssistantMessage
+export interface AnthropicSystemMessage {
+  role: 'system'
+  content: string | Array<AnthropicSystemContentBlock>
+}
+
+export type AnthropicMessage = AnthropicUserMessage | AnthropicAssistantMessage | AnthropicSystemMessage
 
 export interface AnthropicTool {
   name: string

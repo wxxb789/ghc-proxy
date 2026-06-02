@@ -21,6 +21,44 @@ describe('Anthropic to OpenAI fixture matrix', () => {
   }
 })
 
+describe('Anthropic mid-conversation system messages', () => {
+  test('fallback translator preserves system turns', () => {
+    const translator = new AnthropicTranslator()
+    const result = translator.toOpenAI({
+      model: 'claude-opus-4.8',
+      max_tokens: 100,
+      messages: [
+        { role: 'user', content: 'Hello' },
+        { role: 'system', content: [{ type: 'text', text: 'Prefer concise replies.' }] },
+        { role: 'user', content: 'Continue' },
+      ],
+    })
+
+    expect(result.messages[1]).toMatchObject({
+      role: 'system',
+      content: 'Prefer concise replies.',
+    })
+  })
+
+  test('responses translator preserves system turns in input order', () => {
+    const result = translateAnthropicToResponsesPayload({
+      model: 'gpt-5',
+      max_tokens: 100,
+      messages: [
+        { role: 'user', content: 'Hello' },
+        { role: 'system', content: 'Prefer concise replies.' },
+        { role: 'user', content: 'Continue' },
+      ],
+    })
+
+    expect(result.input).toEqual([
+      { type: 'message', role: 'user', content: 'Hello' },
+      { type: 'message', role: 'system', content: 'Prefer concise replies.' },
+      { type: 'message', role: 'user', content: 'Continue' },
+    ])
+  })
+})
+
 describe('Anthropic extended content blocks', () => {
   test('fallback translator tolerates redacted thinking, server tools, MCP results, and documents', () => {
     const translator = new AnthropicTranslator()

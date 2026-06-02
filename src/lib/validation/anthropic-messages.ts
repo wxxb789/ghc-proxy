@@ -148,9 +148,18 @@ const anthropicAssistantMessageSchema = z.object({
   ]),
 }).loose()
 
+const anthropicSystemMessageSchema = z.object({
+  role: z.literal('system'),
+  content: z.union([
+    z.string(),
+    z.array(anthropicTextBlockSchema),
+  ]),
+}).loose()
+
 const anthropicMessageSchema = z.union([
   anthropicUserMessageSchema,
   anthropicAssistantMessageSchema,
+  anthropicSystemMessageSchema,
 ])
 
 const anthropicToolSchema = z.object({

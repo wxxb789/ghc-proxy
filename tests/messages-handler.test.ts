@@ -66,6 +66,14 @@ describe('processAnthropicBetaHeader', () => {
     expect(result.header).toBe('max-tokens-3-5-sonnet-2024-07-15')
     expect(result.upgradeTarget).toBe('claude-opus-4.6-1m')
   })
+  test('strips mid-conversation system beta before forwarding to Copilot', () => {
+    const result = processAnthropicBetaHeader(
+      'mid-conversation-system-2026-04-07,max-tokens-3-5-sonnet-2024-07-15',
+      'claude-opus-4.7',
+    )
+    expect(result.header).toBe('max-tokens-3-5-sonnet-2024-07-15')
+    expect(result.upgradeTarget).toBeUndefined()
+  })
 
   test('returns undefined header when no betas provided', () => {
     const result = processAnthropicBetaHeader(null, 'claude-opus-4.6')

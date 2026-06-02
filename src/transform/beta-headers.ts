@@ -4,6 +4,8 @@ import { getContextUpgradeTarget } from '~/lib/model-rewrite'
 import { configStore, modelCache } from '~/state'
 import { CONTEXT_BETA_RE } from './constants'
 
+const COPILOT_UNSUPPORTED_BETA_RE = /^mid-conversation-system-\d{4}-\d{2}-\d{2}$/
+
 export interface BetaHeaderResult {
   header: string | undefined
   upgradeTarget: string | undefined
@@ -30,6 +32,9 @@ export function processAnthropicBetaHeader(
           upgradeTarget = target
         }
       }
+      continue
+    }
+    if (COPILOT_UNSUPPORTED_BETA_RE.test(value)) {
       continue
     }
     filtered.push(value)

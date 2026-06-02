@@ -11,6 +11,7 @@ import type {
   AnthropicSearchResultBlock,
   AnthropicServerToolResultBlock,
   AnthropicServerToolUseBlock,
+  AnthropicSystemMessage,
   AnthropicTextBlock,
   AnthropicThinkingBlock,
   AnthropicTool,
@@ -101,10 +102,27 @@ export function decodeCompactionCarrierSignature(
 }
 
 function translateMessage(message: AnthropicMessage): Array<ResponseInputItem> {
-  if (message.role === 'user') {
-    return translateUserMessage(message)
+  switch (message.role) {
+    case 'user':
+      return translateUserMessage(message)
+    case 'assistant':
+      return translateAssistantMessage(message)
+    case 'system':
+      return translateSystemMessage(message)
   }
-  return translateAssistantMessage(message)
+}
+
+function translateSystemMessage(
+  message: AnthropicSystemMessage,
+): Array<ResponseInputItem> {
+  if (typeof message.content === 'string') {
+    return [createMessage('system', message.content)]
+  }
+  if (!Array.isArray(message.content)) {
+    return []
+  }
+
+  return [createMessage('system', message.content.map(block => createTextContent(block.text)))]
 }
 
 function translateUserMessage(
