@@ -10,6 +10,7 @@ import { isAsyncIterable } from '~/lib/async-iterable'
 import { HTTPError } from '~/lib/error'
 import { passthroughSSEChunk } from '~/lib/execution-strategy'
 import { PATHS } from '~/lib/paths'
+import { runtimeStore } from '~/state'
 
 interface StreamIdState {
   responseId?: string
@@ -97,7 +98,7 @@ export function createResponsesPassthroughStrategy(
         return await copilotClient.createResponses(payload, options) as ResponsesResult | AsyncIterable<SSEStreamChunk>
       }
       catch (error) {
-        if (error instanceof HTTPError && error.status === 400) {
+        if (runtimeStore.dumpFailedPayloads && error instanceof HTTPError && error.status === 400) {
           dumpFailedPayload(payload, error).catch(() => {})
         }
         throw error
@@ -173,27 +174,27 @@ function tryExtractTerminalResponse(rawData: string): ResponsesResult | undefine
   return undefined
 }
 
-const DUMP_DIR = join(PATHS.APP_DIR, 'dumps')
 const MAX_DUMPS = 20
 const TIMESTAMP_CHARS_RE = /[:.]/g
 const DUMP_FILE_RE = /^\d{3}-/
 
 async function dumpFailedPayload(payload: unknown, error: HTTPError): Promise<void> {
   try {
-    await mkdir(DUMP_DIR, { recursive: true })
+    const dumpDir = join(PATHS.APP_DIR, 'dumps')
+    await mkdir(dumpDir, { recursive: true, mode: 0o700 })
     const now = new Date().toISOString()
     const ts = now.replace(TIMESTAMP_CHARS_RE, '-')
-    const file = join(DUMP_DIR, `${error.status}-${ts}.json`)
+    const file = join(dumpDir, `${error.status}-${ts}.json`)
     await writeFile(file, JSON.stringify({
       timestamp: now,
       error: { status: error.status, message: error.message },
       payload,
-    }, null, 2))
+    }, null, 2), { mode: 0o600 })
     consola.warn(`Dumped failed /responses payload → ${file}`)
-    const files = await readdir(DUMP_DIR)
+    const files = await readdir(dumpDir)
     const dumps = files.filter(f => DUMP_FILE_RE.test(f) && f.endsWith('.json')).sort()
     if (dumps.length > MAX_DUMPS) {
-      await Promise.all(dumps.slice(0, dumps.length - MAX_DUMPS).map(f => unlink(join(DUMP_DIR, f)).catch(() => {})))
+      await Promise.all(dumps.slice(0, dumps.length - MAX_DUMPS).map(f => unlink(join(dumpDir, f)).catch(() => {})))
     }
   }
   catch {

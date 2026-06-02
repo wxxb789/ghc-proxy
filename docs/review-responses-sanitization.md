@@ -19,17 +19,6 @@ These commits add input sanitization to `/v1/responses` to prevent 404/400 error
 
 **Files:** `src/routes/responses/handler.ts:217-225`
 
-### [high] 400-debug dumps persist raw prompts without safeguards
-
-`dumpFailedPayload()` writes the full `ResponsesPayload` (prompt text, metadata, image URLs, inline file data) to `$APP_DIR/dumps/` on every upstream 400. No redaction, no restrictive permissions (`0600`), not gated behind a debug flag.
-
-**Options:**
-1. Gate behind explicit debug config flag (e.g. `dumpFailedPayloads: true`)
-2. Redact/truncate sensitive fields before writing
-3. Apply `0600` permissions to dump directory and files (like `config.json`)
-4. All of the above
-
-**Files:** `src/routes/responses/strategy.ts:178-199`
 
 ### [medium] Emulator persists pre-sanitized history
 
@@ -41,6 +30,11 @@ These commits add input sanitization to `/v1/responses` to prevent 404/400 error
 **Fix:** Sanitize `effectiveInputItems` before persisting, or persist the post-policy `effectivePayload.input` instead. Add regression tests for `input_items`/`input_tokens` after stripping.
 
 **Files:** `src/routes/responses/emulator.ts:72-121`, `src/routes/responses/handler.ts:43-53`
+
+## Completed (issue #20 fix)
+
+- Failed `/responses` payload dumps are disabled by default and require `--dump-failed-payloads` / `-D` or `DUMP_FAILED_PAYLOADS=1`.
+- Dump directory and dump files request restrictive permissions where supported.
 
 ## Completed (refactor commit 1397d5d)
 

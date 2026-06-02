@@ -5,7 +5,7 @@ import process from 'node:process'
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
-import { authStore, modelCache } from '~/state'
+import { authStore, modelCache, runtimeStore } from '~/state'
 import { getCachedConfig, readConfig } from './lib/config'
 import { normalizeGheDomain } from './lib/ghe-domain'
 import { ensurePaths } from './lib/paths'
@@ -34,6 +34,7 @@ interface RunServerOptions {
   upstreamQueueBaseDelaySeconds?: number
   upstreamQueueMaxDelaySeconds?: number
   gheDomain?: string
+  dumpFailedPayloads: boolean
 }
 
 async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
@@ -119,6 +120,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   authStore.rateLimitWait = options.rateLimitWait
   authStore.showToken = options.showToken
   authStore.upstreamTimeoutSeconds = options.upstreamTimeoutSeconds
+  runtimeStore.dumpFailedPayloads = resolveDumpFailedPayloadsOption(options.dumpFailedPayloads)
 
   await ensurePaths()
   await readConfig()
@@ -195,6 +197,17 @@ function parseIntArg(raw: string | undefined, name: string, fallbackMsg: string)
 
 function secondsToMs(seconds: number | undefined): number | undefined {
   return seconds === undefined ? undefined : seconds * 1000
+}
+
+export function resolveDumpFailedPayloadsOption(
+  cliEnabled: boolean,
+  envValue = process.env.DUMP_FAILED_PAYLOADS,
+): boolean {
+  if (cliEnabled) {
+    return true
+  }
+
+  return envValue === '1' || envValue?.toLowerCase() === 'true'
 }
 
 export const start = defineCommand({
@@ -292,6 +305,12 @@ export const start = defineCommand({
       type: 'string',
       description: 'Company GHE domain for GitHub Enterprise Cloud (e.g. company.ghe.com)',
     },
+    'dump-failed-payloads': {
+      alias: 'D',
+      type: 'boolean',
+      default: false,
+      description: 'Dump failed /responses payloads on upstream 400 errors',
+    },
   },
   run({ args }) {
     const rateLimit = parseIntArg(args['rate-limit'], 'rate-limit', 'Rate limiting disabled.')
@@ -320,6 +339,7 @@ export const start = defineCommand({
       upstreamQueueBaseDelaySeconds,
       upstreamQueueMaxDelaySeconds,
       gheDomain: args['ghe-domain'],
+      dumpFailedPayloads: args['dump-failed-payloads'],
     })
   },
 })

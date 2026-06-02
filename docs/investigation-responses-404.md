@@ -68,7 +68,7 @@ Applied in `src/routes/responses/handler.ts` (`applyResponsesInputPolicies`):
 
 Applied in `src/routes/responses/strategy.ts`:
 
-4. **400 payload dump** — On upstream 400 errors, dump the full request payload to `~/.ghc-proxy/dumps/400-{timestamp}.json` for diagnosis.
+4. **400 payload dump** -- When `--dump-failed-payloads` or `DUMP_FAILED_PAYLOADS=1` is enabled, upstream 400 errors dump the full request payload to `$APP_DIR/dumps/400-{timestamp}.json` for diagnosis. Dumps are disabled by default.
 
 ## Verification
 

@@ -1072,12 +1072,12 @@ describe('responses and routing', () => {
     ])
   })
 
-  test('/v1/responses surfaces upstream 400 errors (triggering payload dump)', async () => {
+  test('/v1/responses surfaces upstream 400 errors without requiring payload dumps', async () => {
     const app = createApp()
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
 
-    // Mock createResponses to throw HTTPError(400) — this exercises the
-    // strategy.ts catch block that calls dumpFailedPayload
+    // Mock createResponses to throw HTTPError(400) so the route still surfaces
+    // the upstream error when failed payload dumps are disabled by default.
     CopilotClient.prototype.createResponses = (() => {
       throw new HTTPError(400, {
         error: { message: 'Invalid request', type: 'invalid_request_error' },
