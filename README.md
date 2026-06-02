@@ -115,6 +115,7 @@ bunx ghc-proxy@latest debug          # Print diagnostic info (version, paths, to
 | `--github-token` | `-g` | -- | Pass a GitHub token directly (from `auth`) |
 | `--claude-code` | `-c` | `false` | Generate a Claude Code launch command |
 | `--show-token` | -- | `false` | Display tokens on auth and refresh |
+| `--dump-failed-payloads` | `-D` | `false` | Dump failed `/responses` payloads on upstream 400 errors for debugging. Can also be enabled with `DUMP_FAILED_PAYLOADS=1`. |
 | `--proxy-env` | -- | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from env (Node.js only; Bun reads proxy env natively) |
 | `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds (`0` disables; Bun max is `255`; streaming routes disable idle timeout automatically) |
 | `--upstream-timeout` | -- | `1800` | Upstream request timeout in seconds (0 to disable) |

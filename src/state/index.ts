@@ -8,3 +8,5 @@ export { MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from './model-cache
 export type { ModelCache } from './model-cache'
 export { rateLimiter } from './rate-limiter'
 export type { RateLimiter } from './rate-limiter'
+export { runtimeStore } from './runtime'
+export type { RuntimeStore } from './runtime'

@@ -10,6 +10,7 @@ The proxy maintains a single `AppState` object:
 interface AppState {
   auth: AuthState // Authentication tokens
   config: RuntimeConfig // Server runtime settings
+  runtime: RuntimeDebugState // Process-local debug flags
   cache: CacheState // Cached upstream data
   rateLimit: RateLimitState // Request throttling state
   responsesEmulator: ResponsesEmulatorState // Optional in-memory Responses emulator state
@@ -45,6 +46,16 @@ interface RuntimeConfig {
   upstreamQueueMaxDelaySeconds?: number // Max retry delay
 }
 ```
+
+### RuntimeDebugState
+
+```typescript
+interface RuntimeDebugState {
+  dumpFailedPayloads: boolean // Enable /responses upstream 400 payload dumps
+}
+```
+
+Process-local debug flags are not persisted to `config.json` and are read only by the code path that needs them.
 
 ### CacheState
 
@@ -95,7 +106,7 @@ configStore.getUpstreamQueueMaxDelaySeconds() // upstreamQueueMaxDelaySeconds
 
 Each method reads from `getCachedConfig()` and applies the appropriate default value. This consolidates 10+ config access patterns into a single, discoverable interface and eliminates the risk of inconsistent default handling across call sites.
 
-## Configuration File (`~/.ghc-proxy/config.json`)
+## Configuration File (`~/.local/share/ghc-proxy/config.json`)
 
 Read once at startup via `getCachedConfig()`:
 
@@ -158,6 +169,7 @@ The `start` command maps CLI flags to RuntimeConfig:
 | `--wait`               | `rateLimitWait`           | `false`        |
 | `--manual-approve`     | `manualApprove`           | `false`        |
 | `--show-token`         | `showToken`               | `false`        |
+| `--dump-failed-payloads` / `-D` | `runtimeStore.dumpFailedPayloads` | `false` |
 | `--upstream-timeout`   | `upstreamTimeoutSeconds`  | (none)         |
 | `--upstream-queue-concurrency` | `upstreamQueueConcurrency` | `10`     |
 | `--upstream-queue-retries` | `upstreamQueueMaxRetries` | `6`       |
@@ -173,17 +185,18 @@ Override configuration values:
 | Variable                          | Overrides                           |
 |-----------------------------------|-------------------------------------|
 | `GITHUB_TOKEN`                   | `config.githubToken`               |
+| `DUMP_FAILED_PAYLOADS`           | `runtimeStore.dumpFailedPayloads`  |
 | `MODEL_FALLBACK_CLAUDE_OPUS`    | `config.modelFallback.claudeOpus`  |
 | `MODEL_FALLBACK_CLAUDE_SONNET`  | `config.modelFallback.claudeSonnet` |
 | `MODEL_FALLBACK_CLAUDE_HAIKU`   | `config.modelFallback.claudeHaiku` |
 
-Priority: CLI argument > Environment variable > Config file > Default value.
+Priority: CLI argument > Environment variable > Config file > Default value. `DUMP_FAILED_PAYLOADS` is a runtime debug flag only and is not persisted to `config.json`.
 
 ## Startup Sequence
 
 ```text
 1. Parse CLI arguments
-2. Read config file (~/.ghc-proxy/config.json)
+2. Read config file (~/.local/share/ghc-proxy/config.json)
 3. Initialize AppState with merged config
 4. Authenticate with GitHub (device code flow or provided token)
 5. Obtain Copilot API token from GitHub token

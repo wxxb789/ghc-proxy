@@ -26,7 +26,7 @@ import { createEmbeddingRoutes } from '~/routes/embeddings/route'
 import { createMessageRoutes } from '~/routes/messages/route'
 import { createModelRoutes } from '~/routes/models/route'
 import { createResponsesRoutes } from '~/routes/responses/route'
-import { authStore, modelCache, rateLimiter, responsesEmulatorState } from '~/state'
+import { authStore, modelCache, rateLimiter, responsesEmulatorState, runtimeStore } from '~/state'
 
 const SSE_BLOCK_SEPARATOR_RE = /\r?\n\r?\n/
 const SSE_LINE_SEPARATOR_RE = /\r?\n/
@@ -314,6 +314,7 @@ export interface StateSnapshot {
   rateLimitWait: typeof authStore.rateLimitWait
   showToken: typeof authStore.showToken
   upstreamTimeoutSeconds: typeof authStore.upstreamTimeoutSeconds
+  dumpFailedPayloads: typeof runtimeStore.dumpFailedPayloads
   models: ReturnType<typeof modelCache.getModels>
   vsCodeVersion: ReturnType<typeof modelCache.getVSCodeVersion>
 }
@@ -330,6 +331,7 @@ export function saveStateSnapshot(): StateSnapshot {
     rateLimitWait: authStore.rateLimitWait,
     showToken: authStore.showToken,
     upstreamTimeoutSeconds: authStore.upstreamTimeoutSeconds,
+    dumpFailedPayloads: runtimeStore.dumpFailedPayloads,
     models: modelCache.getModels(),
     vsCodeVersion: modelCache.getVSCodeVersion(),
   }
@@ -346,6 +348,7 @@ export function restoreStateSnapshot(snapshot: StateSnapshot) {
   authStore.rateLimitWait = snapshot.rateLimitWait
   authStore.showToken = snapshot.showToken
   authStore.upstreamTimeoutSeconds = snapshot.upstreamTimeoutSeconds
+  runtimeStore.dumpFailedPayloads = snapshot.dumpFailedPayloads
   if (snapshot.models !== undefined) {
     modelCache.cacheModels(snapshot.models)
   }
@@ -383,6 +386,7 @@ export function setupDefaultTestState() {
   authStore.manualApprove = false
   authStore.rateLimitSeconds = undefined
   authStore.rateLimitWait = false
+  runtimeStore.dumpFailedPayloads = false
   modelCache.setVSCodeVersion('1.99.0')
   modelCache.cacheModels(buildModelsResponse(buildModel('claude-sonnet-4.5')))
   rateLimiter.reset()

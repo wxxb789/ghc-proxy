@@ -4,7 +4,7 @@ Research into every environment variable referenced in the README, verifying whe
 
 ## Summary
 
-All proxy-side environment variables (`MODEL_FALLBACK_*`, `GH_TOKEN`, `HTTP_PROXY`/`HTTPS_PROXY`) are functional, though some have caveats about scope. One widely-circulated Claude Code variable (`DISABLE_NON_ESSENTIAL_MODEL_CALLS`) turned out to be fake and was removed. Another (`ANTHROPIC_SMALL_FAST_MODEL`) is deprecated and was also removed from the `--claude-code` output.
+All proxy-side environment variables (`MODEL_FALLBACK_*`, `GH_TOKEN`, `DUMP_FAILED_PAYLOADS`, `HTTP_PROXY`/`HTTPS_PROXY`) are functional, though some have caveats about scope. One widely-circulated Claude Code variable (`DISABLE_NON_ESSENTIAL_MODEL_CALLS`) turned out to be fake and was removed. Another (`ANTHROPIC_SMALL_FAST_MODEL`) is deprecated and was also removed from the `--claude-code` output.
 
 ## Proxy-Side Variables
 
@@ -56,6 +56,22 @@ $GH_TOKEN (Docker env)
 The GitHub token is not used directly for Copilot API calls. It is exchanged for a short-lived Copilot token via GitHub's internal API, and that Copilot token is what authenticates all upstream requests.
 
 **Empty string handling:** When `GH_TOKEN` is not set in Docker, `entrypoint.sh` passes `-g ""`. The JavaScript falsy check `if (options.githubToken)` treats empty string as "not provided", so the interactive OAuth device-code flow is triggered instead. This is correct behavior.
+
+### `DUMP_FAILED_PAYLOADS`
+
+**Status:** Functional. Runtime debug opt-in for `/responses` upstream 400 payload dumps.
+
+Accepted truthy values are `1` and case-insensitive `true`. The `start` command's `--dump-failed-payloads` / `-D` flag also enables the same behavior; when neither is set, failed payload dumps are disabled by default.
+
+**Call chain:**
+
+```text
+process.env.DUMP_FAILED_PAYLOADS
+  -> resolveDumpFailedPayloadsOption()        [src/start.ts]
+    -> runtimeStore.dumpFailedPayloads
+      -> createResponsesPassthroughStrategy() [src/routes/responses/strategy.ts]
+        -> dumpFailedPayload() only on upstream HTTP 400
+```
 
 ### `HTTP_PROXY` / `HTTPS_PROXY`
 
