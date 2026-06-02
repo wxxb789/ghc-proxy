@@ -156,5 +156,5 @@ Preserving original selected model metadata prevents a configured internal targe
 
 ## Related Issues
 
-- No existing `docs/solutions/` entries matched this problem.
+- Related solution: `docs/solutions/integration-issues/claude-code-messages-startup-payloads.md` covers a different `/v1/messages` strategy-selection problem around structured-output preservation and beta-header filtering. Overlap is moderate: same routing layer and endpoint family, different root cause and prevention rule.
 - `gh issue list` did not find related GitHub issues for model routing, context upgrade, model rewrites, `/v1/messages`, or beta-header queries.
