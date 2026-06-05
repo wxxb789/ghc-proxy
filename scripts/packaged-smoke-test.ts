@@ -134,7 +134,21 @@ async function main() {
       throw new Error(`Packaged CLI help output did not mention ghc-proxy.\n${helpText}`)
     }
 
-    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}.`)
+    // selfcheck loads every gpt-tokenizer dynamic chunk against the packaged
+    // bundle — this is the only end-to-end check that exercises the
+    // multi-chunk import graph in dist/, catching bundler regressions
+    // (cross-chunk __toESM, lazyBarrel side-effect drops, etc.) that the
+    // help-text check alone cannot.
+    //
+    // Run under BOTH Bun and Node: Bun matches the dev runtime, Node matches
+    // the npm-installed end-user runtime (the package declares engines.node
+    // and the bin is `node`-loadable via the .bin shim). The two ESM
+    // resolvers and dynamic-import code paths differ enough that a rolldown
+    // 1.x regression can pass under one and fail under the other.
+    runSelfcheck('bun', packagedBinPath, installRoot)
+    runSelfcheck('node', packagedBinPath, installRoot)
+
+    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (5 tokenizer chunks loaded under bun + node)`)
   }
   finally {
     if (tarballPath) {
@@ -142,6 +156,57 @@ async function main() {
     }
     await fs.rm(tempDir, { recursive: true, force: true })
   }
+}
+
+interface SelfcheckProbe {
+  encoding: string
+  ok: boolean
+  tokenCount?: number
+  error?: string
+}
+
+interface SelfcheckReport {
+  ok?: boolean
+  probes?: Array<SelfcheckProbe>
+  failedCount?: number
+}
+
+function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: string): void {
+  const result = Bun.spawnSync([runtime, packagedBinPath, 'selfcheck', '--json'], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const stdout = decodeOutput(result.stdout)
+  const stderr = decodeOutput(result.stderr)
+
+  // Parse the JSON FIRST so a structured probe failure produces a clearly
+  // formatted error message. Fall back to the raw exit-code path only when
+  // selfcheck failed before emitting parseable JSON.
+  let report: SelfcheckReport | undefined
+  try {
+    report = JSON.parse(stdout) as SelfcheckReport
+  }
+  catch {
+    // unparseable — handled below
+  }
+
+  if (report) {
+    const failures = (report.probes ?? []).filter(p => !p.ok)
+    if (report.ok && report.failedCount === 0 && failures.length === 0) {
+      return
+    }
+    const detail = failures.length > 0
+      ? failures.map(p => `  - ${p.encoding}: ${p.error ?? 'unknown error'}`).join('\n')
+      : '  (probes array empty or shape unexpected)'
+    throw new Error(
+      `Packaged CLI selfcheck under '${runtime}' reported failures:\n${detail}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+    )
+  }
+
+  throw new Error(
+    `Packaged CLI selfcheck under '${runtime}' produced no parseable JSON (exit ${result.exitCode}).\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+  )
 }
 
 await main()
