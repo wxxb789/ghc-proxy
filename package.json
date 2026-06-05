@@ -21,9 +21,6 @@
   "files": [
     "dist"
   ],
-  "engines": {
-    "node": ">=22.18.0"
-  },
   "scripts": {
     "build": "tsdown",
     "dev": "bun run --watch ./src/main.ts",
