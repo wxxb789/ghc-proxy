@@ -36,6 +36,7 @@ interface ZodIssueLike {
   code?: string
   expected?: unknown
   errors?: unknown
+  issues?: unknown
 }
 
 const MAX_VALIDATION_DETAILS = 200
@@ -63,6 +64,19 @@ function flattenIssue(
     const nested = issue.errors.flatMap(errors =>
       errors.flatMap(error => flattenIssue(error, path)),
     )
+    if (nested.length > 0) {
+      return nested
+    }
+  }
+
+  // zod 4.x emits `invalid_key` (record/map key refinement failure) and
+  // `invalid_element` (set element failure) with the sub-issues hanging
+  // off `.issues`, not `.errors`. Recurse so the inner constraint
+  // (e.g. logit_bias key `^\d+$` regex mismatch) reaches the wire
+  // `details` array instead of being swallowed by the generic outer
+  // "Invalid key in record" message.
+  if ((issue.code === 'invalid_key' || issue.code === 'invalid_element') && isIssueArray(issue.issues)) {
+    const nested = issue.issues.flatMap(inner => flattenIssue(inner, path))
     if (nested.length > 0) {
       return nested
     }
