@@ -127,6 +127,32 @@ describe('OpenAI payload validation', () => {
     ).toThrow('Invalid request payload')
   })
 
+  test('logit_bias key regex mismatch surfaces inner detail (zod invalid_key recursion)', () => {
+    try {
+      parseOpenAIChatPayload({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Hello!' }],
+        logit_bias: { hello: 5 },
+      })
+    }
+    catch (error) {
+      expect(error).toBeInstanceOf(HTTPError)
+      const details = (error as HTTPError).body.error.details ?? []
+      // The inner regex-mismatch detail should reach the wire — not just
+      // the outer generic "Invalid key in record" — so clients know
+      // which constraint (digits-only) they violated.
+      expect(details.some(detail =>
+        Array.isArray(detail.path)
+        && detail.path.includes('logit_bias')
+        && detail.path.includes('hello')
+        && /pattern|regex|\d/.test(detail.message),
+      )).toBe(true)
+      return
+    }
+
+    throw new Error('Expected validation to fail')
+  })
+
   test('tool_choice.function must reference a declared tool', () => {
     expect(() =>
       parseOpenAIChatPayload({
