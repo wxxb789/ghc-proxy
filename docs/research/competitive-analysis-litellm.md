@@ -46,7 +46,7 @@ LiteLLM's model routing relies on global configuration with no per-model automat
 
 ### 6. Complete CLI Experience
 - Interactive Claude Code integration (`-c` flag auto-generates launch commands)
-- `auth`, `debug`, `check-usage` standalone subcommands
+- `auth`, `debug`, `check-usage`, `selfcheck` standalone subcommands
 - Rich runtime options (port, timeout, proxy, manual approval, etc.)
 
 ### 7. Advanced Responses API Support

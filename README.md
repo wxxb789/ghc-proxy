@@ -100,6 +100,7 @@ bunx ghc-proxy@latest start          # Start the proxy server
 bunx ghc-proxy@latest auth           # Run GitHub auth flow without starting the server
 bunx ghc-proxy@latest check-usage    # Show your Copilot usage/quota in the terminal
 bunx ghc-proxy@latest debug          # Print diagnostic info (version, paths, token status)
+bunx ghc-proxy@latest selfcheck      # Probe the packaged bundle (loads every tokenizer chunk; useful for install troubleshooting)
 ```
 
 ### `start` Options

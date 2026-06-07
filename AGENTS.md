@@ -31,8 +31,8 @@ bun test tests/validation.test.ts    # Run a single test file
 bun test tests/api-smoke.test.ts     # Publish gate for public schema compatibility
 bun run start                        # Production server (NODE_ENV=production)
 bun run matrix:live                  # End-to-end Copilot upstream check (uses real quota — do not use as a sanity check)
-bun run smoke:packaged               # Smoke test the packaged CLI
-bun run release:patch                # Bump patch, commit, tag (then git push manually)
+bun run smoke:packaged               # Smoke test the packaged CLI (selfcheck under bun + node)
+bun run release:patch                # Bump patch, commit, tag, and push (bumpp 11 pushes branch + tag automatically)
 ```
 
 **CI pipeline order:** `lint:all → typecheck → test → build → smoke:packaged`
@@ -89,7 +89,7 @@ If the route translates between protocols, add an entry to `docs/anthropic-trans
 - **CLI:** `start` must remain an explicit subcommand. No default command.
 - **Complexity:** Favor direct implementation over unnecessary abstractions. Three similar lines is better than a premature helper.
 - **Scope discipline:** Fix only the issue the change targets. Don't refactor pre-existing duplication or "while you're there" — small, focused diffs review better and revert cleaner.
-- **Runtime APIs:** Bun-native APIs (`Bun.file`, `Bun.serve`, `Bun.sleep`, etc.) are fine in `scripts/` and `tests/`. **Route code under `src/` must work on both Bun and Node** — use Web/Node standard APIs (`fetch`, `Response`, `crypto.subtle`, etc.). The CI smoke test runs the packaged CLI under Node via `@elysiajs/node`.
+- **Runtime APIs:** Bun-native APIs (`Bun.file`, `Bun.serve`, `Bun.sleep`, etc.) are fine in `scripts/` and `tests/`. **Route code under `src/` must work on both Bun and Node** — use Web/Node standard APIs (`fetch`, `Response`, `crypto.subtle`, etc.). The CI smoke test packs the published tarball and runs `ghc-proxy selfcheck` against the bundled CLI under both `bun` and `node`, so Node-only regressions in `dist/main.mjs` are caught at publish time.
 
 ## Testing
 
@@ -117,7 +117,7 @@ See `tests/AGENTS.md` for the test-runner conventions, helper inventory, and fix
 - **Tag-triggered pipeline:** `.github/workflows/release-npm.yml` handles changelog + npm publish.
 - **Version contract:** Workflow validates `vX.Y.Z` matches `package.json` `version` before publish.
 - **Auth model:** npm Trusted Publishing (GitHub OIDC). No long-lived npm tokens.
-- **Typical flow:** `bun run release:patch` (or `:minor` / `:major`) to bump, commit, and tag → `git push && git push --tags`.
+- **Typical flow:** `bun run release:patch` (or `:minor` / `:major`) bumps the version, commits, tags, and pushes branch + tag in one step (bumpp 11 default). The pushed tag triggers `.github/workflows/release-npm.yml`, which validates and publishes.
 - **Immutability:** npm rejects republishing an existing version. Always bump before tagging.
 
 ## Agent Instruction File Symlink (Windows-safe recipe)
