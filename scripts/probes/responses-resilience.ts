@@ -27,7 +27,7 @@ import { modelCache } from '~/state'
 
 import { parseProbeArgs } from '../lib/probe-args'
 import { bootstrapProbe, extractErrorMessage, pickFirstResponsesModel, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'
-import { writeJsonSnapshot } from '../lib/probe-report'
+import { printBanner, writeJsonSnapshot } from '../lib/probe-report'
 
 const REQUEST_TIMEOUT_MS = 60_000
 
@@ -362,9 +362,7 @@ async function main() {
   }
 
   if (!jsonMode) {
-    process.stdout.write('╔══════════════════════════════════════════════════════════════╗\n')
-    process.stdout.write('║    /responses Resilience Probe                              ║\n')
-    process.stdout.write('╚══════════════════════════════════════════════════════════════╝\n\n')
+    printBanner('/responses Resilience Probe')
     process.stdout.write(`Model: ${selectedModel.id}\n`)
     process.stdout.write(`Cases: ${cases.length}\n\n`)
   }

@@ -21,6 +21,7 @@ import { modelCache } from '~/state'
 
 import { parseProbeArgs } from '../lib/probe-args'
 import { bootstrapProbe, classifyCacheStatus, extractErrorMessage, parseAnthropicUsage, pickFirstMessagesModel, probeMessagesEndpoint, runMain } from '../lib/probe-harness'
+import { printBanner } from '../lib/probe-report'
 
 const PORT = 14141
 const BASE_URL = `http://localhost:${PORT}`
@@ -692,12 +693,10 @@ function formatRequestLine(label: string, result: RequestResult): string {
 
 function printReport(results: Array<ModelResult>): void {
   const W = 62
-  const line = '═'.repeat(W)
   const thin = '─'.repeat(W)
 
-  process.stdout.write(`\n╔${line}╗\n`)
-  process.stdout.write(`║${'              Cache Control Smoke Test Report'.padEnd(W)}║\n`)
-  process.stdout.write(`╠${line}╣\n\n`)
+  printBanner('Cache Control Smoke Test Report')
+  process.stdout.write('\n')
 
   const providerLabels: Record<Provider, string> = {
     anthropic: 'Anthropic Models',

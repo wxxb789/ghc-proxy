@@ -8,6 +8,15 @@
 import type { ProbeResult } from './probe-harness'
 
 import process from 'node:process'
+import { box } from 'consola/utils'
+
+/**
+ * Print an auto-sized banner box to stdout using consola's box util, replacing
+ * hand-drawn fixed-width box-drawing headers (no manual title centering).
+ */
+export function printBanner(title: string): void {
+  process.stdout.write(`${box(title)}\n`)
+}
 
 /**
  * Icon for a {@link ProbeResult} status.

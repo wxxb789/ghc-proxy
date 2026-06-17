@@ -22,7 +22,7 @@ import { modelCache } from '~/state'
 
 import { parseProbeArgs } from '../lib/probe-args'
 import { bootstrapProbe, extractErrorMessage, pickMessagesModels, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'
-import { toSortedRecord, writeJsonSnapshot } from '../lib/probe-report'
+import { printBanner, toSortedRecord, writeJsonSnapshot } from '../lib/probe-report'
 
 const REQUEST_TIMEOUT_MS = 60_000
 
@@ -313,9 +313,7 @@ async function main() {
       + responsesModels.length * responsesToolCases.length
 
   if (!jsonMode) {
-    process.stdout.write('╔══════════════════════════════════════════════════════════════╗\n')
-    process.stdout.write('║      Copilot Backend — Tool Support Probe                   ║\n')
-    process.stdout.write('╚══════════════════════════════════════════════════════════════╝\n\n')
+    printBanner('Copilot Backend — Tool Support Probe')
     process.stdout.write(`Models:  ${messagesModels.length} messages, ${responsesModels.length} responses\n`)
     process.stdout.write(`Probes:  ${totalProbes} total\n`)
   }
