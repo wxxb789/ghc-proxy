@@ -25,5 +25,5 @@ Architecture and design documentation for ghc-proxy.
 | [Messages Routing and Translation](../messages-routing-and-translation.md) | Per-model routing decision logic and Responses API compatibility policies |
 | [Responses Stream Compatibility](../responses-stream-compatibility.md) | Streaming identity normalization contract for the `/v1/responses` passthrough path |
 | [Copilot Token Usage](../research/copilot-token-usage.md) | How Copilot returns token usage across all API paths, and local estimation via gpt-tokenizer |
-| [Tool Support Probe](../../scripts/probe-all-copilot-tools.ts) | Tests which server-side tool types each Copilot model accepts (`--json` for diffable snapshots) |
-| [Cache Threshold Probe](../../scripts/probe-cache-threshold.ts) | Tests per-model prompt caching minimum token thresholds |
+| [Tool Support Probe](../../scripts/probes/copilot-tools.ts) | Tests which server-side tool types each Copilot model accepts (`--json` for diffable snapshots) |
+| [Cache Threshold Probe](../../scripts/probes/cache-threshold.ts) | Tests per-model prompt caching minimum token thresholds |

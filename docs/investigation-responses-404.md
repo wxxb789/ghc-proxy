@@ -73,5 +73,5 @@ Applied in `src/routes/responses/strategy.ts`:
 ## Verification
 
 - Unit tests: `responses-and-routing.test.ts` covers all safety net behaviors
-- Live probe: `scripts/probe-responses-resilience.ts` verifies all evidence chains against Copilot upstream
+- Live probe: `scripts/probes/responses-resilience.ts` verifies all evidence chains against Copilot upstream
 - Post-deployment: no further 404 or 400 errors observed

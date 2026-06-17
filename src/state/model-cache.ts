@@ -7,7 +7,7 @@ export const MESSAGES_ENDPOINT = '/v1/messages' as const
  * Models whose upstream `/v1/messages` endpoint rejects the `output_config`
  * field with "Extra inputs are not permitted".
  *
- * Verified via `scripts/probe-all-models-output-config.ts` (2026-03-14).
+ * Verified via `scripts/probes/messages/output-config.ts` (2026-03-14).
  * When new models appear, re-run the probe and update this list.
  */
 const MODELS_REJECTING_OUTPUT_CONFIG = new Set([

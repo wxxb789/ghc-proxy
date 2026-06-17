@@ -33,9 +33,10 @@
     "release:patch": "bumpp patch --yes --commit --tag",
     "release:minor": "bumpp minor --yes --commit --tag",
     "release:major": "bumpp major --yes --commit --tag",
-    "matrix:live": "bun run scripts/live-compat-matrix.ts",
-    "smoke:cache": "bun run scripts/smoke-cache-control.ts",
-    "smoke:packaged": "bun run scripts/packaged-smoke-test.ts",
+    "matrix:live": "bun run scripts/matrix/live-compat-matrix.ts",
+    "smoke:cache": "bun run scripts/smoke/cache-control.ts",
+    "smoke:packaged": "bun run scripts/smoke/packaged-cli.ts",
+    "smoke:translation": "bun run scripts/smoke/translation.ts",
     "start": "NODE_ENV=production bun run ./src/main.ts",
     "typecheck": "npx tsc --project tsconfig.json"
   },

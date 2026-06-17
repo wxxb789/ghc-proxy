@@ -474,9 +474,9 @@ bun run matrix:live --stateful-only --json --model=gpt-5.2-codex
 Tests which server-side tool types (bash, text_editor, web_search, memory, etc.) each Copilot model actually accepts. Useful for tracking backend changes over time.
 
 ```bash
-bun scripts/probe-all-copilot-tools.ts              # human-readable table
-bun scripts/probe-all-copilot-tools.ts --json        # JSON snapshot to stdout
-bun scripts/probe-all-copilot-tools.ts --model=claude-opus-4.6  # single model
+bun scripts/probes/copilot-tools.ts              # human-readable table
+bun scripts/probes/copilot-tools.ts --json        # JSON snapshot to stdout
+bun scripts/probes/copilot-tools.ts --model=claude-opus-4.6  # single model
 ```
 
 The JSON output is designed for weekly diffing — `generatedAt` is the only volatile field:
