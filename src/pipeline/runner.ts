@@ -94,7 +94,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   const upstreamSignal = createUpstreamSignalFromConfig(params.signal)
   const copilotClient = createCopilotClient()
 
-  const buildCtx = () => config.buildStrategyContext({
+  const ctx = config.buildStrategyContext({
     payload,
     meta,
     headers: params.headers,
@@ -103,8 +103,6 @@ export async function runPipeline<TPayload, TStrategyCtx>(
     upstreamSignal,
     modelMapping,
   })
-
-  const ctx = buildCtx()
   const entry = config.strategyRegistry.select(selectedModel, ctx)
   const result = await entry.execute(ctx)
 

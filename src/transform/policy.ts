@@ -17,7 +17,6 @@ export const modelPolicyStep: ModelTransformStep = {
     return {
       model: routing.routedModel,
       tag: 'COMPACT',
-      resolvedModel: undefined,
     }
   },
 }
