@@ -26,7 +26,11 @@ export function filterThinkingBlocksForNativeMessages(
   }
 }
 
-const OUTPUT_CONFIG_EFFORTS = ['low', 'medium', 'high', 'max', 'xhigh'] as const
+// Canonical Anthropic effort ordering: low < medium < high < xhigh < max.
+// `xhigh` (added in Opus 4.7) sits between `high` and `max`. The array index is
+// used as the rank when clamping an unsupported effort down to a model's
+// highest advertised level, so this order must match the upstream ranking.
+const OUTPUT_CONFIG_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 type OutputConfigEffort = typeof OUTPUT_CONFIG_EFFORTS[number]
 
 const OUTPUT_CONFIG_EFFORT_RANK = new Map<OutputConfigEffort, number>(
