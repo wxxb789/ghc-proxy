@@ -66,6 +66,7 @@ For everything beyond this overview — module map, abstractions, strategy detai
 - `docs/messages-routing-and-translation.md` — `/v1/messages` routing logic
 - `docs/anthropic-translation-matrix.md` — translation coverage
 - `docs/solutions/` — documented solutions to past problems (bugs, conventions, patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
+- `CONCEPTS.md` — shared domain vocabulary (proxy boundary, execution strategies, routing terms). Read when orienting to the codebase or before discussing domain concepts.
 
 When making architectural changes, update the relevant design doc in the same change.
 

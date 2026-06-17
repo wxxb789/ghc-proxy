@@ -43,7 +43,7 @@ Newer Claude Code startup probes send Anthropic Messages payloads that exercise 
 - Passing Anthropic beta headers through unchanged did not work because Copilot native Messages does not accept every beta value that the official Anthropic API or SDK can send.
 - Stripping `output_config.format` on the native path avoided the Vertex policy error, but it changed request semantics. A client using JSON Schema structured output could receive ordinary text output while believing schema constraints were still enforced.
 - Letting the request fall back to Chat Completions would have the same semantic-loss problem because that path does not represent Anthropic `output_config.format`.
-- Session history search found no relevant prior sessions for this specific structured-output routing problem. The only prior solution doc in the same area covered context-length model upgrades, not structured-output preservation.
+- Session history search found no relevant prior sessions for this specific structured-output routing problem.
 
 ## Solution
 
@@ -155,5 +155,4 @@ The generated Responses schema name is also intentional. Anthropic's raw `output
 
 ## Related Issues
 
-- Related solution: `docs/solutions/integration-issues/config-driven-context-upgrade-rules-2026-05-21.md` covers a different `/v1/messages` strategy-selection problem around context upgrades. Overlap is moderate: same routing layer and endpoint family, different root cause and prevention rule.
 - `gh issue list --search "output_config structured output responses messages" --state all --limit 5` found no related GitHub issues.
