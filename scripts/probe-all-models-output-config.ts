@@ -4,13 +4,19 @@
  * Probe ALL /v1/messages models for output_config acceptance.
  * Tests whether older models (without adaptive_thinking) reject output_config.
  *
- * Usage: bun run scripts/probe-all-models-output-config.ts
+ * Usage:
+ *   bun run scripts/probe-all-models-output-config.ts
+ *   bun run scripts/probe-all-models-output-config.ts --json
  */
 
 import process from 'node:process'
 import { modelCache } from '~/state'
 
+import { parseProbeArgs } from './lib/probe-args'
 import { bootstrapProbe, pickMessagesModels, probeMessagesEndpoint, runMain } from './lib/probe-harness'
+import { statusIcon, writeJsonSnapshot } from './lib/probe-report'
+
+const { jsonMode } = parseProbeArgs()
 
 function baseBody(modelId: string) {
   return {
@@ -30,26 +36,51 @@ const probes = [
 ] as const
 
 runMain(async () => {
-  await bootstrapProbe()
+  await bootstrapProbe({ silent: jsonMode })
 
   const models = modelCache.getModels()?.data ?? []
   const messagesModels = pickMessagesModels(models)
 
-  process.stdout.write(`\n=== Probing output_config acceptance across ALL /v1/messages models ===\n\n`)
-  process.stdout.write(`Found ${messagesModels.length} models with /v1/messages support\n\n`)
+  if (!jsonMode) {
+    process.stdout.write(`\n=== Probing output_config acceptance across ALL /v1/messages models ===\n\n`)
+    process.stdout.write(`Found ${messagesModels.length} models with /v1/messages support\n\n`)
+  }
+
+  const snapshot: Array<{
+    model: string
+    adaptive_thinking: boolean
+    probes: Array<{ label: string, status: string, httpStatus?: number, errorMessage?: string }>
+  }> = []
 
   for (const model of messagesModels) {
     const hasAdaptive = model.capabilities.supports.adaptive_thinking ?? false
-    process.stdout.write(`--- ${model.id} (adaptive_thinking=${hasAdaptive}) ---\n`)
+    if (!jsonMode) {
+      process.stdout.write(`--- ${model.id} (adaptive_thinking=${hasAdaptive}) ---\n`)
+    }
 
+    const modelProbes: (typeof snapshot)[number]['probes'] = []
     for (const probe of probes) {
       const result = await probeMessagesEndpoint(probe.build(model.id))
-      const icon = result.status === 'accepted' ? '✓' : '✗'
-      const pad = `${probe.label}:`.padEnd(28)
-      process.stdout.write(`  ${pad} ${icon} (${result.httpStatus})${result.errorMessage ? ` — ${result.errorMessage}` : ''}\n`)
+      modelProbes.push({
+        label: probe.label,
+        status: result.status,
+        httpStatus: result.httpStatus,
+        errorMessage: result.errorMessage,
+      })
+      if (!jsonMode) {
+        const pad = `${probe.label}:`.padEnd(28)
+        process.stdout.write(`  ${pad} ${statusIcon(result.status)} (${result.httpStatus})${result.errorMessage ? ` — ${result.errorMessage}` : ''}\n`)
+      }
       await Bun.sleep(300)
     }
 
-    process.stdout.write('\n')
+    snapshot.push({ model: model.id, adaptive_thinking: hasAdaptive, probes: modelProbes })
+    if (!jsonMode) {
+      process.stdout.write('\n')
+    }
+  }
+
+  if (jsonMode) {
+    writeJsonSnapshot({ models: snapshot })
   }
 })

@@ -16,9 +16,11 @@ import type { ProbeResult } from './lib/probe-harness'
 import process from 'node:process'
 import { modelCache } from '~/state'
 
+import { parseProbeArgs } from './lib/probe-args'
 import { bootstrapProbe, pickFirstReasoningMessagesModel, probeMessagesEndpoint, runMain } from './lib/probe-harness'
+import { formatProbeLine, writeJsonSnapshot } from './lib/probe-report'
 
-const jsonMode = Bun.argv.includes('--json')
+const { jsonMode } = parseProbeArgs()
 
 function basePayload(modelId: string) {
   return {
@@ -98,20 +100,14 @@ runMain(async () => {
     results.push(result)
 
     if (!jsonMode) {
-      const icon = result.status === 'accepted' ? '✓' : result.status === 'rejected' ? '✗' : '!'
-      process.stdout.write(`${icon} ${result.status} (${result.httpStatus ?? 'n/a'})`)
-      if (result.errorMessage) {
-        process.stdout.write(` — ${result.errorMessage}`)
-      }
-      process.stdout.write('\n')
+      process.stdout.write(`${formatProbeLine(result)}\n`)
     }
 
     await Bun.sleep(500)
   }
 
   if (jsonMode) {
-    await Bun.write(Bun.stdout, `${JSON.stringify({
-      generatedAt: new Date().toISOString(),
+    writeJsonSnapshot({
       model: {
         id: model.id,
         supported_endpoints: model.supported_endpoints,
@@ -119,7 +115,7 @@ runMain(async () => {
         reasoning_effort: model.capabilities.supports.reasoning_effort,
       },
       results,
-    }, null, 2)}\n`)
+    })
   }
   else {
     process.stdout.write('\n=== Summary ===\n')

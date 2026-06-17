@@ -10,19 +10,16 @@
  */
 
 import process from 'node:process'
-import { copilotBaseUrl, copilotHeaders } from '~/lib/api-config'
-import { MESSAGES_ENDPOINT } from '~/lib/model-capabilities'
-import { getClientConfig } from '~/lib/state'
-import { authStore, modelCache } from '~/state'
+import { modelCache } from '~/state'
 
-import { bootstrapProbe, runMain, tryParseJson } from './lib/probe-harness'
+import { getFlagValue } from './lib/probe-args'
+import { bootstrapProbe, extractErrorMessage, parseAnthropicUsage, runMain, sendRaw } from './lib/probe-harness'
 
 const REQUEST_TIMEOUT_MS = 120_000
 const REPEAT_DELAY_MS = 1000
 
-const rawArgs = Bun.argv.slice(2)
-const modelId = rawArgs.find(a => a.startsWith('--model='))?.slice('--model='.length) ?? 'claude-opus-4.7-xhigh'
-const customSizes = rawArgs.find(a => a.startsWith('--sizes='))?.slice('--sizes='.length)
+const modelId = getFlagValue('--model') ?? 'claude-opus-4.7-xhigh'
+const customSizes = getFlagValue('--sizes')
 
 const DEFAULT_SIZES = [1024, 4096, 8192, 16384, 32768, 65536]
 const sizes = customSizes ? customSizes.split(',').map(Number) : DEFAULT_SIZES
@@ -30,10 +27,8 @@ const sizes = customSizes ? customSizes.split(',').map(Number) : DEFAULT_SIZES
 interface CacheProbeResult {
   approxTokens: number
   promptChars: number
-  primeStatus: number
   primeCached: number
   primeInput: number
-  repeatStatus: number
   repeatCached: number
   repeatInput: number
   cacheHit: boolean
@@ -46,41 +41,26 @@ function generatePadding(charCount: number): string {
   return base.repeat(repeats).slice(0, charCount)
 }
 
-async function sendRawRequest(body: Record<string, unknown>): Promise<{
-  httpStatus: number
+async function sendCacheRequest(body: Record<string, unknown>): Promise<{
   inputTokens: number
   cachedTokens: number
   error?: string
 }> {
   try {
-    const clientConfig = getClientConfig()
-    const url = `${copilotBaseUrl(clientConfig)}${MESSAGES_ENDPOINT}`
-    const headers = copilotHeaders(authStore, clientConfig, { initiator: 'agent' })
+    const { httpStatus, parsed } = await sendRaw(body, { timeoutMs: REQUEST_TIMEOUT_MS })
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    })
-
-    const text = await response.text()
-    const parsed = tryParseJson(text) as Record<string, unknown> | null
-
-    if (response.status < 200 || response.status >= 300) {
-      const errMsg = (parsed as { error?: { message?: string } })?.error?.message
-      return { httpStatus: response.status, inputTokens: 0, cachedTokens: 0, error: errMsg ?? `HTTP ${response.status}` }
+    if (httpStatus < 200 || httpStatus >= 300) {
+      return { inputTokens: 0, cachedTokens: 0, error: extractErrorMessage(parsed) }
     }
 
-    const usage = parsed?.usage as { input_tokens?: number, cache_read_input_tokens?: number } | undefined
+    const usage = parseAnthropicUsage(parsed)
     return {
-      httpStatus: response.status,
       inputTokens: usage?.input_tokens ?? 0,
       cachedTokens: usage?.cache_read_input_tokens ?? 0,
     }
   }
   catch (error) {
-    return { httpStatus: 0, inputTokens: 0, cachedTokens: 0, error: error instanceof Error ? error.message : String(error) }
+    return { inputTokens: 0, cachedTokens: 0, error: error instanceof Error ? error.message : String(error) }
   }
 }
 
@@ -106,16 +86,14 @@ async function probeSize(approxTokens: number): Promise<CacheProbeResult> {
 
   process.stdout.write(`  ~${approxTokens} tokens (${charCount} chars)... `)
 
-  const prime = await sendRawRequest(body)
+  const prime = await sendCacheRequest(body)
   if (prime.error) {
     process.stdout.write(`ERROR: ${prime.error}\n`)
     return {
       approxTokens,
       promptChars: charCount,
-      primeStatus: prime.httpStatus,
       primeCached: 0,
       primeInput: 0,
-      repeatStatus: 0,
       repeatCached: 0,
       repeatInput: 0,
       cacheHit: false,
@@ -125,7 +103,7 @@ async function probeSize(approxTokens: number): Promise<CacheProbeResult> {
 
   await Bun.sleep(REPEAT_DELAY_MS)
 
-  const repeat = await sendRawRequest(body)
+  const repeat = await sendCacheRequest(body)
 
   const cacheHit = repeat.cachedTokens > 0
   process.stdout.write(
@@ -137,10 +115,8 @@ async function probeSize(approxTokens: number): Promise<CacheProbeResult> {
   return {
     approxTokens,
     promptChars: charCount,
-    primeStatus: prime.httpStatus,
     primeCached: prime.cachedTokens,
     primeInput: prime.inputTokens,
-    repeatStatus: repeat.httpStatus,
     repeatCached: repeat.cachedTokens,
     repeatInput: repeat.inputTokens,
     cacheHit,
@@ -166,9 +142,6 @@ async function main() {
   for (const size of sizes) {
     const result = await probeSize(size)
     results.push(result)
-
-    if (result.error)
-      continue
   }
 
   process.stdout.write(`\n=== Summary ===\n`)

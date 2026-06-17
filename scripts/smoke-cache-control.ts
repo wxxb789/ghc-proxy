@@ -1,11 +1,26 @@
 #!/usr/bin/env bun
 
+/**
+ * Cache-control smoke test: drives the proxy (started in-process on PORT) with
+ * cache-priming + repeat requests across every target model and reports cache
+ * hits, then probes upstream `cache_control.scope` support directly.
+ *
+ * WARNING: despite the `smoke` label this burns real Copilot quota — it issues
+ * two proxied requests per target model plus a direct upstream scope probe.
+ *
+ * Usage:
+ *   bun run scripts/smoke-cache-control.ts          # human-readable report
+ *   bun run scripts/smoke-cache-control.ts --json    # JSON to stdout
+ */
+
 import type { Model } from '~/types'
 
 import process from 'node:process'
 import { createServer } from '~/server'
 import { modelCache } from '~/state'
-import { bootstrapProbe, pickFirstMessagesModel, probeMessagesEndpoint, runMain } from './lib/probe-harness'
+
+import { parseProbeArgs } from './lib/probe-args'
+import { bootstrapProbe, classifyCacheStatus, extractErrorMessage, parseAnthropicUsage, pickFirstMessagesModel, probeMessagesEndpoint, runMain } from './lib/probe-harness'
 
 const PORT = 14141
 const BASE_URL = `http://localhost:${PORT}`
@@ -39,15 +54,7 @@ interface ModelResult {
   repeatRequest: RequestResult | null
 }
 
-interface AnthropicUsage {
-  input_tokens: number
-  output_tokens: number
-  cache_read_input_tokens?: number
-  cache_creation_input_tokens?: number
-}
-
-const rawArgs = new Set(Bun.argv.slice(2))
-const jsonMode = rawArgs.has('--json')
+const { jsonMode } = parseProbeArgs()
 
 // ---------------------------------------------------------------------------
 // Large system prompt (~4000+ tokens) to exceed Anthropic cache thresholds
@@ -575,46 +582,32 @@ async function sendRequest(body: Record<string, unknown>): Promise<RequestResult
 
     const text = await response.text()
     if (response.status < 200 || response.status >= 300) {
-      let errorMsg = `HTTP ${response.status}`
+      let parsed: unknown
       try {
-        const parsed = JSON.parse(text)
-        const msg = parsed?.error?.message
-        if (typeof msg === 'string')
-          errorMsg = msg
+        parsed = JSON.parse(text)
       }
-      catch {}
-
+      catch {
+        parsed = text
+      }
       return {
         httpStatus: response.status,
         inputTokens: 0,
         cachedTokens: 0,
         outputTokens: 0,
         cacheStatus: 'unknown',
-        error: errorMsg,
+        error: extractErrorMessage(parsed),
       }
     }
 
     const json = JSON.parse(text)
-    const usage = json.usage as AnthropicUsage | undefined
-
-    const inputTokens = usage?.input_tokens ?? 0
-    const outputTokens = usage?.output_tokens ?? 0
-    const cachedTokens = usage?.cache_read_input_tokens ?? 0
-
-    let cacheStatus: CacheStatus = 'unknown'
-    if (cachedTokens > 0) {
-      cacheStatus = 'hit'
-    }
-    else if (usage) {
-      cacheStatus = 'miss'
-    }
+    const usage = parseAnthropicUsage(json)
 
     return {
       httpStatus: response.status,
-      inputTokens,
-      cachedTokens,
-      outputTokens,
-      cacheStatus,
+      inputTokens: usage?.input_tokens ?? 0,
+      cachedTokens: usage?.cache_read_input_tokens ?? 0,
+      outputTokens: usage?.output_tokens ?? 0,
+      cacheStatus: classifyCacheStatus(usage),
     }
   }
   catch (error) {
@@ -668,14 +661,6 @@ async function testModel(modelId: string, provider: Provider): Promise<ModelResu
   }
 }
 
-function padRight(str: string, len: number): string {
-  return str.length >= len ? str : str + ' '.repeat(len - str.length)
-}
-
-function padLeft(str: string, len: number): string {
-  return str.length >= len ? str : ' '.repeat(len - str.length) + str
-}
-
 function cacheLabel(status: CacheStatus): string {
   switch (status) {
     case 'hit':
@@ -687,11 +672,22 @@ function cacheLabel(status: CacheStatus): string {
   }
 }
 
+/**
+ * Whether a model result counts as a success: skipped models pass vacuously,
+ * tested models require both the prime and repeat request to return HTTP 200.
+ */
+function modelSucceeded(result: ModelResult): boolean {
+  if (result.strategy === 'skipped')
+    return true
+  return result.primeRequest?.httpStatus === 200
+    && result.repeatRequest?.httpStatus === 200
+}
+
 function formatRequestLine(label: string, result: RequestResult): string {
   if (result.error) {
-    return `  ${padRight(label, 24)} ERROR: ${result.error}`
+    return `  ${label.padEnd(24)} ERROR: ${result.error}`
   }
-  return `  ${padRight(label, 24)} input=${padLeft(String(result.inputTokens), 5)}  cached=${padLeft(String(result.cachedTokens), 5)}  output=${padLeft(String(result.outputTokens), 4)}   ${cacheLabel(result.cacheStatus)}`
+  return `  ${label.padEnd(24)} input=${String(result.inputTokens).padStart(5)}  cached=${String(result.cachedTokens).padStart(5)}  output=${String(result.outputTokens).padStart(4)}   ${cacheLabel(result.cacheStatus)}`
 }
 
 function printReport(results: Array<ModelResult>): void {
@@ -700,7 +696,7 @@ function printReport(results: Array<ModelResult>): void {
   const thin = '─'.repeat(W)
 
   process.stdout.write(`\n╔${line}╗\n`)
-  process.stdout.write(`║${padRight('              Cache Control Smoke Test Report', W)}║\n`)
+  process.stdout.write(`║${'              Cache Control Smoke Test Report'.padEnd(W)}║\n`)
   process.stdout.write(`╠${line}╣\n\n`)
 
   const providerLabels: Record<Provider, string> = {
@@ -715,11 +711,11 @@ function printReport(results: Array<ModelResult>): void {
     const providerResults = results.filter(r => r.provider === provider)
     for (const result of providerResults) {
       if (result.strategy === 'skipped') {
-        process.stdout.write(`${padRight(result.modelId, 28)} [skipped — not in model list]\n\n`)
+        process.stdout.write(`${result.modelId.padEnd(28)} [skipped — not in model list]\n\n`)
         continue
       }
 
-      process.stdout.write(`${padRight(result.modelId, 28)} [${strategyLabel(result.strategy)}]\n`)
+      process.stdout.write(`${result.modelId.padEnd(28)} [${strategyLabel(result.strategy)}]\n`)
 
       if (result.primeRequest) {
         process.stdout.write(`${formatRequestLine('Request 1 (prime):', result.primeRequest)}\n`)
@@ -738,12 +734,7 @@ function printReport(results: Array<ModelResult>): void {
     r.repeatRequest?.cacheStatus === 'hit'
     || r.primeRequest?.cacheStatus === 'hit',
   ).length
-  const allSucceeded = results.every((r) => {
-    if (r.strategy === 'skipped')
-      return true
-    return (r.primeRequest?.httpStatus === 200)
-      && (r.repeatRequest?.httpStatus === 200)
-  })
+  const allSucceeded = results.every(modelSucceeded)
 
   process.stdout.write(`── Summary ${thin.slice(0, W - 9)}\n`)
   process.stdout.write(`Models tested: ${tested}/${totalModels}\n`)
@@ -777,12 +768,7 @@ async function main() {
 
   if (jsonMode) {
     const scopeProbeResult = await probeScopeSupport()
-    const allSucceeded = results.every((r) => {
-      if (r.strategy === 'skipped')
-        return true
-      return (r.primeRequest?.httpStatus === 200)
-        && (r.repeatRequest?.httpStatus === 200)
-    }) && scopeProbeResult !== 'supported'
+    const allSucceeded = results.every(modelSucceeded) && scopeProbeResult !== 'supported'
 
     process.stdout.write(`${JSON.stringify({
       generatedAt: new Date().toISOString(),
@@ -807,12 +793,7 @@ async function main() {
 
   printReport(results)
 
-  const anyFailure = results.some((r) => {
-    if (r.strategy === 'skipped')
-      return false
-    return (r.primeRequest?.httpStatus !== 200)
-      || (r.repeatRequest?.httpStatus !== 200)
-  })
+  const anyFailure = results.some(r => !modelSucceeded(r))
 
   if (anyFailure) {
     process.exitCode = 1

@@ -18,14 +18,13 @@
 import type { Model } from '~/types'
 
 import process from 'node:process'
-import { MESSAGES_ENDPOINT } from '~/lib/model-capabilities'
 import { modelCache } from '~/state'
 
-import { bootstrapProbe, probeMessagesEndpoint, runMain } from './lib/probe-harness'
+import { parseProbeArgs } from './lib/probe-args'
+import { bootstrapProbe, pickMessagesModels, pickModelById, probeMessagesEndpoint, runMain } from './lib/probe-harness'
+import { summarizeProbeResults, writeJsonSnapshot } from './lib/probe-report'
 
-const rawArgs = Bun.argv.slice(2)
-const jsonMode = rawArgs.includes('--json')
-const requestedModelId = rawArgs.find(arg => arg.startsWith('--model='))?.slice('--model='.length)
+const { jsonMode, requestedModelId } = parseProbeArgs()
 
 interface ProbeCase {
   name: string
@@ -178,9 +177,9 @@ const cases: Array<ProbeCase> = [
 ]
 
 function selectModel(models: Array<Model>): Model | undefined {
-  const messagesModels = models.filter(model => model.supported_endpoints?.includes(MESSAGES_ENDPOINT))
+  const messagesModels = pickMessagesModels(models)
   if (requestedModelId) {
-    return messagesModels.find(model => model.id === requestedModelId)
+    return pickModelById(messagesModels, requestedModelId)
   }
   return messagesModels[0]
 }
@@ -221,23 +220,20 @@ runMain(async () => {
   }
 
   if (jsonMode) {
-    await Bun.write(Bun.stdout, `${JSON.stringify({
-      generatedAt: new Date().toISOString(),
+    writeJsonSnapshot({
       model: {
         id: model.id,
         supported_endpoints: model.supported_endpoints,
       },
       results,
-    }, null, 2)}\n`)
+    })
     return
   }
 
-  const accepted = results.filter(result => result.status === 'accepted')
-  const rejected = results.filter(result => result.status === 'rejected')
-  const errored = results.filter(result => result.status === 'error')
+  const counts = summarizeProbeResults(results)
 
   process.stdout.write('\n=== Summary ===\n')
-  process.stdout.write(`Accepted: ${accepted.length}\n`)
-  process.stdout.write(`Rejected: ${rejected.length}\n`)
-  process.stdout.write(`Errors: ${errored.length}\n`)
+  process.stdout.write(`Accepted: ${counts.accepted}\n`)
+  process.stdout.write(`Rejected: ${counts.rejected}\n`)
+  process.stdout.write(`Errors: ${counts.error}\n`)
 })
