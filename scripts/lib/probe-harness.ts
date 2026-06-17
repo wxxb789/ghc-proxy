@@ -71,11 +71,15 @@ export async function probeMessagesEndpoint(
     const url = `${copilotBaseUrl(clientConfig)}${MESSAGES_ENDPOINT}`
     const headers = copilotHeaders(authStore, clientConfig, { initiator: 'agent' })
 
+    // Honor the timeout chosen at bootstrap (stored as upstreamTimeoutSeconds);
+    // a probe bootstrapped at 120s must not abort client-side at the 30s default.
+    const timeoutMs = (authStore.upstreamTimeoutSeconds || 0) * 1000 || REQUEST_TIMEOUT_MS
+
     const response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
 
     const text = await response.text()
