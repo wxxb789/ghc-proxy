@@ -383,7 +383,7 @@ describe('Anthropic payload validation', () => {
 
   test('accepts search_result blocks in user messages and tool results', () => {
     const payload = parseAnthropicMessagesPayload({
-      model: 'claude-opus-4.6-1m',
+      model: 'claude-opus-4.7',
       max_tokens: 100,
       messages: [{
         role: 'user',
@@ -429,7 +429,7 @@ describe('Anthropic payload validation', () => {
   test('validation details expand nested union errors', () => {
     try {
       parseAnthropicMessagesPayload({
-        model: 'claude-opus-4.6-1m',
+        model: 'claude-opus-4.7',
         max_tokens: 100,
         messages: [{
           role: 'user',

@@ -2,7 +2,6 @@ import type { ReasoningEffort } from '~/lib/config'
 
 import {
   DEFAULT_COMPACT_USE_SMALL_MODEL,
-  DEFAULT_CONTEXT_UPGRADE_TOKEN_THRESHOLD,
   DEFAULT_REASONING_EFFORT,
   DEFAULT_RESPONSES_API_AUTO_COMPACT_INPUT,
   DEFAULT_RESPONSES_API_AUTO_CONTEXT_MANAGEMENT,
@@ -19,14 +18,6 @@ export class ConfigStore {
 
   getEmulatorTtlSeconds(): number {
     return getCachedConfig().responsesOfficialEmulatorTtlSeconds ?? DEFAULT_RESPONSES_OFFICIAL_EMULATOR_TTL_SECONDS
-  }
-
-  isContextUpgradeEnabled(): boolean {
-    return getCachedConfig().contextUpgrade !== false
-  }
-
-  getContextUpgradeThreshold(): number {
-    return getCachedConfig().contextUpgradeTokenThreshold ?? DEFAULT_CONTEXT_UPGRADE_TOKEN_THRESHOLD
   }
 
   isCompactSmallModelEnabled(): boolean {
@@ -62,10 +53,6 @@ export class ConfigStore {
 
   getModelRewrites(): Array<{ from: string, to: string }> {
     return getCachedConfig().modelRewrites ?? []
-  }
-
-  getContextUpgradeRules(): Array<{ from: string, to: string }> {
-    return getCachedConfig().contextUpgradeRules ?? []
   }
 
   getModelFallback() {

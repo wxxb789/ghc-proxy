@@ -13,9 +13,9 @@ const REQUEST_TIMEOUT_MS = 120_000
 const REPEAT_DELAY_MS = 500
 
 const TARGET_MODELS = {
-  anthropic: ['claude-opus-4.7-xhigh', 'claude-opus-4.7-high', 'claude-opus-4.7-1m-internal', 'claude-opus-4.7', 'claude-opus-4.6', 'claude-sonnet-4.6', 'claude-haiku-4.5'],
+  anthropic: ['claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6', 'claude-sonnet-4.6', 'claude-haiku-4.5'],
   openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex'],
-  gemini: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview'],
+  gemini: ['gemini-3.5-flash', 'gemini-3.1-pro-preview'],
 } as const
 
 type Provider = keyof typeof TARGET_MODELS

@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { getCachedConfig } from '~/lib/config'
-import { HTTPError } from '~/lib/error'
-import { getContextUpgradeTarget, isContextLengthError, resolveContextUpgrade, rewriteModel } from '~/lib/model-rewrite'
-import { estimateAnthropicInputTokens } from '~/lib/tokenizer'
+import { rewriteModel } from '~/lib/model-rewrite'
 import { modelCache } from '~/state'
 
 import { buildModel, buildModelsResponse, clearConfig } from './helpers'
@@ -17,16 +15,11 @@ function setModelRewrites(rules: Array<{ from: string, to: string }>) {
   config.modelRewrites = rules
 }
 
-function setContextUpgradeRules(rules: Array<{ from: string, to: string }>) {
-  const config = getCachedConfig() as Record<string, unknown>
-  config.contextUpgradeRules = rules
-}
-
 beforeEach(() => {
   originalModels = modelCache.getModels()
   modelCache.cacheModels(buildModelsResponse(
     buildModel('claude-opus-4.6'),
-    buildModel('claude-opus-4.6-1m'),
+    buildModel('claude-opus-4.7'),
     buildModel('claude-sonnet-4.5'),
   ))
   clearConfig()
@@ -59,10 +52,10 @@ describe('rewriteModel — normalization', () => {
     expect(result.model).not.toBe(result.originalModel)
   })
 
-  test('normalizes dashes to dots for -1m variant', () => {
-    const result = rewriteModel('claude-opus-4-6-1m')
-    expect(result.model).toBe('claude-opus-4.6-1m')
-    expect(result.originalModel).toBe('claude-opus-4-6-1m')
+  test('normalizes dashes to dots for multi-segment version', () => {
+    const result = rewriteModel('claude-opus-4-7')
+    expect(result.model).toBe('claude-opus-4.7')
+    expect(result.originalModel).toBe('claude-opus-4-7')
     expect(result.model).not.toBe(result.originalModel)
   })
 
@@ -128,10 +121,10 @@ describe('rewriteModel — user rules', () => {
   })
 
   test('normalizes user rule target with dash/dot equivalence', () => {
-    setModelRewrites([{ from: 'my-model', to: 'claude-opus-4-6-1m' }])
+    setModelRewrites([{ from: 'my-model', to: 'claude-opus-4-7' }])
 
     const result = rewriteModel('my-model')
-    expect(result.model).toBe('claude-opus-4.6-1m')
+    expect(result.model).toBe('claude-opus-4.7')
     expect(result.originalModel).toBe('my-model')
   })
 
@@ -141,195 +134,5 @@ describe('rewriteModel — user rules', () => {
     const result = rewriteModel('my-model')
     expect(result.model).toBe('unknown-model')
     expect(result.originalModel).toBe('my-model')
-  })
-})
-
-// ── estimateAnthropicInputTokens ──
-
-describe('estimateAnthropicInputTokens', () => {
-  test('small payload returns reasonable token count', () => {
-    const tokens = estimateAnthropicInputTokens({
-      model: 'claude-opus-4.6',
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: 'Hello world' }],
-    } as any)
-    expect(tokens).toBeGreaterThan(0)
-    expect(tokens).toBeLessThan(20)
-  })
-
-  test('large payload with system + messages + tools returns high count', () => {
-    const longText = 'a'.repeat(700_000)
-    const tokens = estimateAnthropicInputTokens({
-      model: 'claude-opus-4.6',
-      max_tokens: 4096,
-      system: longText,
-      messages: [{ role: 'user', content: 'Summarize' }],
-      tools: [{ name: 'get_weather', description: 'Get weather', input_schema: { type: 'object', properties: { city: { type: 'string' } } } }],
-    } as any)
-    expect(tokens).toBeGreaterThan(190_000)
-  })
-
-  test('handles array system blocks', () => {
-    const tokens = estimateAnthropicInputTokens({
-      model: 'claude-opus-4.6',
-      max_tokens: 4096,
-      system: [{ type: 'text', text: 'System prompt here' }],
-      messages: [{ role: 'user', content: 'Hi' }],
-    } as any)
-    expect(tokens).toBeGreaterThan(0)
-  })
-
-  test('handles content blocks with tool_use and tool_result', () => {
-    const tokens = estimateAnthropicInputTokens({
-      model: 'claude-opus-4.6',
-      max_tokens: 4096,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'Use the tool' },
-          ],
-        },
-        {
-          role: 'assistant',
-          content: [
-            { type: 'tool_use', id: 'tool_1', name: 'get_weather', input: { city: 'Tokyo' } },
-          ],
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'tool_result', tool_use_id: 'tool_1', content: 'Sunny, 25°C' },
-          ],
-        },
-      ],
-    } as any)
-    expect(tokens).toBeGreaterThan(0)
-  })
-
-  test('handles thinking blocks', () => {
-    const tokens = estimateAnthropicInputTokens({
-      model: 'claude-opus-4.6',
-      max_tokens: 4096,
-      messages: [
-        {
-          role: 'assistant',
-          content: [
-            { type: 'thinking', thinking: 'Let me think about this carefully...' },
-            { type: 'text', text: 'Here is my answer' },
-          ],
-        },
-      ],
-    } as any)
-    expect(tokens).toBeGreaterThan(0)
-  })
-})
-
-// ── isContextLengthError ──
-
-describe('isContextLengthError', () => {
-  test('matches "context length" error', () => {
-    const error = new HTTPError(400, {
-      error: { message: 'The request context length exceeds the maximum', type: 'invalid_request_error' },
-    })
-    expect(isContextLengthError(error)).toBe(true)
-  })
-
-  test('matches "too long" error', () => {
-    const error = new HTTPError(400, {
-      error: { message: 'Input is too long for this model', type: 'invalid_request_error' },
-    })
-    expect(isContextLengthError(error)).toBe(true)
-  })
-
-  test('matches "token limit exceeded" error', () => {
-    const error = new HTTPError(400, {
-      error: { message: 'The number of tokens exceeded the maximum allowed', type: 'invalid_request_error' },
-    })
-    expect(isContextLengthError(error)).toBe(true)
-  })
-
-  test('matches "maximum token" error', () => {
-    const error = new HTTPError(400, {
-      error: { message: 'Exceeded maximum token count for this model', type: 'invalid_request_error' },
-    })
-    expect(isContextLengthError(error)).toBe(true)
-  })
-
-  test('rejects non-400 status', () => {
-    const error = new HTTPError(500, {
-      error: { message: 'Context length exceeded', type: 'server_error' },
-    })
-    expect(isContextLengthError(error)).toBe(false)
-  })
-
-  test('rejects non-HTTPError', () => {
-    expect(isContextLengthError(new Error('context length exceeded'))).toBe(false)
-  })
-
-  test('rejects unrelated 400 error', () => {
-    const error = new HTTPError(400, {
-      error: { message: 'Invalid model specified', type: 'invalid_request_error' },
-    })
-    expect(isContextLengthError(error)).toBe(false)
-  })
-})
-
-// ── resolveContextUpgrade ──
-
-describe('resolveContextUpgrade', () => {
-  test('skips when no context upgrade rule is configured', () => {
-    expect(resolveContextUpgrade('claude-opus-4.6', 200_000)).toBeUndefined()
-  })
-
-  test('upgrades above threshold using configured rule', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.6', to: 'claude-opus-4.6-1m' }])
-    expect(resolveContextUpgrade('claude-opus-4.6', 200_000)).toBe('claude-opus-4.6-1m')
-  })
-
-  test('skips below threshold', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.6', to: 'claude-opus-4.6-1m' }])
-    expect(resolveContextUpgrade('claude-opus-4.6', 100_000)).toBeUndefined()
-  })
-
-  test('skips at exact threshold', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.6', to: 'claude-opus-4.6-1m' }])
-    expect(resolveContextUpgrade('claude-opus-4.6', 160_000)).toBeUndefined()
-  })
-
-  test('skips unknown models', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.6', to: 'claude-opus-4.6-1m' }])
-    expect(resolveContextUpgrade('claude-sonnet-4.5', 200_000)).toBeUndefined()
-  })
-
-  test('trusts configured targets that are not in the models list', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.7', to: 'claude-opus-4.7-1m-internal' }])
-    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.7')))
-    expect(resolveContextUpgrade('claude-opus-4.7', 200_000)).toBe('claude-opus-4.7-1m-internal')
-  })
-
-  test('supports glob-based configured rules', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.*', to: 'claude-opus-4.7-1m-internal' }])
-    expect(resolveContextUpgrade('claude-opus-4.7', 200_000)).toBe('claude-opus-4.7-1m-internal')
-  })
-})
-
-// ── getContextUpgradeTarget ──
-
-describe('getContextUpgradeTarget', () => {
-  test('returns configured target', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.6', to: 'claude-opus-4.6-1m' }])
-    expect(getContextUpgradeTarget('claude-opus-4.6')).toBe('claude-opus-4.6-1m')
-  })
-
-  test('returns undefined for unknown models', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.6', to: 'claude-opus-4.6-1m' }])
-    expect(getContextUpgradeTarget('claude-sonnet-4.5')).toBeUndefined()
-  })
-
-  test('returns configured target even when target is not in models list', () => {
-    setContextUpgradeRules([{ from: 'claude-opus-4.7', to: 'claude-opus-4.7-1m-internal' }])
-    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.7')))
-    expect(getContextUpgradeTarget('claude-opus-4.7')).toBe('claude-opus-4.7-1m-internal')
   })
 })

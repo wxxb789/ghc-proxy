@@ -56,7 +56,6 @@ describe('config module', () => {
       modelFallback: {
         claudeOpus: 'gpt-4-opus',
       },
-      contextUpgradeRules: [{ from: 'claude-opus-4.7', to: 'claude-opus-4.7-1m-internal' }],
       upstreamQueueConcurrency: 12,
       upstreamQueueMaxRetries: 4,
       upstreamQueueBaseDelaySeconds: 3,
@@ -181,41 +180,6 @@ describe('ConfigStore accessors', () => {
     }
   }
 
-  // ── isContextUpgradeEnabled ──
-
-  test('isContextUpgradeEnabled defaults to true', () => {
-    clearCachedConfig()
-    expect(configStore.isContextUpgradeEnabled()).toBe(true)
-  })
-
-  test('isContextUpgradeEnabled respects explicit false', () => {
-    clearCachedConfig()
-    const config = getCachedConfig() as Record<string, unknown>
-    config.contextUpgrade = false
-    expect(configStore.isContextUpgradeEnabled()).toBe(false)
-  })
-
-  test('isContextUpgradeEnabled returns true when set to true explicitly', () => {
-    clearCachedConfig()
-    const config = getCachedConfig() as Record<string, unknown>
-    config.contextUpgrade = true
-    expect(configStore.isContextUpgradeEnabled()).toBe(true)
-  })
-
-  // ── getContextUpgradeThreshold ──
-
-  test('getContextUpgradeThreshold defaults to 160000', () => {
-    clearCachedConfig()
-    expect(configStore.getContextUpgradeThreshold()).toBe(160_000)
-  })
-
-  test('getContextUpgradeThreshold respects configured value', () => {
-    clearCachedConfig()
-    const config = getCachedConfig() as Record<string, unknown>
-    config.contextUpgradeTokenThreshold = 100_000
-    expect(configStore.getContextUpgradeThreshold()).toBe(100_000)
-  })
-
   // ── isCompactSmallModelEnabled ──
 
   test('isCompactSmallModelEnabled defaults to false', () => {
@@ -309,20 +273,6 @@ describe('ConfigStore accessors', () => {
     expect(configStore.getModelRewrites()).toEqual(rewrites)
   })
 
-  // ── getContextUpgradeRules ──
-
-  test('getContextUpgradeRules returns empty array by default', () => {
-    clearCachedConfig()
-    expect(configStore.getContextUpgradeRules()).toEqual([])
-  })
-
-  test('getContextUpgradeRules returns configured array', () => {
-    clearCachedConfig()
-    const config = getCachedConfig() as Record<string, unknown>
-    const rules = [{ from: 'claude-opus-4.7', to: 'claude-opus-4.7-1m-internal' }]
-    config.contextUpgradeRules = rules
-    expect(configStore.getContextUpgradeRules()).toEqual(rules)
-  })
   // ── getModelFallback ──
 
   test('getModelFallback returns undefined by default', () => {

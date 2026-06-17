@@ -61,11 +61,12 @@ Every route handler is a thin orchestrator of this 5-layer pipeline. Routes live
 For everything beyond this overview — module map, abstractions, strategy details, routing logic, and translation coverage — see the design docs:
 
 - `docs/design/execution-strategy.md` — strategy pattern and error handling
-- `docs/design/model-routing.md` — model pipeline and context upgrade mechanics
+- `docs/design/model-routing.md` — model pipeline and fallback/rewrite mechanics
 - `docs/design/translation-pipeline.md` — full translation pipeline
 - `docs/messages-routing-and-translation.md` — `/v1/messages` routing logic
 - `docs/anthropic-translation-matrix.md` — translation coverage
 - `docs/solutions/` — documented solutions to past problems (bugs, conventions, patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
+- `CONCEPTS.md` — shared domain vocabulary (proxy boundary, execution strategies, routing terms). Read when orienting to the codebase or before discussing domain concepts.
 
 When making architectural changes, update the relevant design doc in the same change.
 

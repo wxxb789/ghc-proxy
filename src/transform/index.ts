@@ -1,9 +1,8 @@
-import { betaHeaderStep } from './beta-headers'
 import { composeModelTransforms } from './chain'
 import { modelPolicyStep } from './policy'
 import { rewriteStep } from './rewrite'
 
-export { betaHeaderStep, processAnthropicBetaHeader } from './beta-headers'
+export { processAnthropicBetaHeader } from './beta-headers'
 export type { BetaHeaderResult } from './beta-headers'
 export { composeModelTransforms } from './chain'
 export type { ModelTransformChain } from './chain'
@@ -20,7 +19,6 @@ export type { ModelTransformInput, ModelTransformOutput, ModelTransformStep } fr
 
 export const messagesModelChain = composeModelTransforms(
   rewriteStep,
-  betaHeaderStep,
   modelPolicyStep,
 )
 
