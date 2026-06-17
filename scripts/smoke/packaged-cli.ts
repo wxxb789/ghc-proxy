@@ -3,51 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
-const TRAILING_JSON_ARRAY_RE = /(\[\s*\{[\s\S]*\}\s*\])\s*$/
+import { decodeOutput, extractTrailingJson, runCommand, tryParseJsonOrUndefined } from '../lib/cli-exec'
 
 interface NpmPackResult {
   filename: string
-}
-
-function extractPackJson(output: string): string {
-  const trimmed = output.trim()
-  const trailingJsonMatch = trimmed.match(TRAILING_JSON_ARRAY_RE)
-
-  if (trailingJsonMatch?.[1]) {
-    return trailingJsonMatch[1]
-  }
-
-  const jsonStart = Math.max(
-    trimmed.lastIndexOf('[\n'),
-    trimmed.lastIndexOf('[\r\n'),
-  )
-  if (jsonStart >= 0) {
-    return trimmed.slice(jsonStart)
-  }
-
-  return trimmed
-}
-
-function decodeOutput(output: Uint8Array): string {
-  return new TextDecoder().decode(output).trim()
-}
-
-function runCommand(command: Array<string>, cwd: string) {
-  const result = Bun.spawnSync(command, {
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-
-  if (result.exitCode !== 0) {
-    const stderr = decodeOutput(result.stderr)
-    const stdout = decodeOutput(result.stdout)
-    throw new Error(
-      `Command failed: ${command.join(' ')}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-    )
-  }
-
-  return result
 }
 
 async function main() {
@@ -70,7 +29,7 @@ async function main() {
       ['npm', 'pack', '--json', '--ignore-scripts', '--silent'],
       repoRoot,
     )
-    const packOutput = extractPackJson(decodeOutput(packResult.stdout))
+    const packOutput = extractTrailingJson(decodeOutput(packResult.stdout))
     const parsed = JSON.parse(packOutput) as Array<NpmPackResult>
     const tarballName = parsed[0]?.filename
 
@@ -183,13 +142,7 @@ function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: str
   // Parse the JSON FIRST so a structured probe failure produces a clearly
   // formatted error message. Fall back to the raw exit-code path only when
   // selfcheck failed before emitting parseable JSON.
-  let report: SelfcheckReport | undefined
-  try {
-    report = JSON.parse(stdout) as SelfcheckReport
-  }
-  catch {
-    // unparseable — handled below
-  }
+  const report = tryParseJsonOrUndefined<SelfcheckReport>(stdout)
 
   if (report) {
     const failures = (report.probes ?? []).filter(p => !p.ok)

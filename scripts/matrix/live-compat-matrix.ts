@@ -3,11 +3,11 @@
 import type { Model, ResponsesResult } from '~/types'
 
 import process from 'node:process'
-import consola from 'consola'
 import { createServer } from '~/server'
 import { modelCache } from '~/state'
 
-import { bootstrapProbe, pickFirstMessagesModel, runMain } from './lib/probe-harness'
+import { getFlagValue, hasFlag } from '../lib/probe-args'
+import { bootstrapProbe, pickFirstMessagesModel, pickFirstResponsesModel, pickResponsesModels, runMain, tryParseJson } from '../lib/probe-harness'
 
 const server = createServer()
 
@@ -42,13 +42,11 @@ interface RequestCase {
   run?: (model: Model) => Promise<MatrixResult>
 }
 
-const rawArgs = Bun.argv.slice(2)
-const args = new Set(rawArgs)
-const jsonMode = args.has('--json')
-const visionOnly = args.has('--vision-only')
-const statefulOnly = args.has('--stateful-only')
-const allResponsesModels = args.has('--all-responses-models')
-const requestedModelId = rawArgs.find(arg => arg.startsWith('--model='))?.slice('--model='.length)
+const jsonMode = hasFlag('--json')
+const visionOnly = hasFlag('--vision-only')
+const statefulOnly = hasFlag('--stateful-only')
+const allResponsesModels = hasFlag('--all-responses-models')
+const requestedModelId = getFlagValue('--model')
 const REQUEST_TIMEOUT_MS = 120_000
 
 const tinyPngDataUrl = [
@@ -536,22 +534,9 @@ async function main() {
 }
 
 async function bootstrap() {
+  // bootstrapProbe sets consola.level to NEGATIVE_INFINITY when silent, which
+  // suppresses all consola output — no further hand-silencing needed.
   await bootstrapProbe({ silent: jsonMode, timeoutMs: REQUEST_TIMEOUT_MS })
-  if (jsonMode) {
-    silenceConsola()
-  }
-}
-
-function silenceConsola() {
-  const noop = Object.assign(() => {}, { raw: () => {} }) as typeof consola.info
-  consola.level = Number.NEGATIVE_INFINITY
-  consola.log = noop
-  consola.info = noop
-  consola.success = noop
-  consola.warn = noop
-  consola.error = noop
-  consola.box = noop
-  consola.debug = noop
 }
 
 async function runCase(
@@ -764,7 +749,7 @@ async function dispatchRequest(request: {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     }))
 
-    const payload = await safeJson(response)
+    const payload = tryParseJson(await response.text())
     if (response.status < 500 || attempt > 0) {
       return { response, payload }
     }
@@ -779,26 +764,8 @@ function summarizeText(text: string): string {
   return text.replaceAll(WHITESPACE_RE, ' ').trim().slice(0, 240)
 }
 
-async function safeJson(response: Response): Promise<unknown> {
-  const text = await response.text()
-  if (!text.trim()) {
-    return null
-  }
-
-  try {
-    return JSON.parse(text)
-  }
-  catch {
-    return text
-  }
-}
-
-function pickResponsesModel(models: Array<Model>): Model | undefined {
-  return models.find(model => model.supported_endpoints?.includes('/responses'))
-}
-
 function resolveResponsesModels(models: Array<Model>): Array<Model> {
-  const responsesModels = models.filter(model => model.supported_endpoints?.includes('/responses'))
+  const responsesModels = pickResponsesModels(models)
   if (requestedModelId) {
     return responsesModels.filter(model => model.id === requestedModelId)
   }
@@ -806,7 +773,7 @@ function resolveResponsesModels(models: Array<Model>): Array<Model> {
     return responsesModels
   }
 
-  const selected = pickResponsesModel(models)
+  const selected = pickFirstResponsesModel(models)
   return selected ? [selected] : []
 }
 

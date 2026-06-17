@@ -12,9 +12,9 @@
  *   6. orphaned function_call_output (no matching function_call)
  *
  * Usage:
- *   bun scripts/probe-responses-resilience.ts                # human-readable
- *   bun scripts/probe-responses-resilience.ts --json         # JSON to stdout
- *   bun scripts/probe-responses-resilience.ts --model=gpt-5.4  # specific model
+ *   bun scripts/probes/responses-resilience.ts                # human-readable
+ *   bun scripts/probes/responses-resilience.ts --json         # JSON to stdout
+ *   bun scripts/probes/responses-resilience.ts --model=gpt-5.4  # specific model
  *
  * WARNING: Uses real Copilot quota — one request per probe case.
  */
@@ -22,18 +22,16 @@
 import type { ResponsesResult } from '~/types'
 
 import process from 'node:process'
-import { copilotBaseUrl, copilotHeaders } from '~/lib/api-config'
 import { RESPONSES_ENDPOINT } from '~/lib/model-capabilities'
-import { getClientConfig } from '~/lib/state'
-import { authStore, modelCache } from '~/state'
+import { modelCache } from '~/state'
 
-import { bootstrapProbe, extractErrorMessage, runMain, tryParseJson } from './lib/probe-harness'
+import { parseProbeArgs } from '../lib/probe-args'
+import { bootstrapProbe, extractErrorMessage, pickFirstResponsesModel, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'
+import { printBanner, writeJsonSnapshot } from '../lib/probe-report'
 
 const REQUEST_TIMEOUT_MS = 60_000
 
-const rawArgs = Bun.argv.slice(2)
-const jsonMode = rawArgs.includes('--json')
-const requestedModelId = rawArgs.find(a => a.startsWith('--model='))?.slice('--model='.length)
+const { jsonMode, requestedModelId } = parseProbeArgs()
 
 // ── Types ──
 
@@ -249,22 +247,13 @@ const cases: ProbeCase[] = [
 // ── Probe runner ──
 
 async function sendProbe(
-  baseUrl: string,
-  headers: Record<string, string>,
   body: Record<string, unknown>,
 ): Promise<{ httpStatus: number, payload: unknown }> {
-  const response = await fetch(`${baseUrl}${RESPONSES_ENDPOINT}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  const { httpStatus, parsed } = await sendRaw(body, {
+    endpoint: RESPONSES_ENDPOINT,
+    timeoutMs: REQUEST_TIMEOUT_MS,
   })
-
-  const text = await response.text()
-  return {
-    httpStatus: response.status,
-    payload: tryParseJson(text),
-  }
+  return { httpStatus, payload: parsed }
 }
 
 function classifyResult(probe: ProbeCase, httpStatus: number, payload: unknown): ProbeResult {
@@ -309,8 +298,6 @@ function summarizeSuccess(payload: unknown): string {
 // ── Obtain real encrypted_content ──
 
 async function obtainEncryptedContent(
-  baseUrl: string,
-  headers: Record<string, string>,
   modelId: string,
 ): Promise<ProbeContext> {
   if (!jsonMode) {
@@ -318,7 +305,7 @@ async function obtainEncryptedContent(
   }
 
   try {
-    const { httpStatus, payload } = await sendProbe(baseUrl, headers, {
+    const { httpStatus, payload } = await sendProbe({
       model: modelId,
       input: simpleInput('What is 2+2? Think step by step.'),
       reasoning: { effort: 'medium', summary: 'detailed' },
@@ -364,30 +351,24 @@ async function main() {
   await bootstrapProbe({ silent: jsonMode, timeoutMs: REQUEST_TIMEOUT_MS })
 
   const allModels = modelCache.getModels()?.data ?? []
-  const responsesModels = allModels.filter(m => m.supported_endpoints?.includes(RESPONSES_ENDPOINT))
+  const responsesModels = pickResponsesModels(allModels)
   const selectedModel = requestedModelId
-    ? responsesModels.find(m => m.id === requestedModelId)
-    : responsesModels[0]
+    ? pickModelById(responsesModels, requestedModelId)
+    : pickFirstResponsesModel(allModels)
 
   if (!selectedModel) {
     process.stderr.write(`No /responses model found${requestedModelId ? ` matching ${requestedModelId}` : ''}.\n`)
     process.exit(1)
   }
 
-  const clientConfig = getClientConfig()
-  const baseUrl = copilotBaseUrl(clientConfig)
-  const headers = copilotHeaders(authStore, clientConfig, { initiator: 'agent' })
-
   if (!jsonMode) {
-    process.stdout.write('╔══════════════════════════════════════════════════════════════╗\n')
-    process.stdout.write('║    /responses Resilience Probe                              ║\n')
-    process.stdout.write('╚══════════════════════════════════════════════════════════════╝\n\n')
+    printBanner('/responses Resilience Probe')
     process.stdout.write(`Model: ${selectedModel.id}\n`)
     process.stdout.write(`Cases: ${cases.length}\n\n`)
   }
 
   // Obtain real encrypted_content for round-trip test
-  const context = await obtainEncryptedContent(baseUrl, headers, selectedModel.id)
+  const context = await obtainEncryptedContent(selectedModel.id)
 
   const results: ProbeResult[] = []
 
@@ -413,7 +394,7 @@ async function main() {
         process.stdout.write(`  ${probe.name.padEnd(36)} `)
       }
 
-      const { httpStatus, payload } = await sendProbe(baseUrl, headers, body)
+      const { httpStatus, payload } = await sendProbe(body)
       const result = classifyResult(probe, httpStatus, payload)
       results.push(result)
 
@@ -447,14 +428,13 @@ async function main() {
 
   // Summary
   if (jsonMode) {
-    await Bun.write(Bun.stdout, `${JSON.stringify({
-      generatedAt: new Date().toISOString(),
+    writeJsonSnapshot({
       model: selectedModel.id,
       context: {
         hasEncryptedContent: !!context.encryptedContent,
       },
       results,
-    }, null, 2)}\n`)
+    })
   }
   else {
     const passed = results.filter(r => r.status === 'pass' || r.status === 'expected_reject')

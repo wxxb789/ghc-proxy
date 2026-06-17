@@ -36,7 +36,7 @@ All phases completed successfully. The project now uses Elysia as its HTTP frame
 - Deleted `src/types/hono.d.ts`
 - Removed all Hono wrappers from handler files
 - Migrated 5 test files from `Hono` + `app.request()` to `Elysia` + `app.handle(new Request(...))`
-- Updated `scripts/live-compat-matrix.ts` (`server.request` → `server.handle`)
+- Updated `scripts/matrix/live-compat-matrix.ts` (`server.request` → `server.handle`)
 
 ### Verification Results
 

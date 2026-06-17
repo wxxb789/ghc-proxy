@@ -28,7 +28,7 @@ Audits outdated npm dependencies, fetches each package's changelog, maps the bre
 ```ts
 {
   reportPath: string,
-  reportMarkdown: string,     // full plan; pipe through scripts/extract-workflow-report.ts to persist
+  reportMarkdown: string,     // full plan; pipe through scripts/dev/extract-workflow-report.ts to persist
   safeBatch:   Array<{ name, current, latest, kind }>,
   reviewBatch: Array<{ name, current, latest, kind, finding, verdict }>,
   blockedBatch: Array<{ name, current, latest, kind, finding, verdict }>,
@@ -54,7 +54,7 @@ Workflow({ scriptPath: ".claude/workflows/upgrade-deps.js", args: { outdated, di
 
 ```bash
 # 3. Persist the structured result to docs/upgrade-plan.md
-bun run scripts/extract-workflow-report.ts <workflow-task-output-path>
+bun run scripts/dev/extract-workflow-report.ts <workflow-task-output-path>
 ```
 
 A worked example of the output lives at `docs/upgrade-plan.md`.

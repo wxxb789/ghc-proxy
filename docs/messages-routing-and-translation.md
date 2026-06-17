@@ -23,7 +23,7 @@ When a model supports Copilot `POST /v1/messages`, the proxy forwards the Anthro
 - Anthropic beta headers that Copilot does not support, such as `context-*` and `mid-conversation-system-*`, are stripped before upstream forwarding. Context betas can still trigger configured context-upgrade routing before they are removed.
 - Other fields, including `thinking`, are passed through as-is to the upstream endpoint unless a documented sanitizer above handles a known Copilot incompatibility.
 
-Run `bun run scripts/probe-messages-search-results.ts --json` to refresh the current Copilot `search_result` support snapshot.
+Run `bun run scripts/probes/messages/search-results.ts --json` to refresh the current Copilot `search_result` support snapshot.
 
 ## Responses Translation Path
 
@@ -136,9 +136,9 @@ As of April 30, 2026, prompt caching via `cache_control: { type: "ephemeral" }` 
 
 - `claude-opus-4.7-xhigh` has a higher minimum cache threshold (~8K tokens vs the standard ~4K for other Opus models). The `cache_control` field is accepted without error, but caching only activates when the cacheable content exceeds approximately 8192 tokens.
 
-Run `bun scripts/probe-cache-threshold.ts --model=<id>` to probe a specific model's cache threshold.
+Run `bun scripts/probes/cache-threshold.ts --model=<id>` to probe a specific model's cache threshold.
 
-Run `bun scripts/probe-all-copilot-tools.ts --json` to get a current snapshot. Weekly diffs detect backend changes.
+Run `bun scripts/probes/copilot-tools.ts --json` to get a current snapshot. Weekly diffs detect backend changes.
 
 ## Streaming Guarantees
 

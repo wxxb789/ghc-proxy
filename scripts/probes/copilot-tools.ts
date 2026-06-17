@@ -7,9 +7,9 @@
  * to detect when Copilot adds or removes tool support.
  *
  * Usage:
- *   bun scripts/probe-all-copilot-tools.ts              # human-readable table
- *   bun scripts/probe-all-copilot-tools.ts --json        # JSON to stdout
- *   bun scripts/probe-all-copilot-tools.ts --model=claude-opus-4.6  # single model
+ *   bun scripts/probes/copilot-tools.ts              # human-readable table
+ *   bun scripts/probes/copilot-tools.ts --json        # JSON to stdout
+ *   bun scripts/probes/copilot-tools.ts --model=claude-opus-4.6  # single model
  *
  * WARNING: Uses real Copilot quota — one request per (model × tool) pair.
  */
@@ -17,20 +17,18 @@
 import type { Model } from '~/types'
 
 import process from 'node:process'
-import { copilotBaseUrl, copilotHeaders } from '~/lib/api-config'
 import { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/lib/model-capabilities'
-import { getClientConfig } from '~/lib/state'
-import { authStore, modelCache } from '~/state'
+import { modelCache } from '~/state'
 
-import { bootstrapProbe, extractErrorMessage, runMain, tryParseJson } from './lib/probe-harness'
+import { parseProbeArgs } from '../lib/probe-args'
+import { bootstrapProbe, extractErrorMessage, pickMessagesModels, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'
+import { printBanner, toSortedRecord, writeJsonSnapshot } from '../lib/probe-report'
 
 const REQUEST_TIMEOUT_MS = 60_000
 
 // ── CLI args ──
 
-const rawArgs = Bun.argv.slice(2)
-const jsonMode = rawArgs.includes('--json')
-const requestedModelId = rawArgs.find(a => a.startsWith('--model='))?.slice('--model='.length)
+const { jsonMode, requestedModelId } = parseProbeArgs()
 
 // ── Tool case definitions ──
 
@@ -177,25 +175,16 @@ interface ToolResult {
 }
 
 async function probeCase(
-  baseUrl: string,
-  headers: Record<string, string>,
   endpoint: string,
   body: Record<string, unknown>,
 ): Promise<ToolResult> {
   try {
-    const response = await fetch(`${baseUrl}${endpoint}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    })
+    const { httpStatus, parsed } = await sendRaw(body, { endpoint, timeoutMs: REQUEST_TIMEOUT_MS })
 
-    const payload = tryParseJson(await response.text())
+    if (httpStatus >= 200 && httpStatus < 300)
+      return { status: 'supported', http: httpStatus }
 
-    if (response.status >= 200 && response.status < 300)
-      return { status: 'supported', http: response.status }
-
-    return { status: 'rejected', http: response.status, error: extractErrorMessage(payload) }
+    return { status: 'rejected', http: httpStatus, error: extractErrorMessage(parsed) }
   }
   catch (err) {
     return { status: 'error', http: 0, error: err instanceof Error ? err.message : String(err) }
@@ -223,13 +212,15 @@ function buildResponsesBody(modelId: string, tools: unknown[]) {
 // ── Model selection ──
 
 function selectModels(models: Model[]) {
-  const messagesModels = models.filter(m => m.supported_endpoints?.includes(MESSAGES_ENDPOINT))
-  const responsesModels = models.filter(m => m.supported_endpoints?.includes(RESPONSES_ENDPOINT))
+  const messagesModels = pickMessagesModels(models)
+  const responsesModels = pickResponsesModels(models)
 
   if (requestedModelId) {
+    const messages = pickModelById(messagesModels, requestedModelId)
+    const responses = pickModelById(responsesModels, requestedModelId)
     return {
-      messages: messagesModels.filter(m => m.id === requestedModelId),
-      responses: responsesModels.filter(m => m.id === requestedModelId),
+      messages: messages ? [messages] : [],
+      responses: responses ? [responses] : [],
     }
   }
 
@@ -279,7 +270,6 @@ function printTable(
 // ── Main ──
 
 async function runProbes(
-  baseUrl: string,
   models: Model[],
   toolCases: ToolCase[],
   endpoint: string,
@@ -293,8 +283,7 @@ async function runProbes(
       process.stdout.write(`\nProbing ${endpoint} × ${model.id} ...`)
 
     for (const tc of toolCases) {
-      const headers = copilotHeaders(authStore, getClientConfig(), { initiator: 'agent' })
-      const result = await probeCase(baseUrl, headers, endpoint, buildBody(model.id, tc.tools))
+      const result = await probeCase(endpoint, buildBody(model.id, tc.tools))
       modelMap.set(tc.name, result)
     }
 
@@ -306,29 +295,11 @@ async function runProbes(
   return results
 }
 
-function sortedMapKeys<V>(map: Map<string, V>): string[] {
-  const arr: string[] = []
-  map.forEach((_, k) => arr.push(k))
-  arr.sort()
-  return arr
-}
-
 function mapToSortedRecord(
   results: Map<string, Map<string, ToolResult>>,
-): Record<string, Record<string, ToolResult>> {
-  const out: Record<string, Record<string, ToolResult>> = {}
-
-  for (const modelId of sortedMapKeys(results)) {
-    const modelMap = results.get(modelId)!
-    const tools: Record<string, ToolResult> = {}
-    for (const name of sortedMapKeys(modelMap)) {
-      const r = modelMap.get(name)!
-      tools[name] = r.status === 'supported' ? { status: r.status, http: r.http } : r
-    }
-    out[modelId] = tools
-  }
-
-  return out
+): Record<string, Record<string, unknown>> {
+  return toSortedRecord(results, r =>
+    r.status === 'supported' ? { status: r.status, http: r.http } : r)
 }
 
 async function main() {
@@ -336,30 +307,24 @@ async function main() {
 
   const allModels = modelCache.getModels()?.data ?? []
   const { messages: messagesModels, responses: responsesModels } = selectModels(allModels)
-  const clientConfig = getClientConfig()
-  const baseUrl = copilotBaseUrl(clientConfig)
 
   const totalProbes
     = messagesModels.length * messagesToolCases.length
       + responsesModels.length * responsesToolCases.length
 
   if (!jsonMode) {
-    process.stdout.write('╔══════════════════════════════════════════════════════════════╗\n')
-    process.stdout.write('║      Copilot Backend — Tool Support Probe                   ║\n')
-    process.stdout.write('╚══════════════════════════════════════════════════════════════╝\n\n')
+    printBanner('Copilot Backend — Tool Support Probe')
     process.stdout.write(`Models:  ${messagesModels.length} messages, ${responsesModels.length} responses\n`)
     process.stdout.write(`Probes:  ${totalProbes} total\n`)
   }
 
   const messagesResults = await runProbes(
-    baseUrl,
     messagesModels,
     messagesToolCases,
     MESSAGES_ENDPOINT,
     buildMessagesBody,
   )
   const responsesResults = await runProbes(
-    baseUrl,
     responsesModels,
     responsesToolCases,
     RESPONSES_ENDPOINT,
@@ -367,17 +332,14 @@ async function main() {
   )
 
   if (jsonMode) {
-    const output = {
-      generatedAt: new Date().toISOString(),
+    writeJsonSnapshot({
       models: {
         messages: messagesModels.map(m => m.id).sort(),
         responses: responsesModels.map(m => m.id).sort(),
       },
       messages: mapToSortedRecord(messagesResults),
       responses: mapToSortedRecord(responsesResults),
-    }
-
-    await Bun.write(Bun.stdout, `${JSON.stringify(output, null, 2)}\n`)
+    })
   }
   else {
     printTable('/v1/messages', messagesModels, messagesResults)
