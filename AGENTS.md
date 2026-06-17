@@ -61,7 +61,7 @@ Every route handler is a thin orchestrator of this 5-layer pipeline. Routes live
 For everything beyond this overview — module map, abstractions, strategy details, routing logic, and translation coverage — see the design docs:
 
 - `docs/design/execution-strategy.md` — strategy pattern and error handling
-- `docs/design/model-routing.md` — model pipeline and context upgrade mechanics
+- `docs/design/model-routing.md` — model pipeline and fallback/rewrite mechanics
 - `docs/design/translation-pipeline.md` — full translation pipeline
 - `docs/messages-routing-and-translation.md` — `/v1/messages` routing logic
 - `docs/anthropic-translation-matrix.md` — translation coverage

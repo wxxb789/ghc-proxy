@@ -7,8 +7,6 @@ import {
   modelSupportsToolCalls,
   modelSupportsVision,
 } from './model-capabilities'
-import { hasContextUpgradeRule, resolveContextUpgrade } from './model-rewrite'
-import { estimateAnthropicInputTokens } from './tokenizer'
 
 const COMPACT_SYSTEM_PROMPT_START
   = 'You are a helpful AI assistant tasked with summarizing conversations'
@@ -16,7 +14,7 @@ const COMPACT_SYSTEM_PROMPT_START
 export interface ModelRoutingResult {
   originalModel: string
   routedModel: string
-  reason?: 'compact' | 'context-upgrade'
+  reason?: 'compact'
 }
 
 export function applyMessagesModelPolicy(
@@ -25,22 +23,10 @@ export function applyMessagesModelPolicy(
 ): ModelRoutingResult {
   const originalModel = payload.model
 
-  // Beta header already upgraded to a 1M model — skip both context upgrade
-  // and compact routing. The user explicitly requested extended context.
+  // Beta header requested extended context — skip compact routing. The user
+  // explicitly requested extended context.
   if (options?.betaUpgraded) {
     return { originalModel, routedModel: originalModel }
-  }
-
-  // Context upgrade: route to extended-context variant for large payloads.
-  if (configStore.isContextUpgradeEnabled() && hasContextUpgradeRule(payload.model)) {
-    const contextUpgradeTarget = resolveContextUpgrade(
-      payload.model,
-      estimateAnthropicInputTokens(payload),
-    )
-    if (contextUpgradeTarget) {
-      payload.model = contextUpgradeTarget
-      return { originalModel, routedModel: contextUpgradeTarget, reason: 'context-upgrade' }
-    }
   }
 
   // Small-model routing (compact) requires a configured smallModel and enabled flag.

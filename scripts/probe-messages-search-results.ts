@@ -10,7 +10,7 @@
  * Usage:
  *   bun run scripts/probe-messages-search-results.ts
  *   bun run scripts/probe-messages-search-results.ts --json
- *   bun run scripts/probe-messages-search-results.ts --model=claude-opus-4.6-1m
+ *   bun run scripts/probe-messages-search-results.ts --model=claude-opus-4.8
  *
  * WARNING: Uses real Copilot quota.
  */

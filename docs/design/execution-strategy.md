@@ -188,25 +188,6 @@ export async function handleMessagesCore({ body, signal, headers }) {
 
 The chat-completions handler follows the same pattern, adding an `afterTransform` hook for token counting. The responses handler still orchestrates stages manually because it has additional emulator-mode logic (store decoration, input compaction) that doesn't fit the linear pipeline model.
 
-### Context Retry Integration
-
-When `contextRetry: true` is set in the pipeline config, `runPipeline` delegates execution to `executeWithContextRetry()` (`src/dispatch/error-recovery.ts`) instead of calling the strategy directly.
-
-`executeWithContextRetry` catches context-length errors from the upstream and, if a context upgrade target exists (e.g., upgrading a base model to its larger-context variant), retries with the upgraded model:
-
-```typescript
-async function executeWithContextRetry(
-  executeFn: (model: string) => Promise<ExecutionResult>,
-  modelInfo: ModelTransformResult,
-): Promise<ExecutionResult>
-```
-
-Key implementation details:
-
-- **Model mapping reset on retry** -- when retrying, `runPipeline` creates a fresh copy of the model mapping steps (`{ originalModel, steps: [...modelMapping.steps] }`) for the retry attempt. If the retry succeeds, the retry's steps are written back to the canonical mapping. This prevents stale transform steps from the failed attempt accumulating in the trace.
-- **Signal cleanup on retry** -- a retry creates a fresh upstream signal via `createUpstreamSignalFromConfig(params.signal)` rather than reusing the original. This avoids leaking the abort listener from the failed attempt's signal, which would otherwise remain registered on the client signal indefinitely.
-- **Config-driven enablement** -- the retry is gated on `configStore.isContextUpgradeEnabled()`, so it can be disabled at runtime without changing route code.
-
 ## Benefits
 
 1. **DRY streaming logic** -- SSE write loop, error recovery, signal cleanup written once

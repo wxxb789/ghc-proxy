@@ -5,7 +5,7 @@ import { sanitizeNativeMessagesPayloadForCopilot } from '~/routes/messages/strat
 describe('native messages Copilot sanitization', () => {
   test('strips top-level citations before native upstream forwarding', () => {
     const payload = sanitizeNativeMessagesPayloadForCopilot({
-      model: 'claude-opus-4.6-1m',
+      model: 'claude-opus-4.7',
       max_tokens: 32,
       citations: { enabled: true },
       messages: [{ role: 'user', content: 'hello' }],
@@ -16,7 +16,7 @@ describe('native messages Copilot sanitization', () => {
 
   test('keeps pure search_result tool outputs for native upstream forwarding', () => {
     const payload = sanitizeNativeMessagesPayloadForCopilot({
-      model: 'claude-opus-4.6-1m',
+      model: 'claude-opus-4.7',
       max_tokens: 32,
       messages: [{
         role: 'user',
@@ -46,7 +46,7 @@ describe('native messages Copilot sanitization', () => {
 
   test('flattens mixed search_result tool outputs for native upstream forwarding', () => {
     const payload = sanitizeNativeMessagesPayloadForCopilot({
-      model: 'claude-opus-4.6-1m',
+      model: 'claude-opus-4.7',
       max_tokens: 32,
       messages: [{
         role: 'user',

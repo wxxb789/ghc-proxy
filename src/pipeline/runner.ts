@@ -7,11 +7,9 @@ import type { ModelTransformResult } from '~/pipeline/types'
 import type { ModelTransformChain } from '~/transform'
 import type { Model } from '~/types'
 
-import { executeWithContextRetry } from '~/dispatch/error-recovery'
 import { protocolRegistry } from '~/ingest'
 import { createCopilotClient } from '~/lib/state'
 import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
-import { modelCache } from '~/state'
 
 export interface PipelineParams {
   body: unknown
@@ -51,7 +49,6 @@ export interface PipelineConfig<TPayload, TStrategyCtx> {
     upstreamSignal: ReturnType<typeof createUpstreamSignalFromConfig>
     modelMapping: ModelMappingInfo
   }) => TStrategyCtx
-  contextRetry?: boolean
   afterIngest?: (ctx: IngestContext<TPayload>) => void
   afterTransform?: (ctx: TransformContext<TPayload>) => void | Promise<void>
 }
@@ -106,43 +103,6 @@ export async function runPipeline<TPayload, TStrategyCtx>(
     upstreamSignal,
     modelMapping,
   })
-
-  if (config.contextRetry) {
-    const result = await executeWithContextRetry(
-      async (model) => {
-        const isRetry = model !== (payload as Record<string, string>).model
-        const currentMapping = isRetry
-          ? { originalModel: modelMapping.originalModel, steps: [...modelMapping.steps] }
-          : modelMapping
-        const effectivePayload = isRetry
-          ? { ...payload, model } as TPayload
-          : payload
-        const currentModel = isRetry
-          ? modelCache.findById(model) ?? selectedModel
-          : selectedModel
-
-        const ctx = config.buildStrategyContext({
-          payload: effectivePayload,
-          meta,
-          headers: params.headers,
-          selectedModel: currentModel,
-          copilotClient,
-          upstreamSignal: isRetry ? createUpstreamSignalFromConfig(params.signal) : upstreamSignal,
-          modelMapping: currentMapping,
-        })
-
-        const entry = config.strategyRegistry.select(currentModel, ctx)
-        const entryResult = await entry.execute(ctx)
-
-        if (isRetry) {
-          modelMapping.steps = currentMapping.steps
-        }
-        return entryResult
-      },
-      { model: (payload as Record<string, string>).model, trace: modelMapping.steps.map(s => ({ tag: s.tag, from: s.from, to: s.to })) },
-    )
-    return { result, modelMapping }
-  }
 
   const ctx = buildCtx()
   const entry = config.strategyRegistry.select(selectedModel, ctx)

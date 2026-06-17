@@ -27,6 +27,17 @@ tags:
 
 # Config-driven context upgrade rules for long-context Copilot models
 
+> **Status (2026-06-17): Feature removed.** The context-upgrade mechanism
+> described below (config-driven `contextUpgradeRules`, proactive token
+> estimation, reactive context-length retry, and `anthropic-beta: context-*`
+> upgrade) has been removed. GitHub Copilot deprecated the separate
+> extended-context variants (`claude-opus-4.6-1m`, `claude-opus-4.7-1m-internal`);
+> the current SOTA Anthropic models are natively 1000k context, so there is no
+> longer a variant to upgrade to. `context-*` beta headers are still **stripped**
+> before forwarding (Copilot rejects them), but no model substitution occurs.
+> This document is retained as a historical record of the original problem and
+> solution.
+
 ## Problem
 
 A long `/v1/messages` request failed with an upstream Copilot context-length error even though the account had access to a longer-context model. The proxy sent the request through the normal model path and hit the standard Opus prompt limit instead of upgrading to the configured long-context target.

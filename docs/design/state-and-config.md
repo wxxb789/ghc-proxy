@@ -86,8 +86,6 @@ import { configStore } from '~/state'
 
 configStore.isEmulatorEnabled() // responsesOfficialEmulator
 configStore.getEmulatorTtlSeconds() // responsesOfficialEmulatorTtlSeconds
-configStore.isContextUpgradeEnabled() // contextUpgrade
-configStore.getContextUpgradeThreshold() // contextUpgradeTokenThreshold
 configStore.isCompactSmallModelEnabled() // compactUseSmallModel
 configStore.getSmallModel() // smallModel
 configStore.isFunctionApplyPatchEnabled() // useFunctionApplyPatch
@@ -96,7 +94,6 @@ configStore.isContextManagementEnabled() // responsesApiAutoContextManagement
 configStore.isContextManagementModel(model) // responsesApiContextManagementModels
 configStore.getReasoningEffort(model) // modelReasoningEfforts
 configStore.getModelRewrites() // modelRewrites
-configStore.getContextUpgradeRules() // contextUpgradeRules
 configStore.getModelFallback() // modelFallback
 configStore.getUpstreamQueueConcurrency() // upstreamQueueConcurrency
 configStore.getUpstreamQueueMaxRetries() // upstreamQueueMaxRetries
@@ -128,11 +125,6 @@ interface ConfigFile {
   // Small model routing
   smallModel?: string // Target model for rerouting
   compactUseSmallModel?: boolean // Reroute compact/summarize requests
-
-  // Context upgrade
-  contextUpgrade?: boolean // Enable/disable context upgrade signals
-  contextUpgradeRules?: Array<{ from: string, to: string }> // Glob-based context upgrade rules
-  contextUpgradeTokenThreshold?: number // Token count threshold for proactive upgrade
 
   // Responses API
   useFunctionApplyPatch?: boolean // Rewrite apply_patch custom tool

@@ -59,7 +59,7 @@ Create or edit `~/.claude/settings.json` (this applies globally to all projects)
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4141",
     "ANTHROPIC_AUTH_TOKEN": "dummy-token",
-    "ANTHROPIC_MODEL": "claude-opus-4.6",
+    "ANTHROPIC_MODEL": "claude-opus-4.8",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4.6",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
@@ -87,7 +87,7 @@ bunx ghc-proxy@latest start
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | The model used for Haiku-tier (fast/cheap) tasks |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | Disables telemetry and non-essential network traffic |
 
-> **Tip:** The model names above (e.g. `claude-opus-4.6`) are mapped to actual Copilot models by the proxy. See [Model Mapping](#model-mapping) below for details.
+> **Tip:** The model names above (e.g. `claude-opus-4.8`) are mapped to actual Copilot models by the proxy. See [Model Mapping](#model-mapping) below for details.
 
 See the [Claude Code settings docs](https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables) for more options.
 
@@ -186,14 +186,11 @@ All fields are optional. The full schema:
 |-------|------|---------|-------------|
 | `modelRewrites` | `{ from, to }[]` | -- | Glob-pattern model substitution rules (see [Model Rewrites](#model-rewrites)) |
 | `modelFallback` | `object` | -- | Override default model fallbacks (see [Customizing Fallbacks](#customizing-fallbacks)) |
-| `modelFallback.claudeOpus` | `string` | `claude-opus-4.6` | Fallback for `claude-opus-*` models |
+| `modelFallback.claudeOpus` | `string` | `claude-opus-4.8` | Fallback for `claude-opus-*` models |
 | `modelFallback.claudeSonnet` | `string` | `claude-sonnet-4.6` | Fallback for `claude-sonnet-*` models |
 | `modelFallback.claudeHaiku` | `string` | `claude-haiku-4.5` | Fallback for `claude-haiku-*` models |
 | `smallModel` | `string` | -- | Target model for compact request routing (see [Small-Model Routing](#small-model-routing)) |
 | `compactUseSmallModel` | `boolean` | `false` | Route compact/summarization requests to `smallModel` |
-| `contextUpgrade` | `boolean` | `true` | Enable configured extended-context upgrade rules (see [Context-1M Auto-Upgrade](#context-1m-auto-upgrade)) |
-| `contextUpgradeRules` | `{ from, to }[]` | `[]` | Glob-pattern context upgrade rules used for proactive, reactive, and beta-header upgrades |
-| `contextUpgradeTokenThreshold` | `number` | `160000` | Token threshold for proactive context upgrade |
 | `useFunctionApplyPatch` | `boolean` | `true` | Rewrite `apply_patch` custom tool as function tool on Responses path |
 | `responsesApiAutoCompactInput` | `boolean` | `false` | Automatically trim Responses `input` to the latest `compaction` item |
 | `responsesApiAutoContextManagement` | `boolean` | `false` | Automatically inject Responses `context_management` for selected models |
@@ -210,16 +207,11 @@ Example:
     { "from": "claude-haiku-*", "to": "gpt-4.1-mini" }
   ],
   "modelFallback": {
-    "claudeOpus": "claude-opus-4.6",
+    "claudeOpus": "claude-opus-4.8",
     "claudeSonnet": "claude-sonnet-4.6"
   },
   "smallModel": "gpt-4.1-mini",
   "compactUseSmallModel": true,
-  "contextUpgrade": true,
-  "contextUpgradeRules": [
-    { "from": "claude-opus-4.6", "to": "claude-opus-4.6-1m" }
-  ],
-  "contextUpgradeTokenThreshold": 160000,
   "useFunctionApplyPatch": true,
   "responsesApiAutoCompactInput": false,
   "responsesApiAutoContextManagement": false,
@@ -246,7 +238,7 @@ When Claude Code sends a request for a model like `claude-sonnet-4.6`, the proxy
 
 | Prefix | Default Fallback |
 |--------|-----------------|
-| `claude-opus-*` | `claude-opus-4.6` |
+| `claude-opus-*` | `claude-opus-4.8` |
 | `claude-sonnet-*` | `claude-sonnet-4.6` |
 | `claude-haiku-*` | `claude-haiku-4.5` |
 
@@ -255,7 +247,7 @@ When Claude Code sends a request for a model like `claude-sonnet-4.6`, the proxy
 You can override the defaults with **environment variables**:
 
 ```bash
-MODEL_FALLBACK_CLAUDE_OPUS=claude-opus-4.6
+MODEL_FALLBACK_CLAUDE_OPUS=claude-opus-4.8
 MODEL_FALLBACK_CLAUDE_SONNET=claude-sonnet-4.6
 MODEL_FALLBACK_CLAUDE_HAIKU=claude-haiku-4.5
 ```
@@ -265,7 +257,7 @@ Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
 ```json
 {
   "modelFallback": {
-    "claudeOpus": "claude-opus-4.6",
+    "claudeOpus": "claude-opus-4.8",
     "claudeSonnet": "claude-sonnet-4.6",
     "claudeHaiku": "claude-haiku-4.5"
   }
@@ -289,48 +281,7 @@ For more general model substitution, use `modelRewrites` in the config file. Eac
 
 Unlike model fallbacks (which only apply to the chat completions path), rewrites are applied **uniformly to all three endpoints** — `/v1/messages`, `/v1/chat/completions`, and `/v1/responses`. Target model names are normalized against Copilot's known model list using dash/dot equivalence (e.g. `gpt-4.1` matches `gpt-4-1`).
 
-Rewrites run **before** any other model policy — context upgrades, small-model routing, and strategy selection all see the rewritten model. This means a rewritten model still benefits from context-1m upgrades if the target has an upgrade rule.
-
-### Context-1M Auto-Upgrade
-
-The proxy can automatically upgrade models to extended-context variants when the request is large. Upgrade targets are config-driven so users only route to models their Copilot account can access.
-
-**Proactive upgrade:** Before sending the request, the proxy estimates the input token count. If it exceeds the configured threshold (default: 160,000 tokens), the first matching `contextUpgradeRules` entry is applied before the request is sent.
-
-**Reactive upgrade:** If the upstream returns a context-length error (e.g. "context length exceeded"), the proxy retries the request with the configured upgraded model automatically.
-
-**Beta header support:** When a client sends an `anthropic-beta: context-*` header (e.g. `context-1m-2025-04-14`), the proxy strips the header (Copilot does not understand it) and applies the configured context upgrade rule instead.
-
-Configuration:
-
-- `contextUpgrade` (boolean, default `true`) — enable or disable configured auto-upgrade rules
-- `contextUpgradeRules` (`{ from, to }[]`, default `[]`) — glob-pattern model upgrade rules; first match wins
-- `contextUpgradeTokenThreshold` (number, default `160000`) — token count threshold for proactive upgrade
-
-Example for the public Opus 4.6 1M model:
-
-```json
-{
-  "contextUpgradeRules": [
-    { "from": "claude-opus-4.6", "to": "claude-opus-4.6-1m" }
-  ]
-}
-```
-
-Example for an enterprise account with access to the Opus 4.7 internal 1M model:
-
-```json
-{
-  "modelRewrites": [
-    { "from": "claude-opus-*", "to": "claude-opus-4.7" }
-  ],
-  "contextUpgrade": true,
-  "contextUpgradeRules": [
-    { "from": "claude-opus-4.7", "to": "claude-opus-4.7-1m-internal" }
-  ],
-  "contextUpgradeTokenThreshold": 160000
-}
-```
+Rewrites run **before** any other model policy — small-model routing and strategy selection all see the rewritten model.
 
 ### Small-Model Routing
 

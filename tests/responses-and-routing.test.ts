@@ -2272,14 +2272,14 @@ describe('responses and routing', () => {
   test('/v1/messages native path drops nullable output_config effort before upstream', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []
-    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.6-1m', { supported_endpoints: ['/v1/messages'] })))
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.6', { supported_endpoints: ['/v1/messages'] })))
 
     CopilotClient.prototype.createMessages = mockMessages({
       id: 'msg_1',
       type: 'message',
       role: 'assistant',
       content: [{ type: 'text', text: 'native' }],
-      model: 'claude-opus-4.6-1m',
+      model: 'claude-opus-4.6',
       stop_reason: 'end_turn',
       stop_sequence: null,
       usage: {
@@ -2292,7 +2292,7 @@ describe('responses and routing', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-opus-4.6-1m',
+        model: 'claude-opus-4.6',
         max_tokens: 256,
         output_config: { effort: null },
         messages: [{ role: 'user', content: 'hello' }],
@@ -2306,7 +2306,7 @@ describe('responses and routing', () => {
   test('/v1/messages native path clamps unsupported high-end output_config effort', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []
-    const model = buildModel('claude-opus-4.6-1m', { supported_endpoints: ['/v1/messages'] })
+    const model = buildModel('claude-opus-4.6', { supported_endpoints: ['/v1/messages'] })
     model.capabilities.supports.reasoning_effort = ['low', 'medium', 'high']
     modelCache.cacheModels(buildModelsResponse(model))
 
@@ -2315,7 +2315,7 @@ describe('responses and routing', () => {
       type: 'message',
       role: 'assistant',
       content: [{ type: 'text', text: 'native' }],
-      model: 'claude-opus-4.6-1m',
+      model: 'claude-opus-4.6',
       stop_reason: 'end_turn',
       stop_sequence: null,
       usage: {
@@ -2329,7 +2329,7 @@ describe('responses and routing', () => {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: 'claude-opus-4.6-1m',
+          model: 'claude-opus-4.6',
           max_tokens: 256,
           output_config: { effort },
           messages: [{ role: 'user', content: 'hello' }],
@@ -2378,93 +2378,6 @@ describe('responses and routing', () => {
     expect(calls[0]?.payload.output_config?.effort).toBe('medium')
   })
 
-  test('/v1/messages proactive context upgrade uses configured target on native path', async () => {
-    const app = createApp()
-    const calls: Array<CapturedMessagesCall> = []
-    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.7', { supported_endpoints: ['/v1/messages'] })))
-
-    const config = getCachedConfig() as Record<string, unknown>
-    config.contextUpgradeRules = [{ from: 'claude-opus-4.7', to: 'claude-opus-4.7-1m-internal' }]
-    config.contextUpgradeTokenThreshold = 1
-
-    CopilotClient.prototype.createMessages = mockMessages({
-      id: 'msg_1',
-      type: 'message',
-      role: 'assistant',
-      content: [{ type: 'text', text: 'native' }],
-      model: 'claude-opus-4.7-1m-internal',
-      stop_reason: 'end_turn',
-      stop_sequence: null,
-      usage: {
-        input_tokens: 1,
-        output_tokens: 1,
-      },
-    }, calls)
-
-    const response = await app.handle(new Request('http://localhost/v1/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-opus-4.7',
-        max_tokens: 256,
-        messages: [{ role: 'user', content: 'hello' }],
-      }),
-    }))
-
-    expect(response.status).toBe(200)
-    expect(calls[0]?.payload.model).toBe('claude-opus-4.7-1m-internal')
-  })
-
-  test('/v1/messages context-length retry uses configured 1M target on native path', async () => {
-    const app = createApp()
-    const calls: Array<CapturedMessagesCall> = []
-    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.7', { supported_endpoints: ['/v1/messages'] })))
-
-    const config = getCachedConfig() as Record<string, unknown>
-    config.contextUpgradeRules = [{ from: 'claude-opus-4.7', to: 'claude-opus-4.7-1m-internal' }]
-
-    CopilotClient.prototype.createMessages = ((payload) => {
-      calls.push({ payload })
-      if (calls.length === 1) {
-        return Promise.reject(new HTTPError(400, {
-          error: {
-            message: 'prompt token count of 203270 exceeds the limit of 168000',
-            type: 'invalid_request_error',
-            code: 'model_max_prompt_tokens_exceeded',
-          },
-        }))
-      }
-      return Promise.resolve({
-        id: 'msg_1',
-        type: 'message',
-        role: 'assistant',
-        content: [{ type: 'text', text: 'native' }],
-        model: payload.model,
-        stop_reason: 'end_turn',
-        stop_sequence: null,
-        usage: {
-          input_tokens: 1,
-          output_tokens: 1,
-        },
-      })
-    }) as typeof CopilotClient.prototype.createMessages
-
-    const response = await app.handle(new Request('http://localhost/v1/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-opus-4.7',
-        max_tokens: 256,
-        messages: [{ role: 'user', content: 'hello' }],
-      }),
-    }))
-
-    expect(response.status).toBe(200)
-    expect(calls.map(call => call.payload.model)).toEqual([
-      'claude-opus-4.7',
-      'claude-opus-4.7-1m-internal',
-    ])
-  })
   test('/v1/messages native path preserves output_config effort without model metadata', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []

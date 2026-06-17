@@ -1,7 +1,6 @@
 import consola from 'consola'
 
 import { configStore, modelCache } from '~/state'
-import { HTTPError } from './error'
 
 // ── Types ──
 
@@ -90,66 +89,4 @@ function matchesGlob(pattern: string, value: string): boolean {
     `^${pattern.replace(GLOB_SPECIAL_RE, '\\$&').replace(GLOB_STAR_RE, '.*')}$`,
   )
   return regex.test(value)
-}
-
-// ── Config-driven context upgrade rules ──
-
-/**
- * Quick check: does this model have any configured context-upgrade rules?
- * Use to skip expensive token estimation for ineligible models.
- */
-export function hasContextUpgradeRule(model: string): boolean {
-  return configStore.getContextUpgradeRules().some(rule => matchesGlob(rule.from, model))
-}
-
-/** Find the first configured upgrade rule for a model. */
-function findUpgradeRule(model: string) {
-  for (const rule of configStore.getContextUpgradeRules()) {
-    if (matchesGlob(rule.from, model)) {
-      return {
-        from: rule.from,
-        to: normalizeToKnownModel(rule.to) ?? rule.to,
-      }
-    }
-  }
-  return undefined
-}
-
-/**
- * Proactive: resolve the upgrade target model for a given model + token count.
- * Returns the target model ID, or undefined if no upgrade applies.
- */
-export function resolveContextUpgrade(
-  model: string,
-  estimatedTokens: number,
-): string | undefined {
-  const rule = findUpgradeRule(model)
-  if (rule && estimatedTokens > configStore.getContextUpgradeThreshold()) {
-    return rule.to
-  }
-  return undefined
-}
-
-/**
- * Reactive: get the upgrade target for a model on context-length error.
- * Returns the target model ID, or undefined if no fallback applies.
- */
-export function getContextUpgradeTarget(model: string): string | undefined {
-  return findUpgradeRule(model)?.to
-}
-
-/** Context-length error detection with pattern matching */
-const CONTEXT_ERROR_PATTERNS = [
-  /context.length/i,
-  /too.long/i,
-  /token.*(limit|maximum|exceed)/i,
-  /(limit|maximum|exceed).*token/i,
-]
-
-export function isContextLengthError(error: unknown): boolean {
-  if (!(error instanceof HTTPError) || error.status !== 400) {
-    return false
-  }
-  const message = error.body?.error?.message
-  return message ? CONTEXT_ERROR_PATTERNS.some(pattern => pattern.test(message)) : false
 }

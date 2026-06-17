@@ -116,7 +116,7 @@ describe('Anthropic extended content blocks', () => {
   test('fallback translator flattens search_result blocks', () => {
     const translator = new AnthropicTranslator()
     const result = translator.toOpenAI({
-      model: 'claude-opus-4.6-1m',
+      model: 'claude-opus-4.7',
       max_tokens: 100,
       messages: [
         {
@@ -167,7 +167,7 @@ describe('Anthropic extended content blocks', () => {
 
   test('responses translator flattens search_result blocks', () => {
     const result = translateAnthropicToResponsesPayload({
-      model: 'claude-opus-4.6-1m',
+      model: 'claude-opus-4.7',
       max_tokens: 100,
       messages: [
         {

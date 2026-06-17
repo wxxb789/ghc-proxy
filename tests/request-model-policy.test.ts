@@ -31,7 +31,7 @@ beforeEach(() => {
   originalModels = modelCache.getModels()
   modelCache.cacheModels(buildModelsResponse(
     buildModel('claude-opus-4.6'),
-    buildModel('claude-opus-4.6-1m'),
+    buildModel('claude-opus-4.7'),
     buildModel('claude-sonnet-4.5'),
     buildModel('gpt-4.1-mini', { vendor: 'openai' }),
   ))
@@ -73,12 +73,12 @@ describe('applyMessagesModelPolicy — betaUpgraded', () => {
   test('skips compact routing when betaUpgraded is true', () => {
     enableCompactRouting('gpt-4.1-mini')
 
-    const payload = compactPayload('claude-opus-4.6-1m')
+    const payload = compactPayload('claude-opus-4.7')
     const result = applyMessagesModelPolicy(payload, { betaUpgraded: true })
 
-    expect(result.routedModel).toBe('claude-opus-4.6-1m')
+    expect(result.routedModel).toBe('claude-opus-4.7')
     expect(result.reason).toBeUndefined()
-    expect(payload.model).toBe('claude-opus-4.6-1m')
+    expect(payload.model).toBe('claude-opus-4.7')
   })
 
   test('compact routing still works when betaUpgraded is false', () => {
@@ -99,37 +99,5 @@ describe('applyMessagesModelPolicy — betaUpgraded', () => {
 
     expect(result.routedModel).toBe('gpt-4.1-mini')
     expect(result.reason).toBe('compact')
-  })
-
-  test('context upgrade uses configured rule for large payloads', () => {
-    const config = getCachedConfig() as Record<string, unknown>
-    config.contextUpgradeRules = [{ from: 'claude-opus-4.6', to: 'claude-opus-4.6-1m' }]
-
-    const payload = {
-      model: 'claude-opus-4.6',
-      max_tokens: 8192,
-      messages: [{ role: 'user', content: 'a'.repeat(700_000) }],
-    } as AnthropicMessagesPayload
-
-    const result = applyMessagesModelPolicy(payload)
-
-    expect(result.routedModel).toBe('claude-opus-4.6-1m')
-    expect(result.reason).toBe('context-upgrade')
-    expect(payload.model).toBe('claude-opus-4.6-1m')
-  })
-  test('skips context upgrade when betaUpgraded is true', () => {
-    const config = getCachedConfig() as Record<string, unknown>
-    config.contextUpgrade = true
-
-    const payload = {
-      model: 'claude-opus-4.6',
-      max_tokens: 8192,
-      messages: [{ role: 'user', content: 'a'.repeat(700_000) }],
-    } as AnthropicMessagesPayload
-
-    const result = applyMessagesModelPolicy(payload, { betaUpgraded: true })
-
-    expect(result.routedModel).toBe('claude-opus-4.6')
-    expect(result.reason).toBeUndefined()
   })
 })

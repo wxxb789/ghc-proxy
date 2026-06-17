@@ -160,7 +160,7 @@ ConversationRequest
 | `execution-strategy.ts`     | Generic ExecutionStrategy interface and executor     |
 | `state.ts`                  | Global AppState (auth, config, cache, rate limit)    |
 | `model-resolver.ts`         | Model ID resolution with configurable fallbacks      |
-| `model-rewrite.ts`          | Unified model rewrite (user rules, normalization, context upgrade) |
+| `model-rewrite.ts`          | Unified model rewrite (user rules, normalization)    |
 | `model-capabilities.ts`     | Query model endpoint support and capabilities        |
 | `request-model-policy.ts`   | Smart model rerouting (compact detection)             |
 | `function-schema.ts`        | Normalize function tool parameter schemas for Copilot compatibility |

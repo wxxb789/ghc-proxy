@@ -3,10 +3,7 @@ import { colorize } from 'consola/utils'
 export type ModelTransformTag
   = | 'AUTO_CORRECT'
     | 'CONFIG_REWRITE'
-    | 'BETA_UPGRADE'
-    | 'CONTEXT_UPGRADE'
     | 'COMPACT'
-    | 'RETRY_UPGRADE'
     | 'MODEL_RESOLVE'
 
 export interface ModelTransformStep {

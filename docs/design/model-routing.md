@@ -27,8 +27,8 @@ MODEL_FALLBACK_CLAUDE_HAIKU     → config.modelFallback.claudeHaiku
 
 Default fallbacks:
 ```text
-claudeOpus:   claude-opus-4.6
-claudeSonnet: claude-sonnet-4.5
+claudeOpus:   claude-opus-4.8
+claudeSonnet: claude-sonnet-4.6
 claudeHaiku:  claude-haiku-4.5
 ```
 
@@ -44,17 +44,20 @@ The proxy queries each model's metadata from Copilot's model list to determine:
 | `adaptive_thinking`    | Whether to fill thinking config                      |
 | Vision limits          | Max image tokens, max images per request             |
 
-### Model Endpoint Map (April 30, 2026)
+### Model Endpoint Map (June 17, 2026)
 
 | Model | Endpoints | Notes |
 |-------|-----------|-------|
-| `claude-opus-4.7` / `-high` / `-xhigh` | `/v1/messages`, `/chat/completions` | 200k ctx; `-xhigh` has 8K cache threshold |
-| `claude-opus-4.7-1m-internal` | `/v1/messages`, `/chat/completions` | 1000k ctx |
-| `claude-opus-4.6` / `-1m` | `/v1/messages`, `/chat/completions` | |
-| `claude-sonnet-4.6` | `/v1/messages`, `/chat/completions` | |
-| `gpt-5.5` | `/responses` | Same tool support as gpt-5.4 |
-| `gpt-5.4` / `-mini` | `/responses` | |
-| `gemini-3.1-pro-preview` | `/chat/completions` | |
+| `claude-opus-4.8` | `/v1/messages`, `/chat/completions` | 1000k ctx |
+| `claude-opus-4.7` / `-high` / `-xhigh` | `/v1/messages`, `/chat/completions` | 1000k ctx; `-xhigh` has 8K cache threshold |
+| `claude-opus-4.6` | `/v1/messages`, `/chat/completions` | 1000k ctx |
+| `claude-sonnet-4.6` | `/v1/messages`, `/chat/completions` | 1000k ctx |
+| `claude-haiku-4.5` | `/v1/messages`, `/chat/completions` | 200k ctx |
+| `gpt-5.5` | `/responses` | 1050k ctx; same tool support as gpt-5.4 |
+| `gpt-5.4` / `-mini` | `/responses` | 1050k / 400k ctx |
+| `gpt-5.3-codex` | `/responses` | 400k ctx |
+| `gemini-3.5-flash` | `/chat/completions` | 1000k ctx |
+| `gemini-3.1-pro-preview` | `/chat/completions` | 1000k ctx |
 
 ## Execution Path Selection
 
@@ -76,51 +79,9 @@ Priority order matters: native passthrough wins when available. The Responses pa
 
 An optional optimization that reroutes certain requests to a smaller (cheaper/faster) model.
 
-## Context Upgrade
+## `anthropic-beta` Header Handling
 
-When Copilot exposes separate model IDs for extended context (e.g., `claude-opus-4.6-1m`), the proxy can automatically upgrade requests to use the higher-context variant. Three independent signals trigger an upgrade, evaluated in order:
-
-### Signal 1: `anthropic-beta` Header (Proactive)
-
-Clients like Claude Code send `anthropic-beta: context-1m-2025-08-07` to request 1M context. Copilot rejects this header, so the proxy intercepts it:
-1. Parse the comma-separated beta values
-2. If any value matches `context-<N>k|m-*` and a context upgrade rule exists for the model → upgrade model, strip that beta value
-3. Forward remaining beta values to Copilot
-
-This is checked **before** the token-estimation signal. When triggered, the token-estimation signal is skipped via `skipContextUpgrade`.
-
-### Signal 2: Token Estimation (Proactive)
-
-If no beta-header upgrade occurred, the proxy estimates the input token count. When the estimate exceeds the configured threshold (default: 160k tokens), the model is upgraded before sending the request.
-
-### Signal 3: Context Length Error (Reactive)
-
-If Copilot returns a context-length error at runtime, the proxy catches it and retries with the extended-context model variant. This is a last-resort fallback that works regardless of the first two signals.
-
-### Upgrade Rules
-
-Upgrade rules are configured in `config.json` via `contextUpgradeRules`. Rules are evaluated in order, the `from` field supports `*` glob patterns, and the first match wins. Configured targets are trusted even when the target is not present in Copilot's `/models` response, which lets enterprise users opt into internal rollout models without affecting other users.
-
-### Configuration
-
-Context upgrade is controlled by these config options:
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `contextUpgrade` | `boolean` | `true` | Enable/disable all three context upgrade signals |
-| `contextUpgradeRules` | `{ from, to }[]` | `[]` | Glob-based model upgrade rules |
-| `contextUpgradeTokenThreshold` | `number` | `160000` | Token count threshold for proactive upgrade (Signal 2) |
-
-Example `config.json`:
-```json
-{
-  "contextUpgrade": true,
-  "contextUpgradeRules": [
-    { "from": "claude-opus-4.6", "to": "claude-opus-4.6-1m" }
-  ],
-  "contextUpgradeTokenThreshold": 160000
-}
-```
+Clients like Claude Code may send `anthropic-beta: context-1m-2025-08-07` to request 1M context. Copilot does not understand `context-*` beta values, so the proxy **strips** them (along with other Copilot-unsupported betas) before forwarding; remaining beta values pass through. SOTA Anthropic models are natively 1000k context, so no model substitution is performed for the header — it is simply removed.
 
 ### Small-Model Routing Details
 

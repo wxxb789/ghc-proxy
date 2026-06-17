@@ -27,14 +27,12 @@ export async function handleMessagesCore(
       protocol: 'anthropic-messages',
       transformChain: messagesModelChain,
       strategyRegistry: defaultStrategyRegistry,
-      contextRetry: true,
       afterIngest({ payload, headers: reqHeaders }) {
         if (consola.level >= 4)
           consola.debug('Anthropic request payload:', JSON.stringify(payload))
 
         const betaResult = processAnthropicBetaHeader(
           reqHeaders.get('anthropic-beta'),
-          payload.model,
         )
         anthropicBetaHeader = betaResult.header
       },
