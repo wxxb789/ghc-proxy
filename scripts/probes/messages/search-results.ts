@@ -8,9 +8,9 @@
  * validation and translation.
  *
  * Usage:
- *   bun run scripts/probe-messages-search-results.ts
- *   bun run scripts/probe-messages-search-results.ts --json
- *   bun run scripts/probe-messages-search-results.ts --model=claude-opus-4.8
+ *   bun run scripts/probes/messages/search-results.ts
+ *   bun run scripts/probes/messages/search-results.ts --json
+ *   bun run scripts/probes/messages/search-results.ts --model=claude-opus-4.8
  *
  * WARNING: Uses real Copilot quota.
  */
@@ -20,9 +20,9 @@ import type { Model } from '~/types'
 import process from 'node:process'
 import { modelCache } from '~/state'
 
-import { parseProbeArgs } from './lib/probe-args'
-import { bootstrapProbe, pickMessagesModels, pickModelById, probeMessagesEndpoint, runMain } from './lib/probe-harness'
-import { summarizeProbeResults, writeJsonSnapshot } from './lib/probe-report'
+import { parseProbeArgs } from '../../lib/probe-args'
+import { bootstrapProbe, pickMessagesModels, pickModelById, probeMessagesEndpoint, runMain } from '../../lib/probe-harness'
+import { summarizeProbeResults, writeJsonSnapshot } from '../../lib/probe-report'
 
 const { jsonMode, requestedModelId } = parseProbeArgs()
 

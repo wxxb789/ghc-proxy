@@ -5,15 +5,15 @@
  * increasing system prompt sizes.
  *
  * Usage:
- *   bun scripts/probe-cache-threshold.ts --model=claude-opus-4.7-xhigh
- *   bun scripts/probe-cache-threshold.ts --model=claude-opus-4.7-xhigh --sizes=1024,4096,8192,16384,32768
+ *   bun scripts/probes/cache-threshold.ts --model=claude-opus-4.7-xhigh
+ *   bun scripts/probes/cache-threshold.ts --model=claude-opus-4.7-xhigh --sizes=1024,4096,8192,16384,32768
  */
 
 import process from 'node:process'
 import { modelCache } from '~/state'
 
-import { getFlagValue } from './lib/probe-args'
-import { bootstrapProbe, extractErrorMessage, parseAnthropicUsage, runMain, sendRaw } from './lib/probe-harness'
+import { getFlagValue } from '../lib/probe-args'
+import { bootstrapProbe, extractErrorMessage, parseAnthropicUsage, runMain, sendRaw } from '../lib/probe-harness'
 
 const REQUEST_TIMEOUT_MS = 120_000
 const REPEAT_DELAY_MS = 1000

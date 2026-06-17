@@ -5,7 +5,7 @@ import process from 'node:process'
 
 const src = process.argv[2]
 if (!src) {
-  console.error('usage: bun run scripts/extract-workflow-report.ts <workflow-output-path>')
+  console.error('usage: bun run scripts/dev/extract-workflow-report.ts <workflow-output-path>')
   process.exit(1)
 }
 

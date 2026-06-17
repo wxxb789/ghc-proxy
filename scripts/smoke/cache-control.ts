@@ -9,8 +9,8 @@
  * two proxied requests per target model plus a direct upstream scope probe.
  *
  * Usage:
- *   bun run scripts/smoke-cache-control.ts          # human-readable report
- *   bun run scripts/smoke-cache-control.ts --json    # JSON to stdout
+ *   bun run scripts/smoke/cache-control.ts          # human-readable report
+ *   bun run scripts/smoke/cache-control.ts --json    # JSON to stdout
  */
 
 import type { Model } from '~/types'
@@ -19,8 +19,8 @@ import process from 'node:process'
 import { createServer } from '~/server'
 import { modelCache } from '~/state'
 
-import { parseProbeArgs } from './lib/probe-args'
-import { bootstrapProbe, classifyCacheStatus, extractErrorMessage, parseAnthropicUsage, pickFirstMessagesModel, probeMessagesEndpoint, runMain } from './lib/probe-harness'
+import { parseProbeArgs } from '../lib/probe-args'
+import { bootstrapProbe, classifyCacheStatus, extractErrorMessage, parseAnthropicUsage, pickFirstMessagesModel, probeMessagesEndpoint, runMain } from '../lib/probe-harness'
 
 const PORT = 14141
 const BASE_URL = `http://localhost:${PORT}`

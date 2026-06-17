@@ -5,16 +5,16 @@
  * Tests whether older models (without adaptive_thinking) reject output_config.
  *
  * Usage:
- *   bun run scripts/probe-all-models-output-config.ts
- *   bun run scripts/probe-all-models-output-config.ts --json
+ *   bun run scripts/probes/messages/output-config.ts
+ *   bun run scripts/probes/messages/output-config.ts --json
  */
 
 import process from 'node:process'
 import { modelCache } from '~/state'
 
-import { parseProbeArgs } from './lib/probe-args'
-import { bootstrapProbe, pickMessagesModels, probeMessagesEndpoint, runMain } from './lib/probe-harness'
-import { statusIcon, writeJsonSnapshot } from './lib/probe-report'
+import { parseProbeArgs } from '../../lib/probe-args'
+import { bootstrapProbe, pickMessagesModels, probeMessagesEndpoint, runMain } from '../../lib/probe-harness'
+import { statusIcon, writeJsonSnapshot } from '../../lib/probe-report'
 
 const { jsonMode } = parseProbeArgs()
 

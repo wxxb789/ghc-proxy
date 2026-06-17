@@ -12,9 +12,9 @@
  *   6. orphaned function_call_output (no matching function_call)
  *
  * Usage:
- *   bun scripts/probe-responses-resilience.ts                # human-readable
- *   bun scripts/probe-responses-resilience.ts --json         # JSON to stdout
- *   bun scripts/probe-responses-resilience.ts --model=gpt-5.4  # specific model
+ *   bun scripts/probes/responses-resilience.ts                # human-readable
+ *   bun scripts/probes/responses-resilience.ts --json         # JSON to stdout
+ *   bun scripts/probes/responses-resilience.ts --model=gpt-5.4  # specific model
  *
  * WARNING: Uses real Copilot quota — one request per probe case.
  */
@@ -25,9 +25,9 @@ import process from 'node:process'
 import { RESPONSES_ENDPOINT } from '~/lib/model-capabilities'
 import { modelCache } from '~/state'
 
-import { parseProbeArgs } from './lib/probe-args'
-import { bootstrapProbe, extractErrorMessage, pickFirstResponsesModel, pickModelById, pickResponsesModels, runMain, sendRaw } from './lib/probe-harness'
-import { writeJsonSnapshot } from './lib/probe-report'
+import { parseProbeArgs } from '../lib/probe-args'
+import { bootstrapProbe, extractErrorMessage, pickFirstResponsesModel, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'
+import { writeJsonSnapshot } from '../lib/probe-report'
 
 const REQUEST_TIMEOUT_MS = 60_000
 

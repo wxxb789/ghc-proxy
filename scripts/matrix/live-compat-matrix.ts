@@ -6,8 +6,8 @@ import process from 'node:process'
 import { createServer } from '~/server'
 import { modelCache } from '~/state'
 
-import { getFlagValue, hasFlag } from './lib/probe-args'
-import { bootstrapProbe, pickFirstMessagesModel, pickFirstResponsesModel, pickResponsesModels, runMain, tryParseJson } from './lib/probe-harness'
+import { getFlagValue, hasFlag } from '../lib/probe-args'
+import { bootstrapProbe, pickFirstMessagesModel, pickFirstResponsesModel, pickResponsesModels, runMain, tryParseJson } from '../lib/probe-harness'
 
 const server = createServer()
 

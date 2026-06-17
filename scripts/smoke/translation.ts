@@ -5,16 +5,18 @@
  * This is a manual dev-time sanity check — it is not part of the test suite.
  *
  * Usage:
- *   bun run scripts/smoke-test.ts            # offline preview + live proxy tests
- *   bun run scripts/smoke-test.ts --offline   # offline preview only (no proxy needed)
+ *   bun run scripts/smoke/translation.ts            # offline preview + live proxy tests
+ *   bun run scripts/smoke/translation.ts --offline   # offline preview only (no proxy needed)
  *
  * Prerequisites (live mode):
  *   The proxy must be running on port 4142:
  *     bun run dev start --port 4142 --verbose --wait
  */
 
-import process from 'node:process'
 import { events } from 'fetch-event-stream'
+import { AnthropicTranslator } from '~/translator'
+
+import { hasFlag } from '../lib/probe-args'
 
 const BASE_URL = 'http://localhost:4142'
 const ENDPOINT = `${BASE_URL}/v1/messages`
@@ -203,8 +205,6 @@ async function sendStreamingRequest(label: string, payload: object) {
 function printTranslationPreview() {
   section('OFFLINE TRANSLATION PREVIEW (no proxy needed)')
 
-  // eslint-disable-next-line ts/no-require-imports
-  const { AnthropicTranslator } = require('../src/translator') as typeof import('../src/translator')
   const translator = new AnthropicTranslator()
 
   const cases = [
@@ -230,8 +230,7 @@ function printTranslationPreview() {
 // ---------- main ----------
 
 async function main() {
-  const args = process.argv.slice(2)
-  const offlineOnly = args.includes('--offline')
+  const offlineOnly = hasFlag('--offline')
 
   printTranslationPreview()
 

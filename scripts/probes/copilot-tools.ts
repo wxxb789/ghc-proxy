@@ -7,9 +7,9 @@
  * to detect when Copilot adds or removes tool support.
  *
  * Usage:
- *   bun scripts/probe-all-copilot-tools.ts              # human-readable table
- *   bun scripts/probe-all-copilot-tools.ts --json        # JSON to stdout
- *   bun scripts/probe-all-copilot-tools.ts --model=claude-opus-4.6  # single model
+ *   bun scripts/probes/copilot-tools.ts              # human-readable table
+ *   bun scripts/probes/copilot-tools.ts --json        # JSON to stdout
+ *   bun scripts/probes/copilot-tools.ts --model=claude-opus-4.6  # single model
  *
  * WARNING: Uses real Copilot quota — one request per (model × tool) pair.
  */
@@ -20,9 +20,9 @@ import process from 'node:process'
 import { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/lib/model-capabilities'
 import { modelCache } from '~/state'
 
-import { parseProbeArgs } from './lib/probe-args'
-import { bootstrapProbe, extractErrorMessage, pickMessagesModels, pickModelById, pickResponsesModels, runMain, sendRaw } from './lib/probe-harness'
-import { toSortedRecord, writeJsonSnapshot } from './lib/probe-report'
+import { parseProbeArgs } from '../lib/probe-args'
+import { bootstrapProbe, extractErrorMessage, pickMessagesModels, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'
+import { toSortedRecord, writeJsonSnapshot } from '../lib/probe-report'
 
 const REQUEST_TIMEOUT_MS = 60_000
 

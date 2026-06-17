@@ -8,17 +8,17 @@
  * endpoint (bypassing all proxy handler logic) with various field
  * combinations to map out the accepted schema.
  *
- * Usage: bun run scripts/probe-messages-fields.ts [--json]
+ * Usage: bun run scripts/probes/messages/effort-fields.ts [--json]
  */
 
-import type { ProbeResult } from './lib/probe-harness'
+import type { ProbeResult } from '../../lib/probe-harness'
 
 import process from 'node:process'
 import { modelCache } from '~/state'
 
-import { parseProbeArgs } from './lib/probe-args'
-import { bootstrapProbe, pickFirstReasoningMessagesModel, probeMessagesEndpoint, runMain } from './lib/probe-harness'
-import { formatProbeLine, writeJsonSnapshot } from './lib/probe-report'
+import { parseProbeArgs } from '../../lib/probe-args'
+import { bootstrapProbe, pickFirstReasoningMessagesModel, probeMessagesEndpoint, runMain } from '../../lib/probe-harness'
+import { formatProbeLine, writeJsonSnapshot } from '../../lib/probe-report'
 
 const { jsonMode } = parseProbeArgs()
 
