@@ -5,7 +5,7 @@ import type {
   ResponsesResult,
 } from '~/types'
 
-import { configStore } from '~/state'
+import { configStore } from './config-store'
 
 const DEFAULT_MAX_TOTAL_ENTRIES = 10_000
 const BACKGROUND_PRUNE_INTERVAL_MS = 60_000
