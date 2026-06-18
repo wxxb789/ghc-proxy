@@ -1,6 +1,6 @@
 import consola from 'consola'
 import { HTTPError } from '~/lib/error'
-import { sleep } from '~/lib/sleep'
+import { sleep } from '~/util/sleep'
 
 export class RateLimiter {
   private nextAvailableAt = 0

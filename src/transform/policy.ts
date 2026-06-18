@@ -1,8 +1,8 @@
 import type { ModelTransformStep } from './types'
 import type { AnthropicMessagesPayload } from '~/translator'
 
-import { applyMessagesModelPolicy } from '~/lib/request-model-policy'
 import { CONTEXT_BETA_RE } from './constants'
+import { applyMessagesModelPolicy } from './request-model-policy'
 
 export const modelPolicyStep: ModelTransformStep = {
   tag: 'POLICY',

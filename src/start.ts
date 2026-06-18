@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 
-import type { RuntimeConfig } from './lib/state'
+import type { RuntimeConfig } from './clients/factory'
 import process from 'node:process'
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
 import { authStore, modelCache, runtimeStore } from '~/state'
+import { initProxyFromEnv } from './cli/proxy'
+import { generateEnvScript } from './cli/shell'
+import { printStartupBanner } from './cli/startup-banner'
+import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from './clients/factory'
+import { normalizeGheDomain } from './clients/ghe-domain'
 import { getCachedConfig, readConfig } from './lib/config'
-import { normalizeGheDomain } from './lib/ghe-domain'
 import { ensurePaths } from './lib/paths'
-import { initProxyFromEnv } from './lib/proxy'
-import { generateEnvScript } from './lib/shell'
-import { printStartupBanner } from './lib/startup-banner'
-import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from './lib/state'
 import { setupCopilotToken, setupGitHubToken } from './lib/token'
 import { createServer } from './server'
 
@@ -80,7 +80,7 @@ async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
   consola.info(`Claude Code command:\n${command}`)
 }
 
-export async function runServer(options: RunServerOptions): Promise<void> {
+async function runServer(options: RunServerOptions): Promise<void> {
   const accountType: RuntimeConfig['accountType']
     = (
       options.accountType === 'individual'
@@ -290,7 +290,7 @@ export const start = defineCommand({
     },
     'upstream-queue-retries': {
       type: 'string',
-      description: 'Maximum retries for upstream 429 responses (default: 6)',
+      description: 'Maximum retries for upstream 429 responses (default: 5)',
     },
     'upstream-queue-base-delay': {
       type: 'string',

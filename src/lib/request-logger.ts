@@ -1,5 +1,7 @@
 import { colorize } from 'consola/utils'
 
+import { formatDurationMs } from '~/util/duration'
+
 export type ModelTransformTag
   = | 'AUTO_CORRECT'
     | 'CONFIG_REWRITE'
@@ -33,8 +35,7 @@ export function getRequestModelMapping(request: Request): ModelMappingInfo | und
 }
 
 export function formatElapsed(start: number) {
-  const delta = Date.now() - start
-  return delta < 1000 ? `${delta}ms` : `${Math.round(delta / 1000)}s`
+  return formatDurationMs(Date.now() - start)
 }
 
 function formatPath(rawUrl: string) {
@@ -75,24 +76,10 @@ export function getEffectiveModel(info: ModelMappingInfo): string {
     : info.originalModel ?? '-'
 }
 
-export function appendModelStep(
-  info: ModelMappingInfo,
-  tag: ModelTransformTag,
-  newModel: string,
-): ModelMappingInfo {
-  const current = getEffectiveModel(info)
-  if (newModel === current)
-    return info
-  return {
-    originalModel: info.originalModel,
-    steps: [...info.steps, { tag, from: current, to: newModel }],
-  }
-}
-
 /**
  * Mutate `modelMapping` in place by appending a transform step.
- * `appendModelStep` returns a new object, but strategy contexts
- * hold a reference to the same `modelMapping`, so we push directly.
+ * Strategy contexts hold a reference to the same `modelMapping`,
+ * so steps are pushed directly rather than returning a new object.
  */
 export function appendModelStepInPlace(
   info: ModelMappingInfo,

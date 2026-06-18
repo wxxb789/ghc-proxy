@@ -5,7 +5,7 @@ import type {
   ResponsesResult,
 } from '~/types'
 
-import { configStore } from '~/state'
+import { configStore } from './config-store'
 
 const DEFAULT_MAX_TOTAL_ENTRIES = 10_000
 const BACKGROUND_PRUNE_INTERVAL_MS = 60_000
@@ -127,8 +127,6 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
     }
   }
 
-  startBackgroundPrune()
-
   function totalEntries(): number {
     let sum = 0
     for (const map of allMaps) {
@@ -164,6 +162,7 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
     ttlSeconds?: number,
     at = currentTime(),
   ): T {
+    startBackgroundPrune()
     if (!map.has(key))
       enforceCapOnWrite()
     const cloned = cloneValue(value)
@@ -187,6 +186,7 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
     ttlSeconds?: number,
     at = currentTime(),
   ): ResponsesEmulatorDeletionFlag {
+    startBackgroundPrune()
     if (!map.has(id))
       enforceCapOnWrite()
     const flag: ResponsesEmulatorDeletionFlag = {

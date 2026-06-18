@@ -1,7 +1,8 @@
 import consola from 'consola'
 
-import { HTTPError } from './error'
-import { sleep as defaultSleep } from './sleep'
+import { HTTPError } from '~/lib/error'
+import { formatDurationMs } from '~/util/duration'
+import { sleep as defaultSleep } from '~/util/sleep'
 
 export interface UpstreamRequestQueueOptions {
   concurrency: number
@@ -113,7 +114,7 @@ export class UpstreamRequestQueue {
         [
           'Upstream rate limited;',
           `retrying ${formatRequestContext(context)}`,
-          `in ${formatDelay(delayMs)}`,
+          `in ${formatDurationMs(delayMs)}`,
           `(attempt ${attempt + 1}/${this.options.maxRetries})`,
         ].join(' '),
       )
@@ -277,12 +278,6 @@ function formatRequestContext(context: UpstreamRequestContext): string {
   catch {
     return `${context.method ?? 'GET'} ${context.url}`
   }
-}
-
-function formatDelay(delayMs: number): string {
-  return delayMs < 1000
-    ? `${delayMs}ms`
-    : `${Math.round(delayMs / 1000)}s`
 }
 
 function abortableSleep(

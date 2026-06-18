@@ -52,7 +52,7 @@ async function probeEncoding(encoding: string): Promise<EncodingProbe> {
   }
 }
 
-export async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
+async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
   const probes = await Promise.all(PROBE_ENCODINGS.map(probeEncoding))
   const failed = probes.filter(p => !p.ok)
 

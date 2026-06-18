@@ -24,7 +24,7 @@ await mock.module('../src/clients/vscode-client', () => ({
 }))
 
 const sleepMock = mock((_ms: number) => Promise.resolve())
-await mock.module('../src/lib/sleep', () => ({
+await mock.module('../src/util/sleep', () => ({
   sleep: sleepMock,
 }))
 

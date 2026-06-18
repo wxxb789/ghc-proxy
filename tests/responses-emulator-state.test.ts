@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test'
 
-import { createResponsesEmulatorState } from '~/lib/responses-emulator-state'
+import { createResponsesEmulatorState } from '~/state/responses-emulator-state'
 
 import { buildResponsesResult } from './helpers'
 

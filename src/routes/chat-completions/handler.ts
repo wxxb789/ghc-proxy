@@ -28,6 +28,9 @@ export async function handleCompletionCore(
       strategyRegistry: chatCompletionsStrategyRegistry,
       afterIngest({ payload }) {
         consola.debug('Request payload:', JSON.stringify(payload).slice(-400))
+        // Side-effect-only hook: forward the ingested payload unchanged (the
+        // runner requires a returned payload; this is the no-substitution case).
+        return payload
       },
       async afterTransform({ payload, selectedModel }) {
         try {

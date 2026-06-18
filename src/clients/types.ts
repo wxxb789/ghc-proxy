@@ -1,4 +1,4 @@
-import type { UpstreamRequestQueue } from '~/lib/upstream-request-queue'
+import type { UpstreamRequestQueue } from './upstream-queue'
 
 export interface ClientAuth {
   githubToken?: string

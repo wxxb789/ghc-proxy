@@ -22,8 +22,8 @@
 import type { ResponsesResult } from '~/types'
 
 import process from 'node:process'
-import { RESPONSES_ENDPOINT } from '~/lib/model-capabilities'
 import { modelCache } from '~/state'
+import { RESPONSES_ENDPOINT } from '~/transform/model-capabilities'
 
 import { parseProbeArgs } from '../lib/probe-args'
 import { bootstrapProbe, extractErrorMessage, pickFirstResponsesModel, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'

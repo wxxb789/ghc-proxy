@@ -7,8 +7,8 @@ import type { ModelTransformResult } from '~/pipeline/types'
 import type { ModelTransformChain } from '~/transform'
 import type { Model } from '~/types'
 
+import { createCopilotClient } from '~/clients/factory'
 import { protocolRegistry } from '~/ingest'
-import { createCopilotClient } from '~/lib/state'
 import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 
 export interface PipelineParams {
@@ -49,7 +49,21 @@ export interface PipelineConfig<TPayload, TStrategyCtx> {
     upstreamSignal: ReturnType<typeof createUpstreamSignalFromConfig>
     modelMapping: ModelMappingInfo
   }) => TStrategyCtx
-  afterIngest?: (ctx: IngestContext<TPayload>) => void
+  /**
+   * Runs immediately after ingest, before transform. Resolves the payload that
+   * flows into transform + dispatch — the return value is REQUIRED.
+   *
+   * - Side-effect callers (logging, capturing the original payload, parsing
+   *   headers) end with `return ctx.payload` to forward the ingested payload
+   *   unchanged.
+   * - Replacement callers return a different payload to substitute it (e.g.
+   *   `/responses` swaps in the emulator's upstream payload).
+   *
+   * The required `TPayload` return is deliberate: a replacement caller that
+   * forgets to return is a compile error (`void` is not assignable to
+   * `TPayload`), not a silent fallback to the un-replaced payload.
+   */
+  afterIngest?: (ctx: IngestContext<TPayload>) => TPayload
   afterTransform?: (ctx: TransformContext<TPayload>) => void | Promise<void>
 }
 
@@ -57,13 +71,16 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   params: PipelineParams,
   config: PipelineConfig<TPayload, TStrategyCtx>,
 ): Promise<PipelineResult> {
-  const { payload, meta } = protocolRegistry.ingest<TPayload>(
+  const ingested = protocolRegistry.ingest<TPayload>(
     config.protocol,
     params.body,
     params.headers,
   )
+  const meta = ingested.meta
 
-  config.afterIngest?.({ payload, meta, headers: params.headers })
+  const payload = config.afterIngest
+    ? config.afterIngest({ payload: ingested.payload, meta, headers: params.headers })
+    : ingested.payload
 
   const transformResult = config.transformChain.apply({
     model: (payload as Record<string, string>).model,

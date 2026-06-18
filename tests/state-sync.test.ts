@@ -68,7 +68,7 @@ describe('state store initialization', () => {
   })
 
   test('createCopilotClient reads from authStore', async () => {
-    const { createCopilotClient } = await import('~/lib/state')
+    const { createCopilotClient } = await import('~/clients/factory')
     authStore.copilotToken = 'test-token'
     authStore.copilotApiBase = 'https://test-api.com'
     const client = createCopilotClient()
@@ -76,7 +76,7 @@ describe('state store initialization', () => {
   })
 
   test('getClientConfig reads from authStore and modelCache', async () => {
-    const { getClientConfig } = await import('~/lib/state')
+    const { getClientConfig } = await import('~/clients/factory')
     authStore.accountType = 'enterprise'
     authStore.copilotApiBase = 'https://api.test.com'
     modelCache.setVSCodeVersion('1.90.0')

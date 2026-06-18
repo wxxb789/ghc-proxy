@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { AnthropicTranslator } from '~/translator'
+import { AnthropicMessagesAdapter } from '~/adapters'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 
 import {
@@ -13,12 +13,12 @@ import {
 describe('OpenAI to Anthropic non-stream fixture matrix', () => {
   for (const fixture of openAIToAnthropicFixtures) {
     test(fixture.name, () => {
-      const translator = new AnthropicTranslator()
+      const translator = new AnthropicMessagesAdapter()
 
       if (fixture.expectedError) {
-        expect(() => translator.fromOpenAI(fixture.input)).toThrow(TranslationFailure)
+        expect(() => translator.fromCapiResponse(fixture.input)).toThrow(TranslationFailure)
         try {
-          translator.fromOpenAI(fixture.input)
+          translator.fromCapiResponse(fixture.input)
         }
         catch (error) {
           expect(error).toBeInstanceOf(TranslationFailure)
@@ -29,7 +29,7 @@ describe('OpenAI to Anthropic non-stream fixture matrix', () => {
         return
       }
 
-      const result = translator.fromOpenAI(fixture.input)
+      const result = translator.fromCapiResponse(fixture.input)
       expect(result).toMatchObject(fixture.expected!)
       expect(translator.getLastIssues().map(issue => issue.kind)).toEqual(
         fixture.expectedIssues,
@@ -41,8 +41,8 @@ describe('OpenAI to Anthropic non-stream fixture matrix', () => {
 describe('OpenAI stream to Anthropic stream fixture matrix', () => {
   for (const fixture of openAIStreamFixtures) {
     test(fixture.name, () => {
-      const translator = new AnthropicTranslator()
-      const streamTranslator = translator.createStreamTranslator()
+      const translator = new AnthropicMessagesAdapter()
+      const streamTranslator = translator.createStreamSerializer()
       const events = fixture.chunks.flatMap(chunk => streamTranslator.onChunk(chunk))
       events.push(...streamTranslator.onDone())
 

@@ -1,21 +1,3 @@
-import type {
-  ResponseCompletedEvent,
-  ResponseCreatedEvent,
-  ResponseErrorEvent,
-  ResponseFailedEvent,
-  ResponseFunctionCallArgumentsDeltaEvent,
-  ResponseFunctionCallArgumentsDoneEvent,
-  ResponseIncompleteEvent,
-  ResponseOutputItemAddedEvent,
-  ResponseOutputItemDoneEvent,
-  ResponseReasoningSummaryTextDeltaEvent,
-  ResponseReasoningSummaryTextDoneEvent,
-  ResponsesResult,
-  ResponseStreamEvent,
-  ResponseTextDeltaEvent,
-  ResponseTextDoneEvent,
-} from '~/types'
-
 export interface FunctionCallStreamState {
   blockIndex: number
   toolCallId: string
@@ -34,21 +16,3 @@ export interface ResponsesStreamState {
   blockHasDelta: Set<number>
   functionCallStateByOutputIndex: Map<number, FunctionCallStreamState>
 }
-
-export type KnownResponseStreamEvent
-  = | ResponseCompletedEvent
-    | ResponseCreatedEvent
-    | ResponseErrorEvent
-    | ResponseFailedEvent
-    | ResponseFunctionCallArgumentsDeltaEvent
-    | ResponseFunctionCallArgumentsDoneEvent
-    | ResponseIncompleteEvent
-    | ResponseOutputItemAddedEvent
-    | ResponseOutputItemDoneEvent
-    | ResponseReasoningSummaryTextDeltaEvent
-    | ResponseReasoningSummaryTextDoneEvent
-    | ResponseTextDeltaEvent
-    | ResponseTextDoneEvent
-    | ResponseStreamEvent
-
-export type { ResponsesResult }

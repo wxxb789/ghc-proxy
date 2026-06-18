@@ -7,9 +7,9 @@ import consola from 'consola'
 import { auth } from './auth'
 import { checkUsage } from './check-usage'
 import { debug } from './debug'
-import { VERSION } from './lib/version'
 import { selfcheck } from './selfcheck'
 import { start } from './start'
+import { VERSION } from './util/version'
 
 const main = defineCommand({
   meta: {

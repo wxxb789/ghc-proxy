@@ -1,4 +1,4 @@
-import { sleep } from './sleep'
+import { sleep } from '~/util/sleep'
 
 export interface RetryOptions {
   /** Maximum number of retries (not counting the initial attempt). Default: 4 */

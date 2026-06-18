@@ -32,10 +32,16 @@ Anthropic Messages Payload
 Normalized Anthropic IR    ir.ts (NormalizedAnthropicRequest)
         |
         v
-[Anthropic-OpenAI Mapper]  anthropic-openai-mapper.ts
+[Conversation Builder]     anthropic-messages-adapter.ts (toConversationTurn/toConversationBlock)
         |
         v
-CAPI Chat Completions Payload
+Conversation Model         core/conversation (ConversationRequest)
+        |
+        v
+[CAPI Plan Builder]        core/capi/plan-builder.ts (buildCapiExecutionPlan)
+        |
+        v
+CAPI Execution Plan        (CapiExecutionPlan -> Chat Completions payload)
 
 ---
 
@@ -93,17 +99,17 @@ interface NormalizedTurn {
 
 ### Mapping (Layer 2)
 
-**Anthropic -> OpenAI Mapper** (`anthropic-openai-mapper.ts`):
-- Converts `NormalizedTurn[]` into OpenAI `Message[]`
-- Maps system turns to system messages
-- Converts images to `image_url` with data URIs
-- Flattens tool_use into OpenAI `tool_calls` array
-- Records translation issues via `TranslationContext`
+**Conversation Builder + CAPI Plan Builder** (`src/adapters/anthropic-messages-adapter.ts`, `src/core/capi/plan-builder.ts`):
+- `AnthropicMessagesAdapter` maps each `NormalizedTurn`/`NormalizedBlock` into the internal conversation model (`toConversationTurn`/`toConversationBlock`)
+- Converts images to data URIs (`data:<mediaType>;base64,<data>`)
+- Carries tool_use blocks through with their stringified arguments; tool_result blocks become tool turns
+- `buildCapiExecutionPlan()` then turns the `ConversationRequest` into a `CapiExecutionPlan` (the Chat Completions payload sent upstream)
+- Records translation issues via `TranslationContext` (`recordAnthropicRequestIssues`)
 
 Key lossy translations:
-- Thinking history blocks: preserved in IR but omitted from upstream (reasoning cannot be prompted in Chat format)
-- Text/tool_use interleaving: flattened (OpenAI puts tool_calls at end of message)
-- Adaptive thinking: mapped to `reasoning_effort: medium` with hardcoded budget
+- Thinking history blocks: preserved in IR but omitted from upstream (`lossy_thinking_omitted_from_prompt`)
+- Text/tool_use interleaving: flattened into upstream content + `tool_calls` (`lossy_interleaving_flattened`)
+- Adaptive thinking: when the resolved model supports a thinking budget, mapped to a hardcoded `thinking_budget` of 24000 tokens (`applyThinkingBudgetOverride`); otherwise the budget is dropped
 
 **OpenAI -> Anthropic Mapper** (`openai-anthropic-mapper.ts`):
 - Converts single OpenAI choice to Anthropic content blocks

@@ -18,8 +18,8 @@ import type {
   AnthropicToolResultContentBlock,
 } from './types'
 
-import { assertNever } from '~/lib/assert-never'
 import { formatSearchResultBlock } from '~/translator/anthropic/search-result'
+import { assertNever } from '~/util/assert-never'
 
 function textBlock(text: string): NormalizedTextBlock {
   return { kind: 'text', text }

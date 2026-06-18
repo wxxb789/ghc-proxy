@@ -4,6 +4,7 @@ import type { ExecutionStrategy, SSEOutput, SSEStreamChunk } from '~/lib/executi
 
 import consola from 'consola'
 import { isNonStreamingResponse } from '~/clients'
+import { serializeAnthropicSSE } from '~/lib/sse-adapter'
 
 type ChatCompletionsResult = Awaited<ReturnType<CopilotTransport['execute']>>
 
@@ -50,10 +51,7 @@ export function createMessagesViaChatCompletionsStrategy(
       if (chunk.data === '[DONE]') {
         const finalEvents = streamTranslator.onDone()
         done = true
-        return finalEvents.map(event => ({
-          event: event.type,
-          data: JSON.stringify(event),
-        }))
+        return serializeAnthropicSSE(finalEvents)
       }
 
       if (!chunk.data) {
@@ -63,10 +61,7 @@ export function createMessagesViaChatCompletionsStrategy(
       const parsed = JSON.parse(chunk.data) as CapiChatCompletionChunk
       const events = streamTranslator.onChunk(parsed)
 
-      return events.map(event => ({
-        event: event.type,
-        data: JSON.stringify(event),
-      }))
+      return serializeAnthropicSSE(events)
     },
 
     onStreamDone() {
@@ -77,10 +72,7 @@ export function createMessagesViaChatCompletionsStrategy(
         return null
       }
       const finalEvents = streamTranslator.onDone()
-      return finalEvents.map(event => ({
-        event: event.type,
-        data: JSON.stringify(event),
-      }))
+      return serializeAnthropicSSE(finalEvents)
     },
 
     shouldBreakStream() {
@@ -93,10 +85,7 @@ export function createMessagesViaChatCompletionsStrategy(
         streamTranslator = adapter.createStreamSerializer()
       }
       const errorEvents = streamTranslator.onError(error)
-      return errorEvents.map(event => ({
-        event: event.type,
-        data: JSON.stringify(event),
-      }))
+      return serializeAnthropicSSE(errorEvents)
     },
   }
 }

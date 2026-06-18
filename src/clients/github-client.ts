@@ -8,6 +8,9 @@ import type {
 } from '~/types'
 
 import consola from 'consola'
+import { throwUpstreamError } from '~/lib/error'
+import { sleep } from '~/util/sleep'
+
 import {
   GITHUB_API_BASE_URL,
   GITHUB_APP_SCOPES,
@@ -15,10 +18,7 @@ import {
   GITHUB_CLIENT_ID,
   githubHeaders,
   standardHeaders,
-} from '~/lib/api-config'
-import { throwUpstreamError } from '~/lib/error'
-
-import { sleep } from '~/lib/sleep'
+} from './api-config'
 
 export class GitHubClient {
   private auth: ClientAuth

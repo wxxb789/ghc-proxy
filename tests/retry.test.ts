@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from 'bun:test'
 import { HTTPError } from '../src/lib/error'
 
 const sleepMock = mock((_ms: number) => Promise.resolve())
-await mock.module('../src/lib/sleep', () => ({
+await mock.module('../src/util/sleep', () => ({
   sleep: sleepMock,
 }))
 

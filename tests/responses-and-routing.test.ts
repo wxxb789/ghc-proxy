@@ -1396,6 +1396,81 @@ describe('responses and routing', () => {
     expect(inputItemsResponse.status).toBe(404)
   })
 
+  // Regression guard for Plan A (symmetric translateResult): the non-stream
+  // emulator decorate+persist now lives entirely in the passthrough strategy's
+  // translateResult seam, not a handler post-pipeline block. Pin the two
+  // properties the existing 200/404 tests above do NOT assert:
+  //   1. persist fires EXACTLY once (single-persist) on the JSON path, and
+  //   2. the decorated `store` is sourced from the ORIGINAL request (captured at
+  //      afterIngest as prepared.shouldStore), NOT the upstream payload whose
+  //      `store` afterTransform forces to false — proving the emulator state
+  //      survives the post-ingest payload mutation.
+  test('/v1/responses official emulator decorates from the original payload and persists exactly once (non-stream)', async () => {
+    const app = createApp()
+    enableOfficialResponsesEmulator()
+    rejectUnexpectedEmulatorResourceCalls()
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] })))
+
+    const createCalls: Array<CapturedResponsesCall> = []
+    CopilotClient.prototype.createResponses = mockEmulatorCreateResponses([
+      buildResponsesResult({
+        id: 'resp_emu_once',
+        model: 'gpt-5',
+        status: 'completed',
+        output_text: 'pinned',
+        usage: null,
+      }),
+    ], createCalls)
+
+    const setResponseSpy = responsesEmulatorState.setResponse.bind(responsesEmulatorState)
+    let setResponseCount = 0
+    responsesEmulatorState.setResponse = ((response: ResponsesResult) => {
+      setResponseCount++
+      return setResponseSpy(response)
+    }) as typeof responsesEmulatorState.setResponse
+
+    try {
+      const createResponse = await app.handle(new Request('http://localhost/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gpt-5',
+          // Client omits `store` (defaults to true). afterTransform forces the
+          // upstream payload's store to false; the decorated output must still be
+          // true because it reads prepared.shouldStore captured from this original
+          // request — the discriminator between original vs mutated payload.
+          input: [{ type: 'message', role: 'user', content: 'hello' }],
+        }),
+      }))
+
+      const created = await createResponse.json() as ResponsesResult
+      expect(createResponse.status).toBe(200)
+      expect(created).toMatchObject({
+        id: 'resp_emu_once',
+        previous_response_id: null,
+        store: true,
+      })
+      expect(created.conversation).toBeTruthy()
+      // The upstream call received store:false (afterTransform forces it), yet the
+      // decorated output is store:true — proving the emulator reads the original
+      // request's shouldStore, not the mutated upstream payload.
+      expect(createCalls[0]?.payload.store).toBe(false)
+      // Single-persist: the strategy seam persisted the JSON response once only.
+      expect(setResponseCount).toBe(1)
+
+      // And it is genuinely retrievable (persist actually ran).
+      const retrieveResponse = await app.handle(new Request('http://localhost/v1/responses/resp_emu_once', {
+        method: 'GET',
+      }))
+      expect(retrieveResponse.status).toBe(200)
+      // GET retrieve does not re-persist.
+      expect(setResponseCount).toBe(1)
+    }
+    finally {
+      responsesEmulatorState.setResponse = setResponseSpy
+    }
+  })
+
   test('/v1/responses official emulator persists streamed terminal responses for later retrieval', async () => {
     const app = createApp()
     enableOfficialResponsesEmulator()

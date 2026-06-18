@@ -7,13 +7,13 @@ import type { Model } from '~/types'
 
 import process from 'node:process'
 import consola from 'consola'
-import { copilotBaseUrl, copilotHeaders } from '~/lib/api-config'
+import { copilotBaseUrl, copilotHeaders } from '~/clients/api-config'
+import { cacheModels, cacheVSCodeVersion, getClientConfig } from '~/clients/factory'
 import { getCachedConfig, readConfig } from '~/lib/config'
-import { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/lib/model-capabilities'
 import { ensurePaths } from '~/lib/paths'
-import { cacheModels, cacheVSCodeVersion, getClientConfig } from '~/lib/state'
 import { setupCopilotToken, setupGitHubToken } from '~/lib/token'
 import { authStore } from '~/state'
+import { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/transform/model-capabilities'
 
 export const REQUEST_TIMEOUT_MS = 30_000
 

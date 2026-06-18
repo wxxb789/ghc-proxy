@@ -1,5 +1,5 @@
 import { GitHubClient } from '~/clients'
-import { getClientConfig } from '~/lib/state'
+import { getClientConfig } from '~/clients/factory'
 import { authStore } from '~/state'
 
 /**

@@ -104,8 +104,7 @@ Client Response (OpenAI / Anthropic format)
 Route handlers delegate to `runPipeline()` (`src/pipeline/runner.ts`), a generic orchestrator that wraps the three core pipeline stages (Ingest → Transform → Dispatch) into a single call. Guard is applied separately as an Elysia plugin at the route level, and Deliver (response serialization) happens after `runPipeline()` returns its result. Instead of each route manually invoking every stage, `runPipeline()` accepts a `PipelineConfig` that declaratively describes:
 
 - **Protocol, transform chain, and strategy registry** — which protocol to parse, which model transforms to apply, and which execution strategies to select from.
-- **Lifecycle hooks** — `afterIngest()` runs immediately after protocol parsing and validation (e.g., to normalize headers or extract subagent markers), and `afterTransform()` runs after the model transform chain (e.g., to apply beta-header side-effects on the final payload).
-- **Context retry** — when `contextRetry` is enabled, the runner wraps dispatch in `executeWithContextRetry()`, which catches context-length errors and automatically retries with an upgraded model while preserving the full model-mapping trace.
+- **Lifecycle hooks** — `afterIngest()` runs immediately after protocol parsing and validation (e.g., to extract beta headers, or to swap in a replacement payload by returning one), and `afterTransform()` runs after the model transform chain (e.g., to apply tool/input policies and context management on the final payload).
 - **Strategy context builder** — a `buildStrategyContext()` callback that constructs the strategy-specific context from the parsed payload, resolved model, Copilot client, and upstream signal.
 
 Route handlers like messages and chat-completions supply their own config objects and call `runPipeline()`, keeping handler code focused on route-specific concerns rather than pipeline plumbing.
@@ -164,5 +163,5 @@ The server registers `SIGTERM` and `SIGINT` handlers (`src/start.ts`). On signal
 
 ### Resource Limits
 
-- **Emulator memory cap** — The responses emulator store (`src/lib/responses-emulator-state.ts`) enforces a hard cap of 10,000 total entries across all maps (responses, conversations, conversation heads, input items, deletion flags). When a write would exceed the cap, expired entries are pruned first; if still over capacity, the oldest entry in the largest map is evicted. A background sweep runs every 60 seconds to remove expired entries proactively.
-- **Upstream queue depth** — The upstream request queue (`src/lib/upstream-request-queue.ts`) limits pending waiters to 1,000. When the queue is full, new requests are immediately rejected with a `503 overloaded_error` response rather than blocking indefinitely.
+- **Emulator memory cap** — The responses emulator store (`src/state/responses-emulator-state.ts`) enforces a hard cap of 10,000 total entries across all maps (responses, conversations, conversation heads, input items, deletion flags). When a write would exceed the cap, expired entries are pruned first; if still over capacity, the oldest entry in the largest map is evicted. A background sweep runs every 60 seconds to remove expired entries proactively.
+- **Upstream queue depth** — The upstream request queue (`src/clients/upstream-queue.ts`) limits pending waiters to 1,000. When the queue is full, new requests are immediately rejected with a `503 overloaded_error` response rather than blocking indefinitely.

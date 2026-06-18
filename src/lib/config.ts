@@ -178,5 +178,3 @@ async function applyConfigFilePermissions(filePath: string): Promise<void> {
     )
   }
 }
-
-export { configStore } from '~/state/config-store'

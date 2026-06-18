@@ -2,9 +2,9 @@ import type { Model } from '~/types'
 
 import { colorize } from 'consola/utils'
 
+import { getModelFallbackConfig } from '~/lib/model-resolver'
 import { authStore, modelCache } from '~/state'
-import { getModelFallbackConfig } from './model-resolver'
-import { VERSION } from './version'
+import { VERSION } from '~/util/version'
 
 export function printStartupBanner(serverUrl: string): void {
   const lines: string[] = []
@@ -55,7 +55,6 @@ export function printStartupBanner(serverUrl: string): void {
   lines.push('')
   lines.push(`  Listening on ${colorize('cyan', serverUrl)}`)
 
-  // eslint-disable-next-line no-console
   console.log(lines.join('\n'))
 }
 

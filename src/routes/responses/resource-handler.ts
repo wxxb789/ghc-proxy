@@ -5,9 +5,9 @@ import type {
 } from '~/types'
 
 import { readCapiRequestContext } from '~/core/capi/request-context'
-import { createResourceDispatcher } from '~/dispatch/resource-dispatcher'
 import { protocolRegistry } from '~/ingest'
 import { throwInvalidRequestError } from '~/lib/error'
+import { createResourceDispatcher } from './resource-dispatcher'
 
 // --- Core request parameter interfaces ---
 

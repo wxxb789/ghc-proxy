@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { buildGitHubUrls, normalizeGheDomain } from '../src/lib/ghe-domain'
+import { buildGitHubUrls, normalizeGheDomain } from '../src/clients/ghe-domain'
 
 describe('normalizeGheDomain', () => {
   test('bare domain passes through unchanged', () => {

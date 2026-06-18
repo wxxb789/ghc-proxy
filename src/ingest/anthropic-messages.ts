@@ -2,7 +2,7 @@ import type { ProtocolHandler, RequestMeta } from './types'
 import type { AnthropicCountTokensPayload, AnthropicMessagesPayload } from '~/translator'
 
 import { normalizeAnthropicRequestContext } from '~/core/capi'
-import { parseAnthropicCountTokensPayload, parseAnthropicMessagesPayload } from '~/lib/validation'
+import { parseAnthropicCountTokensPayload, parseAnthropicMessagesPayload } from './validation'
 
 function extractAnthropicMeta(
   payload: AnthropicMessagesPayload | AnthropicCountTokensPayload,

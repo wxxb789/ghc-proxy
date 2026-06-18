@@ -2,7 +2,7 @@ import type { NormalizedOpenAIResponse } from './ir'
 
 import type { AnthropicAssistantContentBlock, AnthropicResponse } from './types'
 
-import { assertNever } from '~/lib/assert-never'
+import { assertNever } from '~/util/assert-never'
 import { mapOpenAIStopReasonToAnthropic, mapOpenAIUsageToAnthropic } from './shared'
 
 function mapBlocks(

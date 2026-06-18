@@ -1,4 +1,4 @@
-import type { AnthropicMessagesPayload, AnthropicResponse } from './types'
+import type { AnthropicMessagesPayload } from './types'
 
 export type NormalizedRole = 'system' | 'user' | 'assistant' | 'tool'
 
@@ -103,5 +103,3 @@ export interface NormalizedOpenAIResponse {
     }
   }
 }
-
-export type AnthropicStopReason = AnthropicResponse['stop_reason']

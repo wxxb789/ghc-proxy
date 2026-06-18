@@ -10,7 +10,6 @@ import type {
   ConversationTextBlock,
   ConversationTurn,
 } from '~/core/conversation'
-import type { AnthropicOpenAIMapperOptions } from '~/translator/anthropic/anthropic-openai-mapper'
 import type { NormalizedAnthropicRequest, NormalizedBlock, NormalizedTurn } from '~/translator/anthropic/ir'
 import type { TranslationIssue } from '~/translator/anthropic/translation-issue'
 import type { TranslationPolicy } from '~/translator/anthropic/translation-policy'
@@ -20,12 +19,21 @@ import type {
   AnthropicResponse,
 } from '~/translator/anthropic/types'
 
-import { buildCapiExecutionPlan } from '~/core/capi'
+import { buildCapiExecutionPlan, inferModelFamily } from '~/core/capi'
 import { normalizeAnthropicRequest } from '~/translator/anthropic/anthropic-normalizer'
 import { AnthropicStreamTranslator } from '~/translator/anthropic/anthropic-stream-transducer'
 import { mapOpenAIResponseToAnthropic } from '~/translator/anthropic/openai-anthropic-mapper'
 import { normalizeOpenAIResponse } from '~/translator/anthropic/openai-normalizer'
 import { defaultTranslationPolicy, TranslationContext } from '~/translator/anthropic/translation-policy'
+
+export interface ModelCapabilities {
+  supportsThinkingBudget: boolean
+}
+
+export interface AnthropicOpenAIMapperOptions {
+  resolveModel: (model: string) => string
+  getModelCapabilities: (model: string) => ModelCapabilities
+}
 
 export interface AnthropicMessagesAdapterOptions {
   modelResolver?: AnthropicOpenAIMapperOptions['resolveModel']
@@ -241,7 +249,7 @@ export class AnthropicMessagesAdapter {
       getModelCapabilities:
         options.getModelCapabilities
         ?? ((model: string) => ({
-          supportsThinkingBudget: model.startsWith('claude'),
+          supportsThinkingBudget: inferModelFamily(model) === 'claude',
         })),
       policy: options.policy ?? defaultTranslationPolicy,
     }

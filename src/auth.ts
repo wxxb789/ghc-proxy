@@ -4,10 +4,10 @@ import { defineCommand } from 'citty'
 import consola from 'consola'
 
 import { authStore } from '~/state'
+import { cacheVSCodeVersion } from './clients/factory'
+import { normalizeGheDomain } from './clients/ghe-domain'
 import { getCachedConfig, readConfig } from './lib/config'
-import { normalizeGheDomain } from './lib/ghe-domain'
 import { ensurePaths } from './lib/paths'
-import { cacheVSCodeVersion } from './lib/state'
 import { setupGitHubToken } from './lib/token'
 
 interface RunAuthOptions {
@@ -16,7 +16,7 @@ interface RunAuthOptions {
   gheDomain?: string
 }
 
-export async function runAuth(options: RunAuthOptions): Promise<void> {
+async function runAuth(options: RunAuthOptions): Promise<void> {
   if (options.verbose) {
     consola.level = 5
     consola.info('Verbose logging enabled')

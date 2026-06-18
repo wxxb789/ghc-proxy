@@ -1,4 +1,4 @@
-import { cacheModels, createCopilotClient } from '~/lib/state'
+import { cacheModels, createCopilotClient } from '~/clients/factory'
 import { modelCache } from '~/state'
 
 /**

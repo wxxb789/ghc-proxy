@@ -7,7 +7,7 @@ import consola from 'consola'
 
 import { getCachedConfig, readConfig } from './lib/config'
 import { PATHS } from './lib/paths'
-import { VERSION } from './lib/version'
+import { VERSION } from './util/version'
 
 interface DebugInfo {
   version: string
@@ -95,7 +95,7 @@ Token exists: ${info.tokenExists ? 'Yes' : 'No'}
 GHE Domain: ${info.gheDomain ?? 'none'}`)
 }
 
-export async function runDebug(options: RunDebugOptions): Promise<void> {
+async function runDebug(options: RunDebugOptions): Promise<void> {
   const debugInfo = await getDebugInfo()
 
   if (options.json) {
