@@ -1,4 +1,4 @@
-import type { ClientAuth, ClientConfig } from '~/clients'
+import type { ClientAuth, ClientConfig } from './types'
 import type { CapiRequestContext } from '~/core/capi'
 
 import { randomUUID } from 'node:crypto'

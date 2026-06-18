@@ -3,8 +3,8 @@ import type { ClientConfig } from '~/clients'
 
 import consola from 'consola'
 import { CopilotClient, getVSCodeVersion } from '~/clients'
-import { buildGitHubUrls } from '~/lib/ghe-domain'
 import { authStore, modelCache } from '~/state'
+import { buildGitHubUrls } from './ghe-domain'
 import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
 export interface RuntimeConfig {

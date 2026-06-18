@@ -1,3 +1,4 @@
+import type { CopilotHeaderOptions } from './api-config'
 import type { ClientAuth, ClientConfig, ClientDeps } from './types'
 import type { QueuedUpstreamResponse, UpstreamRequestQueue } from './upstream-queue'
 import type {
@@ -5,7 +6,6 @@ import type {
   CapiChatCompletionsPayload,
   CapiRequestContext,
 } from '~/core/capi'
-import type { CopilotHeaderOptions } from '~/lib/api-config'
 import type { AnthropicMessagesPayload } from '~/translator'
 import type {
   EmbeddingRequest,
@@ -23,9 +23,9 @@ import type {
 
 import { events } from 'fetch-event-stream'
 
-import { copilotBaseUrl, copilotHeaders } from '~/lib/api-config'
-
 import { throwUpstreamError } from '~/lib/error'
+
+import { copilotBaseUrl, copilotHeaders } from './api-config'
 
 interface RequestOptions {
   method?: string

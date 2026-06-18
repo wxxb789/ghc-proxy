@@ -5,8 +5,8 @@ import consola from 'consola'
 
 import { authStore } from '~/state'
 import { cacheVSCodeVersion } from './clients/factory'
+import { normalizeGheDomain } from './clients/ghe-domain'
 import { getCachedConfig, readConfig } from './lib/config'
-import { normalizeGheDomain } from './lib/ghe-domain'
 import { ensurePaths } from './lib/paths'
 import { setupGitHubToken } from './lib/token'
 
