@@ -49,7 +49,7 @@ export interface PipelineConfig<TPayload, TStrategyCtx> {
     upstreamSignal: ReturnType<typeof createUpstreamSignalFromConfig>
     modelMapping: ModelMappingInfo
   }) => TStrategyCtx
-  afterIngest?: (ctx: IngestContext<TPayload>) => void
+  afterIngest?: (ctx: IngestContext<TPayload>) => TPayload | void
   afterTransform?: (ctx: TransformContext<TPayload>) => void | Promise<void>
 }
 
@@ -57,13 +57,15 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   params: PipelineParams,
   config: PipelineConfig<TPayload, TStrategyCtx>,
 ): Promise<PipelineResult> {
-  const { payload, meta } = protocolRegistry.ingest<TPayload>(
+  const ingested = protocolRegistry.ingest<TPayload>(
     config.protocol,
     params.body,
     params.headers,
   )
+  const meta = ingested.meta
 
-  config.afterIngest?.({ payload, meta, headers: params.headers })
+  const payload = config.afterIngest?.({ payload: ingested.payload, meta, headers: params.headers })
+    ?? ingested.payload
 
   const transformResult = config.transformChain.apply({
     model: (payload as Record<string, string>).model,
