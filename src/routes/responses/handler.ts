@@ -1,16 +1,13 @@
-import type { ExecutionResult } from '~/lib/execution-strategy'
-import type { ModelMappingInfo, ModelTransformTag } from '~/lib/request-logger'
-
+import type { ResponsesStrategyContext } from './strategy-registry'
+import type { PipelineResult } from '~/pipeline/runner'
 import type { ResponseFunctionTool, ResponsesPayload, ResponsesResult, ResponseTool } from '~/types'
 import consola from 'consola'
-import { createCopilotClient } from '~/clients/factory'
-import { protocolRegistry } from '~/ingest'
 import { throwInvalidRequestError } from '~/lib/error'
-import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
+import { runPipeline } from '~/pipeline/runner'
 import { configStore, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { responsesModelChain } from '~/transform'
-import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 
+import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { normalizeFunctionParametersSchemaForCopilot } from '~/translator/responses/function-schema'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
 import { responsesStrategyRegistry } from './strategy-registry'
@@ -23,108 +20,98 @@ export interface ResponsesCoreParams {
   headers: Headers
 }
 
-export interface ResponsesCoreResult {
-  result: ExecutionResult
-  modelMapping?: ModelMappingInfo
-}
+export type ResponsesCoreResult = PipelineResult
 
 /**
- * Core handler for responses endpoint.
+ * Core handler for responses endpoint. Orchestrates the standard pipeline
+ * (ingest → transform → dispatch) via runPipeline, with the responses-specific
+ * emulator request prep, tool/input policies, and context management applied
+ * through the afterIngest / afterTransform lifecycle hooks.
  */
 export async function handleResponsesCore(
   { body, signal, headers }: ResponsesCoreParams,
 ): Promise<ResponsesCoreResult> {
-  const { payload, meta } = protocolRegistry.ingest<ResponsesPayload>(
-    'responses',
-    body,
-    headers,
-  )
-  const requestContext = meta.requestContext
   const emulatorMode = configStore.isEmulatorEnabled()
-  const emulatorPrepared = emulatorMode
-    ? prepareEmulatorRequest(payload)
-    : undefined
+  let originalPayload: ResponsesPayload | undefined
+  let emulatorPrepared: ReturnType<typeof prepareEmulatorRequest> | undefined
 
-  const effectivePayload = emulatorPrepared?.upstreamPayload ?? payload
+  const pipelineResult = await runPipeline<ResponsesPayload, ResponsesStrategyContext>(
+    { body, signal, headers },
+    {
+      protocol: 'responses',
+      transformChain: responsesModelChain,
+      strategyRegistry: responsesStrategyRegistry,
+      afterIngest({ payload }) {
+        originalPayload = payload
+        emulatorPrepared = emulatorMode ? prepareEmulatorRequest(payload) : undefined
+        return emulatorPrepared?.upstreamPayload ?? payload
+      },
+      afterTransform({ payload, selectedModel }) {
+        applyResponsesToolTransforms(payload)
+        applyResponsesInputPolicies(payload)
+        compactInputByLatestCompaction(payload)
 
-  // Run model transform chain (rewrite step)
-  const transformResult = responsesModelChain.apply({ model: effectivePayload.model, payload: effectivePayload, headers })
-  effectivePayload.model = transformResult.model
-
-  applyResponsesToolTransforms(effectivePayload)
-  applyResponsesInputPolicies(effectivePayload)
-  compactInputByLatestCompaction(effectivePayload)
-
-  const selectedModel = modelCache.findById(effectivePayload.model)
-  if (!selectedModel) {
-    throwInvalidRequestError(
-      'The selected model could not be resolved.',
-      'model',
-    )
-  }
-  if (!modelCache.supportsEndpoint(selectedModel, RESPONSES_ENDPOINT)) {
-    throwInvalidRequestError(
-      'The selected model does not support the responses endpoint.',
-      'model',
-    )
-  }
-
-  applyContextManagement(
-    effectivePayload,
-    selectedModel.capabilities.limits.max_prompt_tokens,
-  )
-
-  const { vision, initiator } = getResponsesRequestOptions(effectivePayload)
-  const upstreamSignal = createUpstreamSignalFromConfig(signal)
-  const copilotClient = createCopilotClient()
-  const decorateResponse = emulatorPrepared
-    ? (response: ResponsesResult) => decorateStoredResponse(response, payload, emulatorPrepared)
-    : undefined
-
-  const entry = responsesStrategyRegistry.select(selectedModel)
-  const result = await entry.execute({
-    copilotClient,
-    payload: effectivePayload,
-    upstreamSignal,
-    requestContext: requestContext ?? {},
-    vision,
-    initiator,
-    decorateResponse,
-    onTerminalResponse: emulatorPrepared
-      ? (terminalResponse: ResponsesResult) => {
-          if (!emulatorPrepared?.shouldStore) {
-            return
-          }
-          persistEmulatorResponse(
-            terminalResponse,
-            emulatorPrepared.effectiveInputItems,
+        if (!selectedModel) {
+          throwInvalidRequestError(
+            'The selected model could not be resolved.',
+            'model',
           )
         }
-      : undefined,
-  })
+        if (!modelCache.supportsEndpoint(selectedModel, RESPONSES_ENDPOINT)) {
+          throwInvalidRequestError(
+            'The selected model does not support the responses endpoint.',
+            'model',
+          )
+        }
 
-  if (
-    emulatorPrepared
-    && result.kind === 'json'
-  ) {
+        applyContextManagement(
+          payload,
+          selectedModel.capabilities.limits.max_prompt_tokens,
+        )
+      },
+      buildStrategyContext({ payload, meta, copilotClient, upstreamSignal }) {
+        const { vision, initiator } = getResponsesRequestOptions(payload)
+        const prepared = emulatorPrepared
+        const requestPayload = originalPayload ?? payload
+        return {
+          copilotClient,
+          payload,
+          upstreamSignal,
+          requestContext: meta.requestContext ?? {},
+          vision,
+          initiator,
+          decorateResponse: prepared
+            ? (response: ResponsesResult) => decorateStoredResponse(response, requestPayload, prepared)
+            : undefined,
+          onTerminalResponse: prepared
+            ? (terminalResponse: ResponsesResult) => {
+                if (!prepared.shouldStore) {
+                  return
+                }
+                persistEmulatorResponse(
+                  terminalResponse,
+                  prepared.effectiveInputItems,
+                )
+              }
+            : undefined,
+        }
+      },
+    },
+  )
+
+  if (emulatorPrepared && originalPayload && pipelineResult.result.kind === 'json') {
     const emulatedResponse = decorateStoredResponse(
-      result.data as ResponsesResult,
-      payload,
+      pipelineResult.result.data as ResponsesResult,
+      originalPayload,
       emulatorPrepared,
     )
     if (emulatorPrepared.shouldStore) {
       persistEmulatorResponse(emulatedResponse, emulatorPrepared.effectiveInputItems)
     }
-    result.data = emulatedResponse
+    pipelineResult.result.data = emulatedResponse
   }
 
-  const originalModel = transformResult.trace.length > 0 ? transformResult.trace[0].from : effectivePayload.model
-  const modelMapping: ModelMappingInfo = {
-    originalModel,
-    steps: transformResult.trace.map(r => ({ tag: r.tag as ModelTransformTag, from: r.from, to: r.to })),
-  }
-
-  return { result, modelMapping }
+  return pipelineResult
 }
 
 function applyResponsesToolTransforms(payload: ResponsesPayload): void {
