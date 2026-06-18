@@ -27,8 +27,8 @@ compatibility — if it fails, the package must not ship.
 |-------|---------|
 | Model builders | `buildModel()`, `buildGptModel()`, `buildVisionModel()`, `buildModelsResponse()`, `buildResponsesResult()` |
 | App factory | `createApp()` — assembles an in-process Elysia app wired to mock Copilot transport |
-| Mock factories | `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()`, `mockChatCompletions()`, `mockGetResponse()`, `mockGetResponseInputItems()`, `mockCreateResponseInputTokens()`, `mockDeleteResponse()`, `mockEmulatorCreateResponses()`, `isServerSentEventStream()` |
-| SSE utilities | `parseSse()`, `createStream()` |
+| Mock factories | `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()`, `mockChatCompletions()`, `mockGetResponse()`, `mockGetResponseInputItems()`, `mockCreateResponseInputTokens()`, `mockDeleteResponse()`, `mockEmulatorCreateResponses()` |
+| SSE utilities | `parseSse()` |
 | State isolation | `saveStateSnapshot()`, `restoreStateSnapshot()`, `setupDefaultTestState()`, `clearConfig()` |
 | Assertions | `expectCacheCheckpoints()` |
 

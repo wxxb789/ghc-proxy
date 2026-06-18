@@ -83,7 +83,7 @@ export interface CapturedDeleteResponseCall {
   responseId: string
 }
 
-export interface ParsedSseEvent {
+interface ParsedSseEvent {
   event?: string
   data?: string
 }
@@ -264,7 +264,7 @@ export function parseSse(body: string): Array<ParsedSseEvent> {
     .filter(event => event.event || event.data)
 }
 
-export function createStream(
+function createStream(
   chunks: Array<CapiChatCompletionChunk | '[DONE]'>,
 ): AsyncGenerator<ServerSentEventMessage, void, unknown> {
   return (async function* () {
@@ -395,7 +395,7 @@ export function mockEmulatorCreateResponses(
   }) as unknown as CreateResponses
 }
 
-export function isServerSentEventStream(
+function isServerSentEventStream(
   value: unknown,
 ): value is AsyncGenerator<ServerSentEventMessage, void, unknown> {
   return typeof value === 'object'

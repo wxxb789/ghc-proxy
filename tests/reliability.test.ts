@@ -18,27 +18,29 @@ await mock.module('../src/util/sleep', () => ({
 
 const { retryWithBackoff, formatErrorMessage } = await import('../src/lib/retry')
 
-// ── Error classification in the messages onError handler ──
+// ── Snapshot/restore CopilotClient.prototype.createChatCompletions for the
+//    describes that stub it, so the stub never leaks into the retry tests. ──
+function useCreateChatCompletionsSnapshot() {
+  let original: typeof CopilotClient.prototype.createChatCompletions
 
-let originalCreateChatCompletions: typeof CopilotClient.prototype.createChatCompletions
-
-beforeEach(() => {
-  const descriptor = Object.getOwnPropertyDescriptor(
-    CopilotClient.prototype,
-    'createChatCompletions',
-  )
-  if (!descriptor?.value) {
-    throw new Error(
-      'createChatCompletions not found on CopilotClient prototype',
+  beforeEach(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      CopilotClient.prototype,
+      'createChatCompletions',
     )
-  }
-  originalCreateChatCompletions
-    = descriptor.value as typeof CopilotClient.prototype.createChatCompletions
-})
+    if (!descriptor?.value) {
+      throw new Error(
+        'createChatCompletions not found on CopilotClient prototype',
+      )
+    }
+    original
+      = descriptor.value as typeof CopilotClient.prototype.createChatCompletions
+  })
 
-afterEach(() => {
-  CopilotClient.prototype.createChatCompletions = originalCreateChatCompletions
-})
+  afterEach(() => {
+    CopilotClient.prototype.createChatCompletions = original
+  })
+}
 
 function createTestApp() {
   return new Elysia()
@@ -92,6 +94,8 @@ function createAbortErrorAsError(): Error {
 }
 
 describe('Error classification in onError handler', () => {
+  useCreateChatCompletionsSnapshot()
+
   test('AbortError (Error subclass) returns 504', async () => {
     CopilotClient.prototype.createChatCompletions = () =>
       Promise.reject(createAbortErrorAsError())
@@ -150,6 +154,8 @@ describe('Error classification in onError handler', () => {
 })
 
 describe('Streaming error handling', () => {
+  useCreateChatCompletionsSnapshot()
+
   function createTimeoutError(): DOMException {
     const DOMExceptionCtor = DOMException as unknown as {
       new (message?: string, name?: string): DOMException
