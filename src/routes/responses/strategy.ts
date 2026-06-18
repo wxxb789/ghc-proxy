@@ -6,11 +6,11 @@ import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import consola from 'consola'
 
-import { isAsyncIterable } from '~/lib/async-iterable'
 import { HTTPError } from '~/lib/error'
 import { passthroughSSEChunk } from '~/lib/execution-strategy'
 import { PATHS } from '~/lib/paths'
 import { runtimeStore } from '~/state'
+import { isAsyncIterable } from '~/util/async-iterable'
 
 interface StreamIdState {
   responseId?: string

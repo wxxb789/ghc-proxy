@@ -18,7 +18,7 @@ import {
 } from '~/lib/api-config'
 import { throwUpstreamError } from '~/lib/error'
 
-import { sleep } from '~/lib/sleep'
+import { sleep } from '~/util/sleep'
 
 export class GitHubClient {
   private auth: ClientAuth

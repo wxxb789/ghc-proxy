@@ -7,7 +7,7 @@ import consola from 'consola'
 
 import { getCachedConfig, readConfig } from './lib/config'
 import { PATHS } from './lib/paths'
-import { VERSION } from './lib/version'
+import { VERSION } from './util/version'
 
 interface DebugInfo {
   version: string

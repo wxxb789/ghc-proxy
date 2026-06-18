@@ -8,8 +8,8 @@ import type {
   AnthropicUserContentBlock,
 } from '~/translator'
 
-import { isAsyncIterable } from '~/lib/async-iterable'
 import { formatSearchResultBlock } from '~/translator/anthropic/search-result'
+import { isAsyncIterable } from '~/util/async-iterable'
 
 interface MessagesStreamChunk {
   event?: string

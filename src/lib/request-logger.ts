@@ -1,6 +1,6 @@
 import { colorize } from 'consola/utils'
 
-import { formatDurationMs } from './duration'
+import { formatDurationMs } from '~/util/duration'
 
 export type ModelTransformTag
   = | 'AUTO_CORRECT'

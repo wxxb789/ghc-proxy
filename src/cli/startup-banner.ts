@@ -3,8 +3,8 @@ import type { Model } from '~/types'
 import { colorize } from 'consola/utils'
 
 import { getModelFallbackConfig } from '~/lib/model-resolver'
-import { VERSION } from '~/lib/version'
 import { authStore, modelCache } from '~/state'
+import { VERSION } from '~/util/version'
 
 export function printStartupBanner(serverUrl: string): void {
   const lines: string[] = []

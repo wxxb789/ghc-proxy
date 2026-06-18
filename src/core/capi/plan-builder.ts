@@ -19,7 +19,7 @@ import type {
   Message,
 } from '~/types'
 
-import { assertNever } from '~/lib/assert-never'
+import { assertNever } from '~/util/assert-never'
 import { selectCapiProfile } from './profile'
 import { buildCapiRequestContext, inferInitiator, resolveInitiator } from './request-context'
 

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
-import { VERSION } from '~/lib/version'
 import { createServer } from '~/server'
 import { authStore, modelCache } from '~/state'
+import { VERSION } from '~/util/version'
 import {
   restoreStateSnapshot,
   saveStateSnapshot,

@@ -4,10 +4,10 @@ import type { ExecutionStrategy, SSEOutput, SSEStreamChunk } from '~/lib/executi
 import type { ResponsesPayload, ResponsesResult, ResponseStreamEvent } from '~/types'
 
 import consola from 'consola'
-import { isAsyncIterable } from '~/lib/async-iterable'
 import { serializeAnthropicSSE } from '~/lib/sse-adapter'
 import { ResponsesStreamTranslator } from '~/translator/responses/responses-stream-translator'
 import { translateResponsesToAnthropic } from '~/translator/responses/responses-to-anthropic'
+import { isAsyncIterable } from '~/util/async-iterable'
 
 type ResponsesApiResult = ResponsesResult | AsyncIterable<SSEStreamChunk>
 

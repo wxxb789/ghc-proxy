@@ -4,7 +4,6 @@ import { Elysia } from 'elysia'
 
 import { HTTPError } from './lib/error'
 import { formatElapsed, getRequestModelMapping, logRequest, setRequestModelMapping } from './lib/request-logger'
-import { VERSION } from './lib/version'
 import { createCompletionRoutes } from './routes/chat-completions/route'
 import { createEmbeddingRoutes } from './routes/embeddings/route'
 import { createMessageRoutes } from './routes/messages/route'
@@ -13,6 +12,7 @@ import { createResponsesRoutes } from './routes/responses/route'
 import { createTokenRoute } from './routes/token/route'
 import { createUsageRoute } from './routes/usage/route'
 import { authStore, modelCache } from './state'
+import { VERSION } from './util/version'
 
 const isBun = typeof globalThis.Bun !== 'undefined'
 
