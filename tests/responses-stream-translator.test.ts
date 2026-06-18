@@ -563,7 +563,9 @@ describe('onEvent — whitespace validation', () => {
 
     const errorEvent = events.find(e => e.type === 'error') as AnthropicErrorEvent
     expect(errorEvent).toBeDefined()
+    expect(errorEvent.error.type).toBe('api_error')
     expect(errorEvent.error.message).toContain('whitespace')
+    expect(events.at(-1)).toBe(errorEvent)
     expect(translator.isCompleted).toBe(true)
   })
 
@@ -783,14 +785,21 @@ describe('onEvent — completion', () => {
     expect(translator.isCompleted).toBe(true)
   })
 
-  test('duplicate completion returns empty (prevents duplicate)', () => {
+  test('second response.completed re-runs (no duplicate-completion guard in onEvent)', () => {
     const translator = new ResponsesStreamTranslator()
     translator.onEvent(createdEvent())
     translator.onEvent(completedEvent())
 
-    // Second completion should not produce new events
-    translator.onEvent(completedEvent())
-    // The translateResponsesToAnthropic call still runs, so we just check isCompleted
+    // onEvent('response.completed') has no isCompleted guard (unlike onDone),
+    // so a second completion re-runs handleResponseCompleted and re-emits the
+    // terminal message_delta + message_stop pair. All blocks are already
+    // closed, so no content_block_stop is produced this time.
+    const secondEvents = translator.onEvent(completedEvent())
+
+    expect(secondEvents).toHaveLength(2)
+    expect(secondEvents.some(e => e.type === 'content_block_stop')).toBe(false)
+    expect(secondEvents.find(e => e.type === 'message_delta')).toBeDefined()
+    expect(secondEvents.at(-1)).toMatchObject({ type: 'message_stop' })
     expect(translator.isCompleted).toBe(true)
   })
 })
@@ -973,65 +982,6 @@ describe('buildErrorEvent', () => {
     expect(event.type).toBe('error')
     expect(event.error.type).toBe('api_error')
     expect(event.error.message).toBe('test error')
-  })
-})
-
-describe('ResponsesStreamTranslator', () => {
-  test('treats ordinary spaces as part of the function-call whitespace guard', () => {
-    const translator = new ResponsesStreamTranslator()
-    translator.onEvent({
-      type: 'response.created',
-      sequence_number: 1,
-      response: {
-        id: 'resp_1',
-        object: 'response',
-        created_at: 1,
-        model: 'gpt-5',
-        output: [],
-        output_text: '',
-        status: 'in_progress',
-        usage: {
-          input_tokens: 1,
-          output_tokens: 0,
-          total_tokens: 1,
-        },
-        error: null,
-        incomplete_details: null,
-        instructions: null,
-        metadata: null,
-        parallel_tool_calls: true,
-        temperature: null,
-        tool_choice: 'auto',
-        tools: [],
-        top_p: null,
-      },
-    })
-    translator.onEvent({
-      type: 'response.output_item.added',
-      sequence_number: 2,
-      output_index: 0,
-      item: {
-        type: 'function_call',
-        call_id: 'call_1',
-        name: 'test',
-        arguments: '',
-      },
-    })
-
-    const events = translator.onEvent({
-      type: 'response.function_call_arguments.delta',
-      sequence_number: 3,
-      output_index: 0,
-      item_id: 'call_1',
-      delta: '                     ',
-    })
-
-    expect(events.at(-1)).toMatchObject({
-      type: 'error',
-      error: {
-        type: 'api_error',
-      },
-    })
   })
 })
 

@@ -348,6 +348,66 @@ describe('responses and routing', () => {
     expect(serialized).not.toContain('"contentMediaType"')
   })
 
+  test('/v1/responses adds additionalProperties false and derives required for nested object tool schemas', async () => {
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_1',
+      model: 'gpt-4.1',
+      status: 'completed',
+      usage: null,
+    }), calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4.1',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+        tools: [{
+          type: 'function',
+          name: 'plugin--nowledge-mem--nowledge_mem_search',
+          parameters: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+              options: {
+                type: 'object',
+                properties: {
+                  limit: { type: 'integer' },
+                },
+              },
+            },
+          },
+        }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
+      type: 'function',
+      name: 'plugin--nowledge-mem--nowledge_mem_search',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          query: { type: 'string' },
+          options: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              limit: { type: 'integer' },
+            },
+            required: ['limit'],
+          },
+        },
+        required: ['query', 'options'],
+      },
+    })
+  })
+
   test('/v1/responses does not auto-inject context_management by default', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []

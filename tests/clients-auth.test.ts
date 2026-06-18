@@ -1,4 +1,5 @@
 import type { ClientAuth, ClientConfig } from '../src/clients/types'
+import type { StateSnapshot } from './helpers'
 import type { ChatCompletionsPayload } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
@@ -8,6 +9,7 @@ import { CopilotClient } from '../src/clients/copilot-client'
 import { getClientConfig } from '../src/clients/factory'
 
 import { buildGitHubUrls, normalizeGheDomain } from '../src/clients/ghe-domain'
+import { restoreStateSnapshot, saveStateSnapshot } from './helpers'
 
 // Use import.meta.resolve to get the absolute file URL, bypassing Bun's mock.module registry.
 // This ensures we always test the real GitHubClient even if another test file
@@ -264,11 +266,6 @@ describe('GitHubClient URL routing', () => {
 
 // ── createChatCompletions — header injection + api base resolution ──
 
-// Mock state
-authStore.copilotToken = 'test-token'
-modelCache.setVSCodeVersion('1.0.0')
-authStore.accountType = 'individual'
-
 // Helper to mock fetch
 const fetchMock = mock(
   (_url: string, opts: { headers: Record<string, string> }) => {
@@ -280,12 +277,19 @@ const fetchMock = mock(
   },
 )
 describe('createChatCompletions', () => {
+  let snapshot: StateSnapshot
+
   beforeEach(() => {
+    snapshot = saveStateSnapshot()
+    // Mock state applied per-test from a clean snapshot so it never leaks to siblings.
+    authStore.copilotToken = 'test-token'
+    authStore.accountType = 'individual'
+    modelCache.setVSCodeVersion('1.0.0')
     fetchMock.mockClear()
   })
 
   afterEach(() => {
-    authStore.copilotApiBase = undefined
+    restoreStateSnapshot(snapshot)
   })
 
   test('sets X-Initiator to agent if tool/assistant present', async () => {

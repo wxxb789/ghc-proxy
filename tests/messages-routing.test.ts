@@ -16,6 +16,7 @@ import {
   buildModel,
   buildModelsResponse,
   buildVisionModel,
+  clearConfig,
   createApp,
   mockChatCompletions,
   mockMessages,
@@ -42,10 +43,7 @@ beforeEach(() => {
   authStore.showToken = false
   authStore.upstreamTimeoutSeconds = undefined
 
-  const config = getCachedConfig()
-  for (const key of Object.keys(config)) {
-    delete (config as Record<string, unknown>)[key]
-  }
+  clearConfig()
 })
 
 afterEach(() => {
@@ -59,11 +57,8 @@ afterEach(() => {
   restoreStateSnapshot(stateSnapshot)
   setSystemTime()
 
-  const config = getCachedConfig()
-  for (const key of Object.keys(config)) {
-    delete (config as Record<string, unknown>)[key]
-  }
-  Object.assign(config, structuredClone(originalConfig))
+  clearConfig()
+  Object.assign(getCachedConfig(), structuredClone(originalConfig))
 })
 
 describe('messages routing', () => {

@@ -854,10 +854,6 @@ describe('responses official emulator', () => {
 })
 
 describe('responses emulator state', () => {
-  afterEach(() => {
-    setSystemTime()
-  })
-
   test('clones stored responses and input items on read and write', () => {
     const state = createResponsesEmulatorState()
     const response = buildResponsesResult({

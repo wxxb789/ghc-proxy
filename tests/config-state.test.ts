@@ -13,7 +13,7 @@ import { resolveDumpFailedPayloadsOption } from '../src/start'
 import { authStore, modelCache } from '../src/state'
 import { configStore } from '../src/state/config-store'
 
-import { buildModel, buildModelsResponse } from './helpers'
+import { buildModel, buildModelsResponse, clearConfig } from './helpers'
 
 // Redirect config file I/O to a temp dir for the whole file. This mock is scoped
 // to this test module's import graph; the store/auth tests below don't read PATHS.
@@ -172,29 +172,17 @@ describe('config module', () => {
 })
 
 describe('ConfigStore accessors', () => {
-  afterAll(async () => {
-    const config = getCachedConfig() as Record<string, unknown>
-    for (const key of Object.keys(config)) {
-      delete config[key]
-    }
-  })
+  beforeEach(() => clearConfig())
 
-  function clearCachedConfig() {
-    const config = getCachedConfig() as Record<string, unknown>
-    for (const key of Object.keys(config)) {
-      delete config[key]
-    }
-  }
+  afterAll(() => clearConfig())
 
   // ── isCompactSmallModelEnabled ──
 
   test('isCompactSmallModelEnabled defaults to false', () => {
-    clearCachedConfig()
     expect(configStore.isCompactSmallModelEnabled()).toBe(false)
   })
 
   test('isCompactSmallModelEnabled respects explicit true', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.compactUseSmallModel = true
     expect(configStore.isCompactSmallModelEnabled()).toBe(true)
@@ -203,26 +191,22 @@ describe('ConfigStore accessors', () => {
   // ── getSmallModel ──
 
   test('getSmallModel returns undefined by default', () => {
-    clearCachedConfig()
     expect(configStore.getSmallModel()).toBeUndefined()
   })
 
   test('getSmallModel returns trimmed string when set', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.smallModel = '  gpt-4.1-mini  '
     expect(configStore.getSmallModel()).toBe('gpt-4.1-mini')
   })
 
   test('getSmallModel returns undefined for whitespace-only string', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.smallModel = '   '
     expect(configStore.getSmallModel()).toBeUndefined()
   })
 
   test('getSmallModel returns undefined for empty string', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.smallModel = ''
     expect(configStore.getSmallModel()).toBeUndefined()
@@ -231,12 +215,10 @@ describe('ConfigStore accessors', () => {
   // ── isFunctionApplyPatchEnabled ──
 
   test('isFunctionApplyPatchEnabled defaults to true', () => {
-    clearCachedConfig()
     expect(configStore.isFunctionApplyPatchEnabled()).toBe(true)
   })
 
   test('isFunctionApplyPatchEnabled respects explicit false', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.useFunctionApplyPatch = false
     expect(configStore.isFunctionApplyPatchEnabled()).toBe(false)
@@ -245,12 +227,10 @@ describe('ConfigStore accessors', () => {
   // ── getReasoningEffort ──
 
   test('getReasoningEffort defaults to high', () => {
-    clearCachedConfig()
     expect(configStore.getReasoningEffort('claude-sonnet-4.5')).toBe('high')
   })
 
   test('getReasoningEffort respects per-model config', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.modelReasoningEfforts = { 'claude-sonnet-4.5': 'low', 'gpt-5': 'medium' }
     expect(configStore.getReasoningEffort('claude-sonnet-4.5')).toBe('low')
@@ -258,7 +238,6 @@ describe('ConfigStore accessors', () => {
   })
 
   test('getReasoningEffort falls back to high for unconfigured model', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.modelReasoningEfforts = { 'gpt-5': 'low' }
     expect(configStore.getReasoningEffort('claude-sonnet-4.5')).toBe('high')
@@ -267,12 +246,10 @@ describe('ConfigStore accessors', () => {
   // ── getModelRewrites ──
 
   test('getModelRewrites returns empty array by default', () => {
-    clearCachedConfig()
     expect(configStore.getModelRewrites()).toEqual([])
   })
 
   test('getModelRewrites returns configured array', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     const rewrites = [{ from: 'claude-opus', to: 'gpt-5' }]
     config.modelRewrites = rewrites
@@ -282,12 +259,10 @@ describe('ConfigStore accessors', () => {
   // ── getModelFallback ──
 
   test('getModelFallback returns undefined by default', () => {
-    clearCachedConfig()
     expect(configStore.getModelFallback()).toBeUndefined()
   })
 
   test('getModelFallback returns configured fallback', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.modelFallback = { claudeOpus: 'gpt-5' }
     expect(configStore.getModelFallback()).toEqual({ claudeOpus: 'gpt-5' })
@@ -296,12 +271,10 @@ describe('ConfigStore accessors', () => {
   // ── isContextManagementEnabled ──
 
   test('isContextManagementEnabled defaults to false', () => {
-    clearCachedConfig()
     expect(configStore.isContextManagementEnabled()).toBe(false)
   })
 
   test('isContextManagementEnabled respects explicit true', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.responsesApiAutoContextManagement = true
     expect(configStore.isContextManagementEnabled()).toBe(true)
@@ -310,7 +283,6 @@ describe('ConfigStore accessors', () => {
   // ── isContextManagementModel ──
 
   test('isContextManagementModel returns false when context management is disabled', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.responsesApiAutoContextManagement = false
     config.responsesApiContextManagementModels = ['gpt-5']
@@ -318,7 +290,6 @@ describe('ConfigStore accessors', () => {
   })
 
   test('isContextManagementModel returns true for listed model when enabled', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.responsesApiAutoContextManagement = true
     config.responsesApiContextManagementModels = ['gpt-5', 'gpt-4.1']
@@ -327,7 +298,6 @@ describe('ConfigStore accessors', () => {
   })
 
   test('isContextManagementModel returns false for unlisted model when enabled', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.responsesApiAutoContextManagement = true
     config.responsesApiContextManagementModels = ['gpt-5']
@@ -335,7 +305,6 @@ describe('ConfigStore accessors', () => {
   })
 
   test('isContextManagementModel returns false when models list is absent', () => {
-    clearCachedConfig()
     const config = getCachedConfig() as Record<string, unknown>
     config.responsesApiAutoContextManagement = true
     expect(configStore.isContextManagementModel('gpt-5')).toBe(false)
@@ -406,11 +375,15 @@ describe('state store initialization', () => {
   })
 
   test('createCopilotClient reads from authStore', async () => {
-    const { createCopilotClient } = await import('~/clients/factory')
+    const { createCopilotClient, getClientConfig } = await import('~/clients/factory')
     authStore.copilotToken = 'test-token'
     authStore.copilotApiBase = 'https://test-api.com'
     const client = createCopilotClient()
     expect(client).toBeDefined()
+    // CopilotClient keeps auth/config private with no getters, so assert the
+    // authStore read through getClientConfig() — the same source the client is
+    // constructed from — mirroring the sibling getClientConfig test below.
+    expect(getClientConfig().copilotApiBase).toBe('https://test-api.com')
   })
 
   test('getClientConfig reads from authStore and modelCache', async () => {

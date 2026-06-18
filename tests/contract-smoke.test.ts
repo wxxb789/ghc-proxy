@@ -34,6 +34,7 @@ const originalCreateChatCompletions = CopilotClient.prototype.createChatCompleti
 const originalCreateEmbeddings = CopilotClient.prototype.createEmbeddings
 const originalCreateResponses = CopilotClient.prototype.createResponses
 const originalState = saveStateSnapshot()
+const originalConfig = structuredClone(getCachedConfig())
 
 beforeEach(() => {
   setupDefaultTestState()
@@ -44,6 +45,12 @@ afterEach(() => {
   CopilotClient.prototype.createEmbeddings = originalCreateEmbeddings
   CopilotClient.prototype.createResponses = originalCreateResponses
   restoreStateSnapshot(originalState)
+
+  const config = getCachedConfig()
+  for (const key of Object.keys(config)) {
+    delete (config as Record<string, unknown>)[key]
+  }
+  Object.assign(config, structuredClone(originalConfig))
 })
 
 describe('API smoke', () => {

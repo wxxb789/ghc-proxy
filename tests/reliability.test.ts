@@ -1,13 +1,10 @@
 import type { ServerSentEventMessage } from 'fetch-event-stream'
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { Elysia } from 'elysia'
 
 import { CopilotClient } from '~/clients'
-import { runGuard } from '~/guard'
 import { HTTPError } from '~/lib/error'
-import { sseAdapter } from '~/lib/sse-adapter'
-import { handleMessagesCore } from '~/routes/messages/handler'
+import { createApp } from './helpers'
 
 // ── retryWithBackoff: mock the sleep module before importing retry so backoff
 //    delays are observed without real waiting. ──
@@ -42,40 +39,8 @@ function useCreateChatCompletionsSnapshot() {
   })
 }
 
-function createTestApp() {
-  return new Elysia()
-    .error({ HTTP: HTTPError })
-    .onError(({ code, error }) => {
-      if (code === 'HTTP')
-        return
-      if (error instanceof Error && error.name === 'AbortError') {
-        return Response.json(
-          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
-          { status: 504 },
-        )
-      }
-      const message = error instanceof Error ? error.message : String(error)
-      return Response.json(
-        { error: { message, type: 'error' } },
-        { status: 500 },
-      )
-    })
-    .post('/v1/messages', async function* ({ body, request }) {
-      await runGuard()
-      const { result } = await handleMessagesCore({
-        body,
-        signal: request.signal,
-        headers: request.headers,
-      })
-      if (result.kind === 'json') {
-        return result.data
-      }
-      yield* sseAdapter(result.generator)
-    })
-}
-
-function makeRequest(app: ReturnType<typeof createTestApp>, options?: { stream?: boolean }) {
-  return app.handle(new Request('http://localhost/v1/messages', {
+function makeRequest(options?: { stream?: boolean }) {
+  return createApp('messages').handle(new Request('http://localhost/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -100,8 +65,7 @@ describe('Error classification in onError handler', () => {
     CopilotClient.prototype.createChatCompletions = () =>
       Promise.reject(createAbortErrorAsError())
 
-    const app = createTestApp()
-    const response = await makeRequest(app)
+    const response = await makeRequest()
 
     expect(response.status).toBe(504)
     const json = await response.json()
@@ -118,8 +82,7 @@ describe('Error classification in onError handler', () => {
     CopilotClient.prototype.createChatCompletions = () =>
       Promise.reject(genericError)
 
-    const app = createTestApp()
-    const response = await makeRequest(app)
+    const response = await makeRequest()
 
     expect(response.status).toBe(500)
     const json = await response.json()
@@ -139,8 +102,7 @@ describe('Error classification in onError handler', () => {
     CopilotClient.prototype.createChatCompletions = () =>
       Promise.reject(httpError)
 
-    const app = createTestApp()
-    const response = await makeRequest(app)
+    const response = await makeRequest()
 
     expect(response.status).toBe(429)
     const json = await response.json()
@@ -177,8 +139,7 @@ describe('Streaming error handling', () => {
     CopilotClient.prototype.createChatCompletions = (_payload, _options) =>
       Promise.resolve(createTimeoutStream())
 
-    const app = createTestApp()
-    const response = await makeRequest(app, { stream: true })
+    const response = await makeRequest({ stream: true })
 
     expect(response.status).toBe(200)
     const body = await response.text()
