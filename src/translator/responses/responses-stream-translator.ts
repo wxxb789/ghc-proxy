@@ -17,37 +17,12 @@ import type {
   ResponseTextDoneEvent,
 } from '~/types'
 import { THINKING_TEXT } from './anthropic-to-responses'
+import {
+  FunctionCallArgumentsValidationError,
+  updateWhitespaceRunState,
+} from './function-call-stream-guard'
 import { translateResponsesToAnthropic } from './responses-to-anthropic'
 import { SignatureCodec } from './signature-codec'
-
-const MAX_CONSECUTIVE_FUNCTION_CALL_WHITESPACE = 20
-
-class FunctionCallArgumentsValidationError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'FunctionCallArgumentsValidationError'
-  }
-}
-
-function updateWhitespaceRunState(
-  previousCount: number,
-  chunk: string,
-): { nextCount: number, exceeded: boolean } {
-  let count = previousCount
-
-  for (const char of chunk) {
-    if (char === ' ' || char === '\r' || char === '\n' || char === '\t') {
-      count += 1
-      if (count > MAX_CONSECUTIVE_FUNCTION_CALL_WHITESPACE) {
-        return { nextCount: count, exceeded: true }
-      }
-      continue
-    }
-    count = 0
-  }
-
-  return { nextCount: count, exceeded: false }
-}
 
 export class ResponsesStreamTranslator {
   private readonly state: ResponsesStreamState = {
