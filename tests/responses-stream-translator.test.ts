@@ -785,21 +785,34 @@ describe('onEvent — completion', () => {
     expect(translator.isCompleted).toBe(true)
   })
 
-  test('second response.completed re-runs (no duplicate-completion guard in onEvent)', () => {
+  test('duplicate response.completed returns empty (idempotent, no re-emit)', () => {
     const translator = new ResponsesStreamTranslator()
     translator.onEvent(createdEvent())
     translator.onEvent(completedEvent())
 
-    // onEvent('response.completed') has no isCompleted guard (unlike onDone),
-    // so a second completion re-runs handleResponseCompleted and re-emits the
-    // terminal message_delta + message_stop pair. All blocks are already
-    // closed, so no content_block_stop is produced this time.
+    // handleResponseCompleted guards on messageCompleted (mirroring onDone),
+    // so a second completion is a no-op and must not re-emit the terminal
+    // message_delta + message_stop pair (which would be malformed Anthropic SSE).
     const secondEvents = translator.onEvent(completedEvent())
 
-    expect(secondEvents).toHaveLength(2)
-    expect(secondEvents.some(e => e.type === 'content_block_stop')).toBe(false)
-    expect(secondEvents.find(e => e.type === 'message_delta')).toBeDefined()
-    expect(secondEvents.at(-1)).toMatchObject({ type: 'message_stop' })
+    expect(secondEvents).toHaveLength(0)
+    expect(translator.isCompleted).toBe(true)
+  })
+
+  test('response.incomplete after response.completed returns empty (no second terminal pair)', () => {
+    const translator = new ResponsesStreamTranslator()
+    translator.onEvent(createdEvent())
+    translator.onEvent(completedEvent())
+
+    // A stray response.incomplete arriving after a response.completed hits the
+    // same guarded handler and must not emit a second message_delta/message_stop.
+    const trailing = translator.onEvent({
+      type: 'response.incomplete',
+      sequence_number: 99,
+      response: buildResponsesResult({ status: 'incomplete' }),
+    })
+
+    expect(trailing).toHaveLength(0)
     expect(translator.isCompleted).toBe(true)
   })
 })
