@@ -142,6 +142,7 @@ describe('runPipeline', () => {
     const config = makeConfig({
       afterIngest: (ctx) => {
         captured.push(ctx)
+        return ctx.payload
       },
     })
 
@@ -151,6 +152,59 @@ describe('runPipeline', () => {
     expect(captured[0]!.payload.model).toBe('claude-sonnet-4.5')
     expect(captured[0]!.payload.messages[0]?.content).toBe('test')
     expect(captured[0]!.headers).toBeInstanceOf(Headers)
+  })
+
+  test('afterIngest returned payload replaces the payload for transform + dispatch', async () => {
+    const executedPayloads: SimplePayload[] = []
+    const strategyRegistry = new StrategyRegistry<{ payload: SimplePayload }>()
+    strategyRegistry.register({
+      name: 'capture-strategy',
+      canHandle: () => true,
+      execute: async (ctx) => {
+        executedPayloads.push(ctx.payload)
+        return { kind: 'json', data: { ok: true } }
+      },
+    })
+
+    const replacement: SimplePayload = {
+      model: 'claude-sonnet-4.5',
+      messages: [{ role: 'user', content: 'REPLACED' }],
+    }
+    const params = makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'original' }] })
+    const config = makeConfig({
+      strategyRegistry,
+      // Mirrors /responses returning the emulator's upstream payload.
+      afterIngest: () => replacement,
+    })
+
+    await runPipeline(params, config)
+
+    // The replacement payload — not the ingested one — reaches the strategy.
+    expect(executedPayloads[0]?.messages[0]?.content).toBe('REPLACED')
+  })
+
+  test('afterIngest returning ctx.payload keeps the ingested payload (no-substitution case)', async () => {
+    const executedPayloads: SimplePayload[] = []
+    const strategyRegistry = new StrategyRegistry<{ payload: SimplePayload }>()
+    strategyRegistry.register({
+      name: 'capture-strategy',
+      canHandle: () => true,
+      execute: async (ctx) => {
+        executedPayloads.push(ctx.payload)
+        return { kind: 'json', data: { ok: true } }
+      },
+    })
+
+    const params = makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'original' }] })
+    const config = makeConfig({
+      strategyRegistry,
+      // Side-effect-only callers (messages, chat-completions) end with this.
+      afterIngest: ({ payload }) => payload,
+    })
+
+    await runPipeline(params, config)
+
+    expect(executedPayloads[0]?.messages[0]?.content).toBe('original')
   })
 
   test('afterTransform hook is called with transform result', async () => {

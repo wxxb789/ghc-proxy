@@ -35,6 +35,10 @@ export async function handleMessagesCore(
           reqHeaders.get('anthropic-beta'),
         )
         anthropicBetaHeader = betaResult.header
+        // Side-effect-only hook: forward the ingested payload unchanged. The
+        // runner requires a returned payload (replacement callers return a
+        // different one); returning ctx.payload is the no-substitution case.
+        return payload
       },
       buildStrategyContext({ payload, meta, headers: reqHeaders, selectedModel, copilotClient, upstreamSignal, modelMapping }) {
         return {
