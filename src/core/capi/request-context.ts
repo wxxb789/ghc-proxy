@@ -12,19 +12,13 @@ import type {
 } from '~/types'
 import { randomUUID } from 'node:crypto'
 
+import { readHeader } from './headers'
 import {
   stripSubagentMarkerFromAnthropicPayload,
   stripSubagentMarkerFromChatPayload,
   stripSubagentMarkerFromResponsesPayload,
   withSubagentMarker,
 } from './subagent-marker'
-
-export function readHeader(
-  headers: Headers,
-  name: string,
-): string | undefined {
-  return headers.get(name) ?? undefined
-}
 
 export function inferInitiator(turns: Array<ConversationTurn>): 'user' | 'agent' {
   return turns.some(turn => turn.role === 'assistant' || turn.role === 'tool')

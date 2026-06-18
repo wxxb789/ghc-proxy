@@ -17,7 +17,7 @@ import type {
   ResponsesPayload,
 } from '~/types'
 
-import { readHeader } from './request-context'
+import { readHeader } from './headers'
 
 const SUBAGENT_MARKER_PREFIX = '__SUBAGENT_MARKER__'
 const SYSTEM_REMINDER_OPEN_TAG = '<system-reminder>'

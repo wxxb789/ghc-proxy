@@ -30,7 +30,7 @@ src/
 ├── pipeline/                  # Pipeline runner and framework types
 ├── ingest/                    # Protocol registry (parse + validate)
 ├── transform/                 # Composable model transform chain + sanitizers
-├── dispatch/                  # Strategy registry + ResourceDispatcher
+├── dispatch/                  # Strategy registry
 ├── deliver/                   # Response delivery + error utilities
 ├── guard/                     # Request auth + rate limiting guard
 ├── cli/                       # CLI helpers (proxy, shell, startup banner)
@@ -225,14 +225,14 @@ src/
 ├── pipeline/        # Pipeline runner (runPipeline) and framework types
 ├── ingest/          # Protocol registry (parse + validate per protocol)
 ├── transform/       # Composable model transform chain + payload sanitizers
-├── dispatch/        # Strategy registry + ResourceDispatcher
+├── dispatch/        # Strategy registry
 ├── deliver/         # Response delivery + error utilities
 └── guard/           # Request auth + rate limiting guard
 ```
 
 These layers co-exist with the original `src/lib/` and `src/routes/` structure. The new layers provide:
 
-- **A generic pipeline runner** — `src/pipeline/runner.ts` exports `runPipeline()`, which wraps the three core stages (Ingest→Transform→Dispatch) with lifecycle hooks (`afterIngest`, `afterTransform`) and config-driven `contextRetry`. Guard is applied separately as an Elysia plugin, and Deliver happens after `runPipeline()` returns. Route handlers call `runPipeline()` instead of orchestrating each stage manually.
+- **A generic pipeline runner** — `src/pipeline/runner.ts` exports `runPipeline()`, which wraps the three core stages (Ingest→Transform→Dispatch) with lifecycle hooks (`afterIngest`, `afterTransform`). Guard is applied separately as an Elysia plugin, and Deliver happens after `runPipeline()` returns. Route handlers call `runPipeline()` instead of orchestrating each stage manually.
 - **Composable alternatives to inline handler logic** — logic that was previously duplicated across route handlers is extracted into named, testable pipeline steps.
 - **Registries instead of hardcoded switch/if-else** — `src/ingest/` and `src/dispatch/` use registry patterns so new protocols and strategies can be added without touching existing handler code.
 - **Decomposed state instead of the global AppState object** — `src/state/` splits the former monolithic `AppState` into focused singleton stores (`authStore`, `configStore`, `modelCache`, `rateLimiter`, `runtimeStore`, `responsesEmulatorState`), each with a single responsibility, all re-exported from `~/state`. No `AppState` interface remains in the codebase. `ConfigStore` consolidates scattered `shouldUse*()` config getter functions into a typed class with semantic query methods (e.g., `isEmulatorEnabled()`, `isContextManagementEnabled()`, `getReasoningEffort()`).

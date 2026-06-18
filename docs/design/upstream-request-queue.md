@@ -67,7 +67,7 @@ These settings are configurable through the `start` command:
 
 Raising concurrency improves throughput only when upstream capacity allows it. When the active limit is model-family or account-wide, higher concurrency can amplify 429s.
 
-The same settings can be persisted in `~/.ghc-proxy/config.json`:
+The same settings can be persisted in `~/.local/share/ghc-proxy/config.json`:
 
 ```json
 {

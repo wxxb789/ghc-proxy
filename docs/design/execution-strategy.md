@@ -157,13 +157,12 @@ interface PipelineConfig<TPayload, TStrategyCtx> {
   transformChain: ModelTransformChain
   strategyRegistry: StrategyRegistry<TStrategyCtx>
   buildStrategyContext: (ctx: BuildStrategyContextParams) => TStrategyCtx
-  contextRetry?: boolean
-  afterIngest?: (ctx: IngestContext<TPayload>) => void
+  afterIngest?: (ctx: IngestContext<TPayload>) => TPayload | void
   afterTransform?: (ctx: TransformContext<TPayload>) => void | Promise<void>
 }
 ```
 
-Each route provides its own protocol ID, transform chain, strategy registry, and a `buildStrategyContext` function that maps the generic pipeline state into the route-specific strategy context type. The lifecycle hooks let routes inject route-specific logic at well-defined points without forking the pipeline.
+Each route provides its own protocol ID, transform chain, strategy registry, and a `buildStrategyContext` function that maps the generic pipeline state into the route-specific strategy context type. The lifecycle hooks let routes inject route-specific logic at well-defined points without forking the pipeline. `afterIngest` may optionally return a replacement payload (used by `/responses` to swap in the emulator's upstream payload); when it returns `void` the ingested payload is used unchanged.
 
 ### Route Handler Integration
 
@@ -178,7 +177,6 @@ export async function handleMessagesCore({ body, signal, headers }) {
       protocol: 'anthropic-messages',
       transformChain: messagesModelChain,
       strategyRegistry: defaultStrategyRegistry,
-      contextRetry: true,
       afterIngest({ payload, headers }) { /* extract beta header */ },
       buildStrategyContext(ctx) { /* map to MessagesStrategyContext */ },
     },
@@ -186,7 +184,7 @@ export async function handleMessagesCore({ body, signal, headers }) {
 }
 ```
 
-The chat-completions handler follows the same pattern, adding an `afterTransform` hook for token counting. The responses handler still orchestrates stages manually because it has additional emulator-mode logic (store decoration, input compaction) that doesn't fit the linear pipeline model.
+The chat-completions handler follows the same pattern, adding an `afterTransform` hook for token counting. The responses handler (`src/routes/responses/handler.ts`) also runs through `runPipeline`: its emulator-mode logic fits the lifecycle hooks -- `afterIngest` returns the emulator's upstream payload (store decoration prep), `afterTransform` applies tool/input policies and context management, and `buildStrategyContext` wires the streaming/terminal decoration callbacks. The one piece outside the linear pipeline is the post-call decoration of the non-streaming JSON result, which the handler applies to the pipeline result before returning.
 
 ## Benefits
 

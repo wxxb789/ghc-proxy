@@ -290,7 +290,7 @@ export const start = defineCommand({
     },
     'upstream-queue-retries': {
       type: 'string',
-      description: 'Maximum retries for upstream 429 responses (default: 6)',
+      description: 'Maximum retries for upstream 429 responses (default: 5)',
     },
     'upstream-queue-base-delay': {
       type: 'string',

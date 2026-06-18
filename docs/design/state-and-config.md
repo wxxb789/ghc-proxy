@@ -147,7 +147,7 @@ interface ConfigFile {
 
   // Copilot upstream queue
   upstreamQueueConcurrency?: number // Concurrent upstream occupancy (default 10)
-  upstreamQueueMaxRetries?: number // Max retries for upstream 429 (default 6)
+  upstreamQueueMaxRetries?: number // Max retries for upstream 429 (default 5)
   upstreamQueueBaseDelaySeconds?: number // Base backoff delay (default 2)
   upstreamQueueMaxDelaySeconds?: number // Max backoff delay (default 60)
 
@@ -172,7 +172,7 @@ The `start` command maps CLI flags to RuntimeConfig:
 | `--dump-failed-payloads` / `-D` | `runtimeStore.dumpFailedPayloads` | `false` |
 | `--upstream-timeout`   | `upstreamTimeoutSeconds`  | (none)         |
 | `--upstream-queue-concurrency` | `upstreamQueueConcurrency` | `10`     |
-| `--upstream-queue-retries` | `upstreamQueueMaxRetries` | `6`       |
+| `--upstream-queue-retries` | `upstreamQueueMaxRetries` | `5`       |
 | `--upstream-queue-base-delay` | `upstreamQueueBaseDelaySeconds` | `2` |
 | `--upstream-queue-max-delay` | `upstreamQueueMaxDelaySeconds` | `60` |
 | `--proxy-env`          | (http proxy setup)        | `false`        |
