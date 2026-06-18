@@ -1,7 +1,7 @@
 import type { ProtocolHandler, RequestMeta } from './types'
 import type { EmbeddingRequest } from '~/types'
 
-import { parseEmbeddingRequest } from '~/lib/validation'
+import { parseEmbeddingRequest } from './validation'
 
 export const embeddingsProtocol: ProtocolHandler<EmbeddingRequest> = {
   parse(body: unknown): EmbeddingRequest {

@@ -1,7 +1,7 @@
 import consola from 'consola'
 import { z } from 'zod'
 
-import { HTTPError } from '../error'
+import { HTTPError } from '~/lib/error'
 
 // ── Reusable Schema Primitives ──
 

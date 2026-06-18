@@ -2,7 +2,7 @@ import type { ProtocolHandler, RequestMeta } from './types'
 import type { ResponsesInputTokensPayload, ResponsesPayload } from '~/types'
 
 import { normalizeResponsesRequestContext } from '~/core/capi'
-import { parseResponsesInputTokensPayload, parseResponsesPayload } from '~/lib/validation'
+import { parseResponsesInputTokensPayload, parseResponsesPayload } from './validation'
 
 function extractResponsesMeta(
   payload: ResponsesPayload | ResponsesInputTokensPayload,

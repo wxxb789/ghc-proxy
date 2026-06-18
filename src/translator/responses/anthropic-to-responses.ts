@@ -35,9 +35,9 @@ import type {
   ToolChoiceFunction,
   ToolChoiceOptions,
 } from '~/types'
-import { normalizeFunctionParametersSchemaForCopilot } from '~/lib/function-schema'
 import { formatSearchResultBlock } from '~/translator/anthropic/search-result'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
+import { normalizeFunctionParametersSchemaForCopilot } from './function-schema'
 
 import { SignatureCodec } from './signature-codec'
 

@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 
-import { HTTPError } from '~/lib/error'
 import {
   parseAnthropicCountTokensPayload,
   parseAnthropicMessagesPayload,
@@ -8,7 +7,8 @@ import {
   parseOpenAIChatPayload,
   parseResponsesInputTokensPayload,
   parseResponsesPayload,
-} from '~/lib/validation'
+} from '~/ingest/validation'
+import { HTTPError } from '~/lib/error'
 
 describe('OpenAI payload validation', () => {
   test('accepts optional embedding fields', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { normalizeFunctionParametersSchemaForCopilot } from '~/lib/function-schema'
+import { normalizeFunctionParametersSchemaForCopilot } from '~/translator/responses/function-schema'
 
 describe('normalizeFunctionParametersSchemaForCopilot', () => {
   test('normalizes plugin and MCP-style object schemas for Copilot Responses validation', () => {
