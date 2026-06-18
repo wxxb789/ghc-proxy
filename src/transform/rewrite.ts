@@ -1,6 +1,6 @@
 import type { ModelTransformOutput, ModelTransformStep } from './types'
 
-import { applyModelRewrite } from '~/lib/model-rewrite'
+import { applyModelRewrite } from './model-rewrite'
 
 export const rewriteStep: ModelTransformStep = {
   tag: 'rewrite',

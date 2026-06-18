@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { getCachedConfig } from '~/lib/config'
-import { rewriteModel } from '~/lib/model-rewrite'
 import { modelCache } from '~/state'
+import { rewriteModel } from '~/transform/model-rewrite'
 
 import { buildModel, buildModelsResponse, clearConfig } from './helpers'
 

@@ -3,8 +3,8 @@ import type { AnthropicMessagesPayload } from '~/translator'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { getCachedConfig } from '~/lib/config'
-import { applyMessagesModelPolicy, isCompactRequest } from '~/lib/request-model-policy'
 import { modelCache } from '~/state'
+import { applyMessagesModelPolicy, isCompactRequest } from '~/transform/request-model-policy'
 
 import { buildModel, buildModelsResponse, clearConfig } from './helpers'
 
