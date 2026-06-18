@@ -1,11 +1,11 @@
 import type { ClientAuth, ClientConfig, ClientDeps } from './types'
+import type { QueuedUpstreamResponse, UpstreamRequestQueue } from './upstream-queue'
 import type {
   CapiChatCompletionResponse,
   CapiChatCompletionsPayload,
   CapiRequestContext,
 } from '~/core/capi'
 import type { CopilotHeaderOptions } from '~/lib/api-config'
-import type { QueuedUpstreamResponse, UpstreamRequestQueue } from '~/lib/upstream-request-queue'
 import type { AnthropicMessagesPayload } from '~/translator'
 import type {
   EmbeddingRequest,

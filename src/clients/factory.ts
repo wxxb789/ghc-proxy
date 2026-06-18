@@ -1,11 +1,11 @@
+import type { UpstreamRequestQueueOptions } from './upstream-queue'
 import type { ClientConfig } from '~/clients'
-import type { UpstreamRequestQueueOptions } from '~/lib/upstream-request-queue'
 
 import consola from 'consola'
 import { CopilotClient, getVSCodeVersion } from '~/clients'
 import { buildGitHubUrls } from '~/lib/ghe-domain'
-import { createDefaultUpstreamRequestQueue } from '~/lib/upstream-request-queue'
 import { authStore, modelCache } from '~/state'
+import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
 export interface RuntimeConfig {
   accountType: 'individual' | 'business' | 'enterprise'

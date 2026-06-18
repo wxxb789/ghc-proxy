@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { createDefaultUpstreamRequestQueue, parseRetryAfterMs, UpstreamRequestQueue } from '~/lib/upstream-request-queue'
+import { createDefaultUpstreamRequestQueue, parseRetryAfterMs, UpstreamRequestQueue } from '~/clients/upstream-queue'
 
 describe('parseRetryAfterMs', () => {
   test('parses delta seconds', () => {
@@ -189,7 +189,7 @@ describe('UpstreamRequestQueue', () => {
 
   test('falls back to default concurrency for NaN input', async () => {
     const queue = new UpstreamRequestQueue(
-      { concurrency: Number.NaN } as Partial<import('~/lib/upstream-request-queue').UpstreamRequestQueueOptions>,
+      { concurrency: Number.NaN } as Partial<import('~/clients/upstream-queue').UpstreamRequestQueueOptions>,
     )
 
     let calls = 0

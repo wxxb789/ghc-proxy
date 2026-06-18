@@ -1,8 +1,8 @@
 import consola from 'consola'
 
+import { HTTPError } from '~/lib/error'
 import { formatDurationMs } from '~/util/duration'
 import { sleep as defaultSleep } from '~/util/sleep'
-import { HTTPError } from './error'
 
 export interface UpstreamRequestQueueOptions {
   concurrency: number

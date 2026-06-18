@@ -2,7 +2,7 @@ import type { CapturedEmbeddingCall } from './helpers'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import consola from 'consola'
 import { CopilotClient } from '~/clients'
-import { UpstreamRequestQueue } from '~/lib/upstream-request-queue'
+import { UpstreamRequestQueue } from '~/clients/upstream-queue'
 
 import {
   createApp,
