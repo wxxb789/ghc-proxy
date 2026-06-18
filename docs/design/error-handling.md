@@ -57,7 +57,7 @@ This preserves the SSE connection and gives the client structured error informat
 
 ## Validation Architecture
 
-### Zod Schemas (`src/lib/validation/`)
+### Zod Schemas (`src/ingest/validation/`)
 
 All request payloads are validated at the route handler level:
 
@@ -226,7 +226,7 @@ This prevents unbounded memory growth under sustained load. See [Upstream Reques
 
 ### Emulator Memory Cap
 
-The Responses emulator state store enforces a hard cap of **10,000 total entries** (across responses, conversations, conversation heads, input items, and deletion flags). The cap is enforced at the write layer: every new-key write calls `enforceCapOnWrite()`, which first prunes expired entries, then evicts the oldest entry from the largest map until the count drops below the limit. A background prune interval (60 s) also garbage-collects expired entries independently of writes.
+The Responses emulator state store enforces a hard cap of **10,000 total entries** (across responses, conversations, conversation heads, input items, and deletion flags). The cap is enforced at the write layer: every new-key write calls `enforceCapOnWrite()`, which first prunes expired entries, then evicts the oldest entry from the largest map until the count drops below the limit. A background prune interval (60 s) garbage-collects expired entries; it is started lazily on the first write (`writeMap`/`putDeletionFlag`) rather than at construction, re-arms after `clear()`, and is `unref()`'d so it never keeps the process alive.
 
 ## Signal and Resource Cleanup
 

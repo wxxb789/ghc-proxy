@@ -16,7 +16,7 @@ Returning the first 429 directly makes the proxy available only when Copilot has
 
 ## Architecture
 
-`UpstreamRequestQueue` lives in `src/lib/upstream-request-queue.ts` and is injected into `CopilotClient` by `createCopilotClient()`.
+`UpstreamRequestQueue` lives in `src/clients/upstream-queue.ts` and is injected into `CopilotClient` by `createCopilotClient()`.
 
 ```text
 Route Handler
@@ -48,11 +48,11 @@ Queue concurrency counts active upstream occupancy, not just the moment a reques
 | Setting | Default | Reason |
 |---------|---------|--------|
 | `concurrency` | `10` | Allows moderate parallelism while still applying global back-pressure |
-| `maxRetries` | `6` | Avoid immediate failure while keeping retry duration bounded |
+| `maxRetries` | `5` | Avoid immediate failure while keeping retry duration bounded |
 | `baseDelayMs` | `2000` | Fast first recovery when upstream omits `Retry-After` |
 | `maxDelayMs` | `60000` | Avoid runaway sleep on malformed or excessive headers |
 
-Worst-case backoff without `Retry-After` is about two minutes before returning the final 429. This is intentionally below the default upstream timeout.
+Worst-case backoff without `Retry-After` is about a minute before returning the final 429. This is intentionally below the default upstream timeout.
 
 ## Configuration
 
@@ -61,7 +61,7 @@ These settings are configurable through the `start` command:
 | CLI Flag | Unit | Default |
 |----------|------|---------|
 | `--upstream-queue-concurrency` | requests | `10` |
-| `--upstream-queue-retries` | retries | `6` |
+| `--upstream-queue-retries` | retries | `5` |
 | `--upstream-queue-base-delay` | seconds | `2` |
 | `--upstream-queue-max-delay` | seconds | `60` |
 
@@ -72,7 +72,7 @@ The same settings can be persisted in `~/.ghc-proxy/config.json`:
 ```json
 {
   "upstreamQueueConcurrency": 10,
-  "upstreamQueueMaxRetries": 6,
+  "upstreamQueueMaxRetries": 5,
   "upstreamQueueBaseDelaySeconds": 2,
   "upstreamQueueMaxDelaySeconds": 60
 }

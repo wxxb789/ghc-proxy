@@ -19,7 +19,7 @@ These variables override the default model used when the requested model ID is n
 ```text
 process.env.MODEL_FALLBACK_CLAUDE_*
   → getModelFallbackConfig()                    [src/lib/model-resolver.ts]
-    → createAnthropicAdapter()                  [src/routes/messages/strategies/shared.ts]
+    → createAnthropicAdapter()                  [src/routes/messages/shared.ts]
       → AnthropicMessagesAdapter.toCapiPlan()   [src/adapters/anthropic-messages-adapter.ts]
         → buildCapiExecutionPlan()              [src/core/capi/plan-builder.ts]
           → plan.payload.model = resolvedModel  ← sent to Copilot API
@@ -77,7 +77,7 @@ process.env.DUMP_FAILED_PAYLOADS
 
 **Status:** Functional on both runtimes, but via different mechanisms.
 
-The `--proxy-env` CLI flag calls `initProxyFromEnv()` in `src/lib/proxy.ts`, which configures an `undici` global dispatcher that routes requests through the proxy URL returned by the `proxy-from-env` library. However, this function has an early return on Bun:
+The `--proxy-env` CLI flag calls `initProxyFromEnv()` in `src/cli/proxy.ts`, which configures an `undici` global dispatcher that routes requests through the proxy URL returned by the `proxy-from-env` library. However, this function has an early return on Bun:
 
 ```text
 if (typeof Bun !== 'undefined')

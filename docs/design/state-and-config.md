@@ -2,35 +2,52 @@
 
 This document describes the global state management and configuration system.
 
-## Global State (`src/lib/state.ts`)
+## Global State (`src/state/`)
 
-The proxy maintains a single `AppState` object:
+There is no single `AppState` object. State is decomposed into a set of
+singletons under `src/state/`, each re-exported from `~/state`:
 
 ```typescript
-interface AppState {
-  auth: AuthState // Authentication tokens
-  config: RuntimeConfig // Server runtime settings
-  runtime: RuntimeDebugState // Process-local debug flags
-  cache: CacheState // Cached upstream data
-  rateLimit: RateLimitState // Request throttling state
-  responsesEmulator: ResponsesEmulatorState // Optional in-memory Responses emulator state
-}
+import {
+  authStore, // Authentication tokens + server runtime settings
+  configStore, // Feature-flag / config query interface
+  modelCache, // Cached model list and VS Code version
+  rateLimiter, // Local request throttling
+  responsesEmulatorState, // Optional in-memory Responses emulator state
+  runtimeStore, // Process-local debug flags
+} from '~/state'
 ```
 
-### AuthState
+The client/queue factory (`createCopilotClient`, `getClientConfig`,
+`cacheModels`, `cacheVSCodeVersion`, `configureUpstreamRequestQueue`) and the
+`RuntimeConfig` interface live in `src/clients/factory.ts`.
+
+### AuthStore (`src/state/auth.ts`)
 
 ```typescript
-interface AuthState {
+class AuthStore {
   githubToken?: string // GitHub personal access token
   copilotToken?: string // Copilot API token (derived from GitHub token)
   copilotApiBase?: string // Copilot API base URL
   gheDomain?: string // GitHub Enterprise domain (optional)
+  githubLogin?: string // Cached GitHub username
+  accountType: 'individual' | 'business' | 'enterprise' = 'individual'
+  manualApprove = false // Require manual approval for requests
+  rateLimitSeconds?: number // Min seconds between requests
+  rateLimitWait = false // Queue (true) or error (false) on limit
+  showToken = false // Display token in logs
+  upstreamTimeoutSeconds?: number // Upstream request timeout
 }
 ```
 
-Tokens are refreshed automatically when they expire.
+Tokens are refreshed automatically when they expire. The `authStore` singleton
+holds both authentication tokens and the server runtime settings derived from
+CLI flags.
 
-### RuntimeConfig
+### RuntimeConfig (`src/clients/factory.ts`)
+
+The `start` command's CLI flags are mapped through this interface, then applied
+onto `authStore` and the upstream queue:
 
 ```typescript
 interface RuntimeConfig {
@@ -47,35 +64,26 @@ interface RuntimeConfig {
 }
 ```
 
-### RuntimeDebugState
+### RuntimeStore (`src/state/runtime.ts`)
 
 ```typescript
-interface RuntimeDebugState {
-  dumpFailedPayloads: boolean // Enable /responses upstream 400 payload dumps
+class RuntimeStore {
+  dumpFailedPayloads = false // Enable /responses upstream 400 payload dumps
 }
 ```
 
 Process-local debug flags are not persisted to `config.json` and are read only by the code path that needs them.
 
-### CacheState
+### ModelCache (`src/state/model-cache.ts`)
 
-```typescript
-interface CacheState {
-  models?: ModelsResponse // Cached model list from Copilot
-  vsCodeVersion?: string // Cached VS Code version string
-  githubLogin?: string // Cached GitHub username
-}
-```
+Holds the cached Copilot model list and VS Code version string (plus model
+capability lookups). Both are populated at startup and reused for the lifetime
+of the process. The cached GitHub username lives on `authStore.githubLogin`.
 
-Both are populated at startup and reused for the lifetime of the process.
+### RateLimiter (`src/state/rate-limiter.ts`)
 
-### RateLimitState
-
-```typescript
-interface RateLimitState {
-  nextAvailableAt?: number // Unix ms when next request is allowed
-}
-```
+Tracks the next allowed request time internally (Unix ms) and exposes
+`acquire(intervalSeconds, waitMode)` for the local request guard.
 
 ### ConfigStore (`src/state/config-store.ts`)
 
@@ -189,7 +197,7 @@ Priority: CLI argument > Environment variable > Config file > Default value. `DU
 ```text
 1. Parse CLI arguments
 2. Read config file (~/.local/share/ghc-proxy/config.json)
-3. Initialize AppState with merged config
+3. Initialize state singletons (`authStore`, etc.) with merged config
 4. Authenticate with GitHub (device code flow or provided token)
 5. Obtain Copilot API token from GitHub token
 6. Cache VS Code version
@@ -218,7 +226,7 @@ To prevent unbounded growth, the emulator enforces a hard cap of 10,000 total en
 1. Expired entries are pruned first
 2. If still at or over the cap, the oldest entry (by expiration time) is evicted from the largest map in a loop until space is available
 
-**Background sweep:** A `setInterval` timer runs `pruneExpired()` every 60 seconds to remove entries that have passed their TTL. The timer is `unref()`'d so it does not prevent process exit.
+**Background sweep:** A `setInterval` timer runs `pruneExpired()` every 60 seconds to remove entries that have passed their TTL. The timer is not started at import/construction time — it is armed lazily on the first write (`writeMap()` or `putDeletionFlag()`), stopped on `clear()`, and re-armed on the next write. It is `unref()`'d so it does not prevent process exit.
 
 ## Rate Limiting
 
@@ -244,11 +252,11 @@ GitHub Token (long-lived)
     v
 Copilot Token (short-lived, auto-refreshed)
     |
-    +-- Stored in state.auth.copilotToken
+    +-- Stored in authStore.copilotToken
     +-- Refreshed on expiry
     +-- Used for all upstream API calls
 ```
 
-Token files are stored at:
-- `~/.ghc-proxy/github-token` -- GitHub token persistence
-- Copilot token is always derived at runtime (not persisted)
+Token persistence:
+- The GitHub token is persisted in `~/.local/share/ghc-proxy/config.json` (the `githubToken` field, written via `writeConfigField`)
+- The Copilot token is always derived at runtime (not persisted)

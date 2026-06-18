@@ -164,5 +164,5 @@ The server registers `SIGTERM` and `SIGINT` handlers (`src/start.ts`). On signal
 
 ### Resource Limits
 
-- **Emulator memory cap** — The responses emulator store (`src/lib/responses-emulator-state.ts`) enforces a hard cap of 10,000 total entries across all maps (responses, conversations, conversation heads, input items, deletion flags). When a write would exceed the cap, expired entries are pruned first; if still over capacity, the oldest entry in the largest map is evicted. A background sweep runs every 60 seconds to remove expired entries proactively.
-- **Upstream queue depth** — The upstream request queue (`src/lib/upstream-request-queue.ts`) limits pending waiters to 1,000. When the queue is full, new requests are immediately rejected with a `503 overloaded_error` response rather than blocking indefinitely.
+- **Emulator memory cap** — The responses emulator store (`src/state/responses-emulator-state.ts`) enforces a hard cap of 10,000 total entries across all maps (responses, conversations, conversation heads, input items, deletion flags). When a write would exceed the cap, expired entries are pruned first; if still over capacity, the oldest entry in the largest map is evicted. A background sweep runs every 60 seconds to remove expired entries proactively.
+- **Upstream queue depth** — The upstream request queue (`src/clients/upstream-queue.ts`) limits pending waiters to 1,000. When the queue is full, new requests are immediately rejected with a `503 overloaded_error` response rather than blocking indefinitely.
