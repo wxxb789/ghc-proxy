@@ -1,7 +1,7 @@
 import type { EmbeddingRequest } from '~/types'
 
+import { createCopilotClient } from '~/clients/factory'
 import { protocolRegistry } from '~/ingest'
-import { createCopilotClient } from '~/lib/state'
 
 function normalizeEmbeddingRequest(payload: EmbeddingRequest): EmbeddingRequest {
   return {

@@ -7,8 +7,8 @@ import type { ModelTransformResult } from '~/pipeline/types'
 import type { ModelTransformChain } from '~/transform'
 import type { Model } from '~/types'
 
+import { createCopilotClient } from '~/clients/factory'
 import { protocolRegistry } from '~/ingest'
-import { createCopilotClient } from '~/lib/state'
 import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 
 export interface PipelineParams {

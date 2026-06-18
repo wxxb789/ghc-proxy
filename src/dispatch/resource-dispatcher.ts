@@ -2,8 +2,8 @@ import type { CopilotClient } from '~/clients'
 import type { CapiRequestContext } from '~/core/capi/types'
 
 import type { ResponseInputItemsListParams, ResponseRetrieveParams, ResponsesInputTokensPayload } from '~/types'
+import { createCopilotClient } from '~/clients/factory'
 import { resolveModelOrThrow } from '~/lib/error'
-import { createCopilotClient } from '~/lib/state'
 import {
   deleteStoredResponseOrThrow,
   estimateEmulatorInputTokens,

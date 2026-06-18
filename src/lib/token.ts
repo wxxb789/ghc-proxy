@@ -3,12 +3,12 @@ import type { GetCopilotTokenResponse } from '~/types'
 import consola from 'consola'
 
 import { GitHubClient } from '~/clients'
-import { authStore, modelCache } from '~/state'
+import { cacheVSCodeVersion, getClientConfig } from '~/clients/factory'
 
+import { authStore, modelCache } from '~/state'
 import { getCachedConfig, writeConfigField } from './config'
 import { HTTPError } from './error'
 import { formatErrorMessage, retryWithBackoff } from './retry'
-import { cacheVSCodeVersion, getClientConfig } from './state'
 
 const TRAILING_SLASHES_RE = /\/+$/
 

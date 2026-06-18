@@ -7,9 +7,9 @@ import consola from 'consola'
 import { GitHubClient } from '~/clients'
 
 import { authStore } from '~/state'
+import { cacheVSCodeVersion, getClientConfig } from './clients/factory'
 import { getCachedConfig, readConfig } from './lib/config'
 import { ensurePaths } from './lib/paths'
-import { cacheVSCodeVersion, getClientConfig } from './lib/state'
 import { setupGitHubToken } from './lib/token'
 
 export const checkUsage = defineCommand({

@@ -4,10 +4,10 @@ import { defineCommand } from 'citty'
 import consola from 'consola'
 
 import { authStore } from '~/state'
+import { cacheVSCodeVersion } from './clients/factory'
 import { getCachedConfig, readConfig } from './lib/config'
 import { normalizeGheDomain } from './lib/ghe-domain'
 import { ensurePaths } from './lib/paths'
-import { cacheVSCodeVersion } from './lib/state'
 import { setupGitHubToken } from './lib/token'
 
 interface RunAuthOptions {

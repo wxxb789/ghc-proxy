@@ -1,1 +1,1 @@
-export { runGuard } from './auth'
+export { runGuard } from './gate'

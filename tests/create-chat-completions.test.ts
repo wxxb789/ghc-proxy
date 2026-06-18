@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { authStore, modelCache } from '~/state'
 import { CopilotClient } from '../src/clients/copilot-client'
-import { getClientConfig } from '../src/lib/state'
+import { getClientConfig } from '../src/clients/factory'
 
 // Mock state
 authStore.copilotToken = 'test-token'

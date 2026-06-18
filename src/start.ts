@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 
-import type { RuntimeConfig } from './lib/state'
+import type { RuntimeConfig } from './clients/factory'
 import process from 'node:process'
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
 import { authStore, modelCache, runtimeStore } from '~/state'
+import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from './clients/factory'
 import { getCachedConfig, readConfig } from './lib/config'
 import { normalizeGheDomain } from './lib/ghe-domain'
 import { ensurePaths } from './lib/paths'
 import { initProxyFromEnv } from './lib/proxy'
 import { generateEnvScript } from './lib/shell'
 import { printStartupBanner } from './lib/startup-banner'
-import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from './lib/state'
 import { setupCopilotToken, setupGitHubToken } from './lib/token'
 import { createServer } from './server'
 
