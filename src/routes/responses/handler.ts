@@ -99,18 +99,6 @@ export async function handleResponsesCore(
     },
   )
 
-  if (emulatorPrepared && originalPayload && pipelineResult.result.kind === 'json') {
-    const emulatedResponse = decorateStoredResponse(
-      pipelineResult.result.data as ResponsesResult,
-      originalPayload,
-      emulatorPrepared,
-    )
-    if (emulatorPrepared.shouldStore) {
-      persistEmulatorResponse(emulatedResponse, emulatorPrepared.effectiveInputItems)
-    }
-    pipelineResult.result.data = emulatedResponse
-  }
-
   return pipelineResult
 }
 
