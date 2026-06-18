@@ -60,6 +60,29 @@ export interface CapturedEmbeddingCall {
   payload: EmbeddingRequest
 }
 
+export interface CapturedGetResponseCall {
+  responseId: string
+  params?: Record<string, unknown>
+}
+
+export interface CapturedGetResponseInputItemsCall {
+  responseId: string
+  params?: {
+    after?: string
+    include?: Array<string>
+    limit?: number
+    order?: 'asc' | 'desc'
+  }
+}
+
+export interface CapturedCreateResponseInputTokensCall {
+  payload: Record<string, unknown>
+}
+
+export interface CapturedDeleteResponseCall {
+  responseId: string
+}
+
 export interface ParsedSseEvent {
   event?: string
   data?: string
@@ -170,6 +193,10 @@ type CreateChatCompletions = typeof CopilotClient.prototype.createChatCompletion
 type CreateResponses = typeof CopilotClient.prototype.createResponses
 type CreateMessages = typeof CopilotClient.prototype.createMessages
 type CreateEmbeddings = typeof CopilotClient.prototype.createEmbeddings
+type GetResponse = typeof CopilotClient.prototype.getResponse
+type GetResponseInputItems = typeof CopilotClient.prototype.getResponseInputItems
+type CreateResponseInputTokens = typeof CopilotClient.prototype.createResponseInputTokens
+type DeleteResponse = typeof CopilotClient.prototype.deleteResponse
 
 export function createApp(
   routes: 'all' | 'messages' | 'responses' | 'completions' | 'embeddings' | 'models' = 'all',
@@ -299,6 +326,82 @@ export function mockEmbeddings(
     calls.push({ payload })
     return Promise.resolve(response)
   }) as CreateEmbeddings
+}
+
+export function mockChatCompletions(
+  response: CapiChatCompletionResponse,
+  calls: Array<CapturedChatCall>,
+): CreateChatCompletions {
+  return ((payload) => {
+    calls.push({ payload })
+    return Promise.resolve(response)
+  }) as CreateChatCompletions
+}
+
+export function mockGetResponse(
+  response: Record<string, unknown>,
+  calls: Array<CapturedGetResponseCall>,
+): GetResponse {
+  return ((responseId, options) => {
+    calls.push({ responseId, params: options?.params as Record<string, unknown> | undefined })
+    return Promise.resolve(response)
+  }) as GetResponse
+}
+
+export function mockGetResponseInputItems(
+  response: Record<string, unknown>,
+  calls: Array<CapturedGetResponseInputItemsCall>,
+): GetResponseInputItems {
+  return ((responseId, params) => {
+    calls.push({ responseId, params })
+    return Promise.resolve(response)
+  }) as GetResponseInputItems
+}
+
+export function mockCreateResponseInputTokens(
+  response: Record<string, unknown>,
+  calls: Array<CapturedCreateResponseInputTokensCall>,
+): CreateResponseInputTokens {
+  return ((payload) => {
+    calls.push({ payload: payload as Record<string, unknown> })
+    return Promise.resolve(response)
+  }) as CreateResponseInputTokens
+}
+
+export function mockDeleteResponse(
+  response: Record<string, unknown>,
+  calls: Array<CapturedDeleteResponseCall>,
+): DeleteResponse {
+  return ((responseId) => {
+    calls.push({ responseId })
+    return Promise.resolve(response)
+  }) as DeleteResponse
+}
+
+export function mockEmulatorCreateResponses(
+  responses: Array<Partial<ResponsesResult> | AsyncGenerator<ServerSentEventMessage, void, unknown>>,
+  calls: Array<CapturedResponsesCall>,
+): CreateResponses {
+  return ((payload: CapturedResponsesCall['payload'], options?: CapturedResponsesCall['options']) => {
+    calls.push({ payload, options })
+    const next = responses.shift()
+    if (!next) {
+      throw new Error('No mocked emulator response left for createResponses')
+    }
+    if (isServerSentEventStream(next)) {
+      return Promise.resolve(next)
+    }
+    return Promise.resolve(buildResponsesResult(next as Partial<ResponsesResult>))
+  }) as unknown as CreateResponses
+}
+
+export function isServerSentEventStream(
+  value: unknown,
+): value is AsyncGenerator<ServerSentEventMessage, void, unknown> {
+  return typeof value === 'object'
+    && value !== null
+    && 'next' in value
+    && typeof value.next === 'function'
 }
 
 // ── State Snapshot ──

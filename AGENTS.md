@@ -28,7 +28,7 @@ bun run lint:all                     # ESLint full scan (used in CI)
 bun run typecheck                    # tsc --noEmit
 bun test                             # Run all tests (Bun native test runner)
 bun test tests/validation.test.ts    # Run a single test file
-bun test tests/api-smoke.test.ts     # Publish gate for public schema compatibility
+bun test tests/contract-smoke.test.ts # Publish gate for public schema compatibility
 bun run start                        # Production server (NODE_ENV=production)
 bun run matrix:live                  # End-to-end Copilot upstream check (uses real quota — do not use as a sanity check)
 bun run smoke:packaged               # Smoke test the packaged CLI (selfcheck under bun + node)
@@ -75,7 +75,7 @@ When making architectural changes, update the relevant design doc in the same ch
 1. Create `src/routes/<endpoint>/{route,handler,strategy}.ts` (use an existing simple route like `models/` or `embeddings/` as the template).
 2. Implement an `ExecutionStrategy` (`src/lib/execution-strategy.ts`) — body prep, endpoint selection, response processing, error mapping.
 3. Register the strategy in the route's `StrategyRegistry` and the route in the Elysia app (see `src/main.ts`).
-4. Add a test under `tests/` and ensure `bun test tests/api-smoke.test.ts` still passes.
+4. Add a test under `tests/` and ensure `bun test tests/contract-smoke.test.ts` still passes.
 
 If the route translates between protocols, add an entry to `docs/anthropic-translation-matrix.md` so coverage stays auditable.
 

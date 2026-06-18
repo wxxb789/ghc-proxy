@@ -15,10 +15,10 @@ as `*.test.ts` and use the `describe` / `test` / `expect` pattern.
 ```bash
 bun test                          # All tests
 bun test tests/validation.test.ts # Single file
-bun test tests/api-smoke.test.ts  # Publish gate for public schema compatibility
+bun test tests/contract-smoke.test.ts # Publish gate for public schema compatibility
 ```
 
-`tests/api-smoke.test.ts` is the **publish gate** for public schema
+`tests/contract-smoke.test.ts` is the **publish gate** for public schema
 compatibility — if it fails, the package must not ship.
 
 ## Helper inventory (`tests/helpers.ts`)
@@ -27,7 +27,7 @@ compatibility — if it fails, the package must not ship.
 |-------|---------|
 | Model builders | `buildModel()`, `buildGptModel()`, `buildVisionModel()`, `buildModelsResponse()`, `buildResponsesResult()` |
 | App factory | `createApp()` — assembles an in-process Elysia app wired to mock Copilot transport |
-| Mock factories | `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()` |
+| Mock factories | `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()`, `mockChatCompletions()`, `mockGetResponse()`, `mockGetResponseInputItems()`, `mockCreateResponseInputTokens()`, `mockDeleteResponse()`, `mockEmulatorCreateResponses()`, `isServerSentEventStream()` |
 | SSE utilities | `parseSse()`, `createStream()` |
 | State isolation | `saveStateSnapshot()`, `restoreStateSnapshot()`, `setupDefaultTestState()`, `clearConfig()` |
 | Assertions | `expectCacheCheckpoints()` |
