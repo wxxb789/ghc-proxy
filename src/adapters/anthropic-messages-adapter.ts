@@ -19,7 +19,7 @@ import type {
   AnthropicResponse,
 } from '~/translator/anthropic/types'
 
-import { buildCapiExecutionPlan } from '~/core/capi'
+import { buildCapiExecutionPlan, inferModelFamily } from '~/core/capi'
 import { normalizeAnthropicRequest } from '~/translator/anthropic/anthropic-normalizer'
 import { AnthropicStreamTranslator } from '~/translator/anthropic/anthropic-stream-transducer'
 import { mapOpenAIResponseToAnthropic } from '~/translator/anthropic/openai-anthropic-mapper'
@@ -249,7 +249,7 @@ export class AnthropicMessagesAdapter {
       getModelCapabilities:
         options.getModelCapabilities
         ?? ((model: string) => ({
-          supportsThinkingBudget: model.startsWith('claude'),
+          supportsThinkingBudget: inferModelFamily(model) === 'claude',
         })),
       policy: options.policy ?? defaultTranslationPolicy,
     }

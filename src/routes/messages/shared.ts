@@ -1,4 +1,5 @@
 import { AnthropicMessagesAdapter } from '~/adapters'
+import { inferModelFamily } from '~/core/capi'
 import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { modelCache } from '~/state'
 
@@ -16,7 +17,7 @@ export function createAnthropicAdapter(): AnthropicMessagesAdapter {
   return new AnthropicMessagesAdapter({
     modelResolver: (model: string) => resolveModel(model, knownModelIds, fallbackConfig),
     getModelCapabilities: model => ({
-      supportsThinkingBudget: model.startsWith('claude'),
+      supportsThinkingBudget: inferModelFamily(model) === 'claude',
     }),
   })
 }

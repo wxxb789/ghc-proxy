@@ -1,5 +1,7 @@
 import { colorize } from 'consola/utils'
 
+import { formatDurationMs } from './duration'
+
 export type ModelTransformTag
   = | 'AUTO_CORRECT'
     | 'CONFIG_REWRITE'
@@ -33,8 +35,7 @@ export function getRequestModelMapping(request: Request): ModelMappingInfo | und
 }
 
 export function formatElapsed(start: number) {
-  const delta = Date.now() - start
-  return delta < 1000 ? `${delta}ms` : `${Math.round(delta / 1000)}s`
+  return formatDurationMs(Date.now() - start)
 }
 
 function formatPath(rawUrl: string) {

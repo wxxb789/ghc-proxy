@@ -5,6 +5,7 @@ import type { ResponsesPayload, ResponsesResult, ResponseStreamEvent } from '~/t
 
 import consola from 'consola'
 import { isAsyncIterable } from '~/lib/async-iterable'
+import { serializeAnthropicSSE } from '~/lib/sse-adapter'
 import { ResponsesStreamTranslator } from '~/translator/responses/responses-stream-translator'
 import { translateResponsesToAnthropic } from '~/translator/responses/responses-to-anthropic'
 
@@ -51,10 +52,7 @@ export function createMessagesViaResponsesStrategy(
         JSON.parse(chunk.data) as ResponseStreamEvent,
       )
 
-      return events.map(event => ({
-        event: event.type,
-        data: JSON.stringify(event),
-      }))
+      return serializeAnthropicSSE(events)
     },
 
     shouldBreakStream() {
@@ -66,19 +64,13 @@ export function createMessagesViaResponsesStrategy(
         return null
       }
       const events = translator.onDone()
-      return events.map(event => ({
-        event: event.type,
-        data: JSON.stringify(event),
-      }))
+      return serializeAnthropicSSE(events)
     },
 
     onStreamError(error) {
       consola.error('Error streaming Anthropic response via Responses API:', error)
       const events = translator.onError(error)
-      return events.map(event => ({
-        event: event.type,
-        data: JSON.stringify(event),
-      }))
+      return serializeAnthropicSSE(events)
     },
   }
 }
