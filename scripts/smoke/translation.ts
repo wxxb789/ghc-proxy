@@ -14,8 +14,8 @@
  */
 
 import { events } from 'fetch-event-stream'
-import { AnthropicTranslator } from '~/translator'
 
+import { AnthropicMessagesAdapter } from '~/adapters'
 import { hasFlag } from '../lib/probe-args'
 
 const BASE_URL = 'http://localhost:4142'
@@ -205,7 +205,7 @@ async function sendStreamingRequest(label: string, payload: object) {
 function printTranslationPreview() {
   section('OFFLINE TRANSLATION PREVIEW (no proxy needed)')
 
-  const translator = new AnthropicTranslator()
+  const translator = new AnthropicMessagesAdapter()
 
   const cases = [
     { label: 'No thinking', payload: basePayload },
@@ -213,7 +213,7 @@ function printTranslationPreview() {
   ] as const
 
   for (const { label, payload } of cases) {
-    const translated = translator.toOpenAI(payload as any)
+    const translated = translator.toCapiPlan(payload as any).payload
 
     console.log(`\n${'─'.repeat(50)}`)
     console.log(`  ${label}`)

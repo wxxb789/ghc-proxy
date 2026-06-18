@@ -1,5 +1,4 @@
 export { AnthropicStreamTranslator } from './anthropic/anthropic-stream-translator'
-export { AnthropicTranslator } from './anthropic/anthropic-translator'
 export type {
   AnthropicAssistantContentBlock,
   AnthropicAssistantMessage,

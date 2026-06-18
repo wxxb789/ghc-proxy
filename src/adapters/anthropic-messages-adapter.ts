@@ -10,7 +10,6 @@ import type {
   ConversationTextBlock,
   ConversationTurn,
 } from '~/core/conversation'
-import type { AnthropicOpenAIMapperOptions } from '~/translator/anthropic/anthropic-openai-mapper'
 import type { NormalizedAnthropicRequest, NormalizedBlock, NormalizedTurn } from '~/translator/anthropic/ir'
 import type { TranslationIssue } from '~/translator/anthropic/translation-issue'
 import type { TranslationPolicy } from '~/translator/anthropic/translation-policy'
@@ -26,6 +25,15 @@ import { AnthropicStreamTranslator } from '~/translator/anthropic/anthropic-stre
 import { mapOpenAIResponseToAnthropic } from '~/translator/anthropic/openai-anthropic-mapper'
 import { normalizeOpenAIResponse } from '~/translator/anthropic/openai-normalizer'
 import { defaultTranslationPolicy, TranslationContext } from '~/translator/anthropic/translation-policy'
+
+export interface ModelCapabilities {
+  supportsThinkingBudget: boolean
+}
+
+export interface AnthropicOpenAIMapperOptions {
+  resolveModel: (model: string) => string
+  getModelCapabilities: (model: string) => ModelCapabilities
+}
 
 export interface AnthropicMessagesAdapterOptions {
   modelResolver?: AnthropicOpenAIMapperOptions['resolveModel']

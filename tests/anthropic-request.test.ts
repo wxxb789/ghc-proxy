@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { AnthropicTranslator } from '~/translator'
+import { AnthropicMessagesAdapter } from '~/adapters'
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 
 import {
@@ -10,8 +10,8 @@ import {
 describe('Anthropic to OpenAI fixture matrix', () => {
   for (const fixture of anthropicToOpenAIFixtures) {
     test(fixture.name, () => {
-      const translator = new AnthropicTranslator()
-      const result = translator.toOpenAI(fixture.input)
+      const translator = new AnthropicMessagesAdapter()
+      const result = translator.toCapiPlan(fixture.input).payload
 
       expect(result).toMatchObject(fixture.expected)
       expect(translator.getLastIssues().map(issue => issue.kind)).toEqual(
@@ -23,8 +23,8 @@ describe('Anthropic to OpenAI fixture matrix', () => {
 
 describe('Anthropic mid-conversation system messages', () => {
   test('fallback translator preserves system turns', () => {
-    const translator = new AnthropicTranslator()
-    const result = translator.toOpenAI({
+    const translator = new AnthropicMessagesAdapter()
+    const result = translator.toCapiPlan({
       model: 'claude-opus-4.8',
       max_tokens: 100,
       messages: [
@@ -32,7 +32,7 @@ describe('Anthropic mid-conversation system messages', () => {
         { role: 'system', content: [{ type: 'text', text: 'Prefer concise replies.' }] },
         { role: 'user', content: 'Continue' },
       ],
-    })
+    }).payload
 
     expect(result.messages[1]).toMatchObject({
       role: 'system',
@@ -61,8 +61,8 @@ describe('Anthropic mid-conversation system messages', () => {
 
 describe('Anthropic extended content blocks', () => {
   test('fallback translator tolerates redacted thinking, server tools, MCP results, and documents', () => {
-    const translator = new AnthropicTranslator()
-    const result = translator.toOpenAI({
+    const translator = new AnthropicMessagesAdapter()
+    const result = translator.toCapiPlan({
       model: 'claude-sonnet-4.6',
       max_tokens: 100,
       messages: [
@@ -87,7 +87,7 @@ describe('Anthropic extended content blocks', () => {
           ],
         },
       ],
-    })
+    }).payload
 
     expect(result.messages[0]).toMatchObject({
       role: 'user',
@@ -114,8 +114,8 @@ describe('Anthropic extended content blocks', () => {
   })
 
   test('fallback translator flattens search_result blocks', () => {
-    const translator = new AnthropicTranslator()
-    const result = translator.toOpenAI({
+    const translator = new AnthropicMessagesAdapter()
+    const result = translator.toCapiPlan({
       model: 'claude-opus-4.7',
       max_tokens: 100,
       messages: [
@@ -152,7 +152,7 @@ describe('Anthropic extended content blocks', () => {
           ],
         },
       ],
-    })
+    }).payload
 
     expect(result.messages[0]).toMatchObject({
       role: 'user',
