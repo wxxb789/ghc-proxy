@@ -41,32 +41,32 @@ export interface ToolChoiceFunction {
   name: string
 }
 
-export interface ToolChoiceAllowedTools {
+interface ToolChoiceAllowedTools {
   type: 'allowed_tools'
   mode: 'auto' | 'required'
   tools: Array<Record<string, unknown>>
 }
 
-export interface ToolChoiceBuiltin {
+interface ToolChoiceBuiltin {
   type: 'file_search' | 'web_search_preview' | 'web_search_preview_2025_03_11' | 'computer_use_preview' | 'code_interpreter' | 'image_generation'
 }
 
-export interface ToolChoiceMcp {
+interface ToolChoiceMcp {
   type: 'mcp'
   server_label: string
   name?: string
 }
 
-export interface ToolChoiceCustom {
+interface ToolChoiceCustom {
   type: 'custom'
   name: string
 }
 
-export interface ToolChoiceApplyPatch {
+interface ToolChoiceApplyPatch {
   type: 'apply_patch'
 }
 
-export interface ToolChoiceShell {
+interface ToolChoiceShell {
   type: 'shell'
 }
 
@@ -119,19 +119,19 @@ export interface ResponseTextConfig {
   verbosity?: 'low' | 'medium' | 'high' | null
 }
 
-export type ResponseTextFormat = ResponseTextFormatText
+type ResponseTextFormat = ResponseTextFormatText
   | ResponseTextFormatJsonObject
   | ResponseTextFormatJsonSchema
 
-export interface ResponseTextFormatText {
+interface ResponseTextFormatText {
   type: 'text'
 }
 
-export interface ResponseTextFormatJsonObject {
+interface ResponseTextFormatJsonObject {
   type: 'json_object'
 }
 
-export interface ResponseTextFormatJsonSchema {
+interface ResponseTextFormatJsonSchema {
   type: 'json_schema'
   name: string
   schema: Record<string, unknown>
@@ -401,12 +401,12 @@ export interface ResponseCreatedEvent {
   response: ResponsesResult
 }
 
-export interface ResponseContentPart {
+interface ResponseContentPart {
   type: string
   [key: string]: unknown
 }
 
-export interface ResponseOutputIndexedItemEvent {
+interface ResponseOutputIndexedItemEvent {
   sequence_number: number
   output_index: number
   item_id: string

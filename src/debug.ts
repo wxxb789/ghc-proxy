@@ -95,7 +95,7 @@ Token exists: ${info.tokenExists ? 'Yes' : 'No'}
 GHE Domain: ${info.gheDomain ?? 'none'}`)
 }
 
-export async function runDebug(options: RunDebugOptions): Promise<void> {
+async function runDebug(options: RunDebugOptions): Promise<void> {
   const debugInfo = await getDebugInfo()
 
   if (options.json) {

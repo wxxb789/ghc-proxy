@@ -80,7 +80,7 @@ async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
   consola.info(`Claude Code command:\n${command}`)
 }
 
-export async function runServer(options: RunServerOptions): Promise<void> {
+async function runServer(options: RunServerOptions): Promise<void> {
   const accountType: RuntimeConfig['accountType']
     = (
       options.accountType === 'individual'

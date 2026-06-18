@@ -61,5 +61,3 @@ export const SignatureCodec = {
   isCompactionSignature,
   isReasoningSignature,
 } as const
-
-export type { CompactionCarrier }

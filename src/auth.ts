@@ -16,7 +16,7 @@ interface RunAuthOptions {
   gheDomain?: string
 }
 
-export async function runAuth(options: RunAuthOptions): Promise<void> {
+async function runAuth(options: RunAuthOptions): Promise<void> {
   if (options.verbose) {
     consola.level = 5
     consola.info('Verbose logging enabled')

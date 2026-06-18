@@ -51,7 +51,7 @@ export function throwInvalidRequestError(
   })
 }
 
-export function fromTranslationFailure(failure: { message: string, status: number }): HTTPError {
+function fromTranslationFailure(failure: { message: string, status: number }): HTTPError {
   return new HTTPError(failure.status, {
     error: { message: failure.message, type: 'translation_error' },
   })

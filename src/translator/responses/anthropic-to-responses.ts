@@ -93,10 +93,6 @@ export function translateAnthropicToResponsesPayload(
   }
 }
 
-export function encodeCompactionCarrierSignature(compaction: { id: string, encrypted_content: string }): string {
-  return SignatureCodec.encodeCompaction(compaction)
-}
-
 export function decodeCompactionCarrierSignature(
   signature: string,
 ): { id: string, encrypted_content: string } | undefined {
