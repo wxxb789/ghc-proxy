@@ -1,4 +1,5 @@
-import type { CopilotTransport, OpenAIChatAdapter } from '~/adapters'
+import type { OpenAIChatAdapter } from '~/adapters'
+import type { CopilotClient } from '~/clients'
 import type { CapiChatCompletionChunk, CapiExecutionPlan } from '~/core/capi'
 import type { ExecutionStrategy, SSEStreamChunk } from '~/lib/execution-strategy'
 
@@ -6,17 +7,21 @@ import consola from 'consola'
 import { isNonStreamingResponse } from '~/clients'
 import { passthroughSSEChunk } from '~/lib/execution-strategy'
 
-type ChatCompletionsResult = Awaited<ReturnType<CopilotTransport['execute']>>
+type ChatCompletionsResult = Awaited<ReturnType<CopilotClient['createChatCompletions']>>
 
 export function createChatCompletionsStrategy(
-  transport: CopilotTransport,
+  client: CopilotClient,
   adapter: OpenAIChatAdapter,
   plan: CapiExecutionPlan,
   signal: AbortSignal,
 ): ExecutionStrategy<ChatCompletionsResult, SSEStreamChunk> {
   return {
     execute() {
-      return transport.execute(plan, { signal })
+      return client.createChatCompletions(plan.payload, {
+        signal,
+        initiator: plan.initiator,
+        requestContext: plan.requestContext,
+      })
     },
 
     isStream(result): result is ChatCompletionsResult & AsyncIterable<SSEStreamChunk> {

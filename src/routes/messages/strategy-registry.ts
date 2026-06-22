@@ -7,7 +7,6 @@ import type { AnthropicMessagesPayload } from '~/translator'
 import type { Model } from '~/types'
 
 import consola from 'consola'
-import { CopilotTransport } from '~/adapters'
 import { StrategyRegistry } from '~/dispatch'
 import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
 import { runStrategy } from '~/lib/execution-strategy'
@@ -120,9 +119,8 @@ const chatCompletionsEntry: StrategyEntry<StrategyContext> = {
       )
     }
 
-    const transport = new CopilotTransport(ctx.copilotClient)
     const strategy = createMessagesViaChatCompletionsStrategy(
-      transport,
+      ctx.copilotClient,
       adapter,
       plan,
       ctx.upstreamSignal.signal,

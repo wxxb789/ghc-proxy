@@ -19,8 +19,8 @@ import {
 ```
 
 The client/queue factory (`createCopilotClient`, `getClientConfig`,
-`cacheModels`, `cacheVSCodeVersion`, `configureUpstreamRequestQueue`) and the
-`RuntimeConfig` interface live in `src/clients/factory.ts`.
+`cacheModels`, `cacheVSCodeVersion`, `configureUpstreamRequestQueue`) lives in
+`src/clients/factory.ts`.
 
 ### AuthStore (`src/state/auth.ts`)
 
@@ -44,16 +44,18 @@ Tokens are refreshed automatically when they expire. The `authStore` singleton
 holds both authentication tokens and the server runtime settings derived from
 CLI flags.
 
-### RuntimeConfig (`src/clients/factory.ts`)
+### RunServerOptions (`src/start.ts`)
 
-The `start` command's CLI flags are mapped through this interface, then applied
-onto `authStore` and the upstream queue:
+The `start` command parses its CLI flags into this options object, then applies
+them onto `authStore` and the upstream queue:
 
 ```typescript
-interface RuntimeConfig {
-  accountType: 'individual' | 'business' | 'enterprise'
-  manualApprove: boolean // Require manual approval for requests
-  rateLimitSeconds?: number // Min seconds between requests
+interface RunServerOptions {
+  port: number
+  verbose: boolean
+  accountType: string // Normalized to individual | business | enterprise
+  manual: boolean // Require manual approval for requests
+  rateLimit?: number // Min seconds between requests
   rateLimitWait: boolean // Queue (true) or error (false) on limit
   showToken: boolean // Display token in logs
   upstreamTimeoutSeconds?: number // Upstream request timeout
@@ -61,6 +63,7 @@ interface RuntimeConfig {
   upstreamQueueMaxRetries?: number // Max retries for upstream 429
   upstreamQueueBaseDelaySeconds?: number // Base retry delay when Retry-After is absent
   upstreamQueueMaxDelaySeconds?: number // Max retry delay
+  // ...plus githubToken, claudeCode, proxyEnv, idleTimeoutSeconds, gheDomain, dumpFailedPayloads
 }
 ```
 
@@ -156,9 +159,9 @@ interface ConfigFile {
 }
 ```
 
-## CLI Arguments → RuntimeConfig
+## CLI Arguments → Runtime Settings
 
-The `start` command maps CLI flags to RuntimeConfig:
+The `start` command maps CLI flags onto `authStore` and the upstream queue:
 
 | CLI Flag                | Config Field              | Default        |
 |-------------------------|---------------------------|----------------|
