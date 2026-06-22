@@ -10,7 +10,6 @@ export type ProtocolId
 
 export interface RequestMeta {
   sessionId?: string
-  subagentInfo?: unknown
   betaHeaders?: string[]
   requestContext?: Partial<CapiRequestContext>
 }

@@ -85,7 +85,6 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   const transformResult = config.transformChain.apply({
     model: (payload as Record<string, string>).model,
     payload,
-    headers: params.headers,
     meta: { betaHeaders: meta.betaHeaders },
   })
 

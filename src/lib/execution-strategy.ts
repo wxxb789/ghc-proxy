@@ -2,16 +2,12 @@ export interface SSEOutput {
   id?: string
   event?: string
   data: string
-  comment?: string
-  retry?: number
 }
 
 export interface SSEStreamChunk {
   id?: number | string
   event?: string
   data?: string
-  comment?: string
-  retry?: number
 }
 
 export type ExecutionResult
@@ -98,10 +94,8 @@ function normalizeOutputs(value: SSEOutput | SSEOutput[] | null): SSEOutput[] {
  */
 export function passthroughSSEChunk(chunk: SSEStreamChunk, data: string): SSEOutput {
   return {
-    ...(chunk.comment ? { comment: chunk.comment } : {}),
     ...(chunk.event ? { event: chunk.event } : {}),
     ...(chunk.id !== undefined ? { id: String(chunk.id) } : {}),
-    ...(chunk.retry !== undefined ? { retry: chunk.retry } : {}),
     data,
   }
 }

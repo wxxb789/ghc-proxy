@@ -50,13 +50,10 @@ export interface ResponsesEmulatorState {
   deleteConversation: (conversationId: string, options?: { ttlSeconds?: number }) => ResponseDeletionResult
   setConversationHead: (conversationId: string, responseId: string, options?: { ttlSeconds?: number }) => string
   getConversationHead: (conversationId: string) => string | undefined
-  clearConversationHead: (conversationId: string) => void
   setInputItems: (responseId: string, inputItems: Array<ResponseInputItem>, options?: { ttlSeconds?: number }) => Array<ResponseInputItem>
   getInputItems: (responseId: string) => Array<ResponseInputItem> | undefined
   deleteInputItems: (responseId: string, options?: { ttlSeconds?: number }) => ResponseDeletionResult
-  setDeletionFlag: (kind: ResponsesEmulatorDeletionKind, id: string, options?: { ttlSeconds?: number }) => ResponsesEmulatorDeletionFlag
   getDeletionFlag: (kind: ResponsesEmulatorDeletionKind, id: string) => ResponsesEmulatorDeletionFlag | undefined
-  clearDeletionFlag: (kind: ResponsesEmulatorDeletionKind, id: string) => void
 }
 
 function cloneValue<T>(value: T): T {
@@ -389,10 +386,6 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
       return readMap(conversationHeadRecords, conversationId)
     },
 
-    clearConversationHead(conversationId) {
-      deleteMapEntry(conversationHeadRecords, conversationId)
-    },
-
     setInputItems(responseId, inputItems, options) {
       removeDeletionFlag(inputItemDeletionFlags, responseId)
       return writeMap(inputItemRecords, responseId, inputItems, options?.ttlSeconds)
@@ -416,16 +409,8 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
       }
     },
 
-    setDeletionFlag(kind, id, options) {
-      return putDeletionFlag(deletionMap(kind), id, options?.ttlSeconds)
-    },
-
     getDeletionFlag(kind, id) {
       return readDeletionFlag(deletionMap(kind), id)
-    },
-
-    clearDeletionFlag(kind, id) {
-      removeDeletionFlag(deletionMap(kind), id)
     },
   }
 }

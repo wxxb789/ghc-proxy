@@ -95,12 +95,6 @@ function normalizeAssistantTurn(
   return {
     role: 'assistant',
     blocks: [...thinkingBlocks, ...contentBlocks, ...toolBlocks],
-    meta: {
-      reasoningOpaque: message.reasoning_opaque,
-      encryptedContent: message.encrypted_content,
-      phase: message.phase,
-      copilotAnnotations: message.copilot_annotations,
-    },
   }
 }
 

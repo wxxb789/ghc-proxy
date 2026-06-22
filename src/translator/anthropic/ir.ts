@@ -2,13 +2,6 @@ import type { AnthropicMessagesPayload } from './types'
 
 export type NormalizedRole = 'system' | 'user' | 'assistant' | 'tool'
 
-export interface NormalizedTurnMeta {
-  reasoningOpaque?: string
-  encryptedContent?: string | null
-  phase?: string
-  copilotAnnotations?: unknown
-}
-
 export interface NormalizedTextBlock {
   kind: 'text'
   text: string
@@ -56,7 +49,6 @@ export type NormalizedBlock
 export interface NormalizedTurn {
   role: NormalizedRole
   blocks: Array<NormalizedBlock>
-  meta?: NormalizedTurnMeta
 }
 
 export interface NormalizedToolDefinition {

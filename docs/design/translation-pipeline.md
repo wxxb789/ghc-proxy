@@ -78,7 +78,6 @@ type NormalizedBlock
 interface NormalizedTurn {
   role: 'system' | 'user' | 'assistant' | 'tool'
   blocks: NormalizedBlock[]
-  meta?: NormalizedTurnMeta // reasoning_opaque, encrypted_content, phase, etc.
 }
 ```
 

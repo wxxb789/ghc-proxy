@@ -316,12 +316,6 @@ export interface AnthropicStreamState {
     | 'tool_calls'
     | 'content_filter'
     | null
-  lastMetadata?: {
-    reasoningOpaque?: string
-    encryptedContent?: string | null
-    phase?: string
-    copilotAnnotations?: unknown
-  }
   messageStopSent: boolean
 }
 

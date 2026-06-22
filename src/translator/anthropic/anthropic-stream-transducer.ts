@@ -218,10 +218,6 @@ export class AnthropicStreamTranslator {
         case 'message_start':
           break
         case 'thinking_delta':
-          this.state.lastMetadata = {
-            ...this.state.lastMetadata,
-            ...delta.metadata,
-          }
           this.textWriter.close(events)
           this.thinkingWriter.append(events, delta.text)
           break
@@ -246,10 +242,6 @@ export class AnthropicStreamTranslator {
           })
           break
         case 'message_stop':
-          this.state.lastMetadata = {
-            ...this.state.lastMetadata,
-            ...delta.metadata,
-          }
           this.state.pendingStopReason = delta.stopReason
           // Close open blocks but defer message_delta/message_stop to onDone()
           // so that usage from a subsequent usage-only chunk can be captured
@@ -374,12 +366,6 @@ export class AnthropicStreamTranslator {
       deltas.push({
         kind: 'thinking_delta',
         text: choice.delta.reasoning_text,
-        metadata: {
-          reasoningOpaque: choice.delta.reasoning_opaque,
-          encryptedContent: choice.delta.encrypted_content,
-          phase: choice.delta.phase,
-          copilotAnnotations: choice.delta.copilot_annotations,
-        },
       })
     }
 
@@ -407,12 +393,6 @@ export class AnthropicStreamTranslator {
         kind: 'message_stop',
         stopReason: choice.finish_reason,
         usage: chunk.usage,
-        metadata: {
-          reasoningOpaque: choice.delta.reasoning_opaque,
-          encryptedContent: choice.delta.encrypted_content,
-          phase: choice.delta.phase,
-          copilotAnnotations: choice.delta.copilot_annotations,
-        },
       })
     }
 

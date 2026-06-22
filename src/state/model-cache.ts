@@ -73,10 +73,6 @@ export class ModelCache {
       return true
     return !MODELS_REJECTING_OUTPUT_CONFIG.has(model.id)
   }
-
-  getVisionLimits(model: Model | undefined): Model['capabilities']['limits']['vision'] | undefined {
-    return model?.capabilities.limits.vision
-  }
 }
 
 export const modelCache = new ModelCache()
