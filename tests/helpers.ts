@@ -471,14 +471,17 @@ export function restoreStateSnapshot(snapshot: StateSnapshot) {
 // ── Cache Checkpoint Assertions ──
 
 export function expectCacheCheckpoints(payload: CapiChatCompletionsPayload) {
+  // Mirrors the three sites tagged by applyCacheCheckpoints in
+  // src/core/capi/plan-builder.ts: first system/developer message, last tool,
+  // and the last cache-eligible (non-user) message.
   expect(payload.messages[0]?.copilot_cache_control).toEqual({ type: 'ephemeral' })
   expect(payload.tools?.at(-1)?.copilot_cache_control).toEqual({ type: 'ephemeral' })
-  expect(
-    payload.messages.some(message =>
-      message.role !== 'user'
-      && message.copilot_cache_control?.type === 'ephemeral',
-    ),
-  ).toBe(true)
+
+  const lastCacheEligibleIndex = payload.messages.findLastIndex(
+    message => message.role !== 'user',
+  )
+  expect(lastCacheEligibleIndex).toBeGreaterThanOrEqual(0)
+  expect(payload.messages[lastCacheEligibleIndex]?.copilot_cache_control).toEqual({ type: 'ephemeral' })
 }
 
 // ── Default Test State Setup ──
