@@ -10,6 +10,7 @@ import {
   buildGptModel,
   buildModelsResponse,
   createApp,
+  expectCacheCheckpoints,
   mockNonStreamingResponse,
   mockResponses,
   mockStreamingResponse,
@@ -183,15 +184,7 @@ describe('cache correctness', () => {
       expect(calls).toHaveLength(1)
       const payload = calls[0]!.payload
 
-      // Site 1: first system/developer message
-      expect(payload.messages[0]?.copilot_cache_control).toEqual({ type: 'ephemeral' })
-
-      // Site 2: last tool definition
-      expect(payload.tools?.at(-1)?.copilot_cache_control).toEqual({ type: 'ephemeral' })
-
-      // Site 3: last non-user message (the assistant message)
-      const assistantMessage = payload.messages.find(m => m.role === 'assistant')
-      expect(assistantMessage?.copilot_cache_control).toEqual({ type: 'ephemeral' })
+      expectCacheCheckpoints(payload)
     })
 
     test('streaming: cache tokens appear in message_delta usage', async () => {
@@ -587,15 +580,7 @@ describe('cache correctness', () => {
       expect(calls).toHaveLength(1)
       const payload = calls[0]!.payload
 
-      // Site 1: first system/developer message
-      expect(payload.messages[0]?.copilot_cache_control).toEqual({ type: 'ephemeral' })
-
-      // Site 2: last tool definition
-      expect(payload.tools?.at(-1)?.copilot_cache_control).toEqual({ type: 'ephemeral' })
-
-      // Site 3: last non-user message (the assistant message)
-      const assistantMessage = payload.messages.find(m => m.role === 'assistant')
-      expect(assistantMessage?.copilot_cache_control).toEqual({ type: 'ephemeral' })
+      expectCacheCheckpoints(payload)
     })
   })
 })

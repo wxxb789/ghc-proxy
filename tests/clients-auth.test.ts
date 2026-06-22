@@ -1,11 +1,107 @@
 import type { ClientAuth, ClientConfig } from '../src/clients/types'
+import type { StateSnapshot } from './helpers'
+import type { ChatCompletionsPayload } from '~/types'
 
-import { describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+
+import { authStore, modelCache } from '~/state'
+import { CopilotClient } from '../src/clients/copilot-client'
+import { getClientConfig } from '../src/clients/factory'
+
+import { buildGitHubUrls, normalizeGheDomain } from '../src/clients/ghe-domain'
+import { restoreStateSnapshot, saveStateSnapshot } from './helpers'
 
 // Use import.meta.resolve to get the absolute file URL, bypassing Bun's mock.module registry.
 // This ensures we always test the real GitHubClient even if another test file
 // (e.g. token-file-removal.test.ts) has called mock.module('../src/clients/github-client').
 const { GitHubClient } = await import(import.meta.resolve('../src/clients/github-client')) as typeof import('../src/clients/github-client')
+
+// ── normalizeGheDomain / buildGitHubUrls — pure domain helpers ──
+
+describe('normalizeGheDomain', () => {
+  test('bare domain passes through unchanged', () => {
+    expect(normalizeGheDomain('company.ghe.com')).toBe('company.ghe.com')
+  })
+
+  test('strips https:// prefix', () => {
+    expect(normalizeGheDomain('https://company.ghe.com')).toBe('company.ghe.com')
+  })
+
+  test('strips https:// prefix, lowercases, and removes trailing slash', () => {
+    expect(normalizeGheDomain('https://Company.GHE.com/')).toBe('company.ghe.com')
+  })
+
+  test('strips http:// prefix', () => {
+    expect(normalizeGheDomain('http://company.ghe.com')).toBe('company.ghe.com')
+  })
+
+  test('strips trailing slashes and paths', () => {
+    expect(normalizeGheDomain('https://company.ghe.com/some/path')).toBe('company.ghe.com')
+  })
+
+  test('handles deep subdomains', () => {
+    expect(normalizeGheDomain('dev.internal.ghe.com')).toBe('dev.internal.ghe.com')
+  })
+
+  test('rejects non-.ghe.com domains', () => {
+    expect(() => normalizeGheDomain('github.example.com')).toThrow('must end with .ghe.com')
+  })
+
+  test('rejects bare ghe.com without subdomain', () => {
+    expect(() => normalizeGheDomain('ghe.com')).toThrow('must end with .ghe.com')
+  })
+
+  test('rejects empty string', () => {
+    expect(() => normalizeGheDomain('')).toThrow('GHE domain must not be empty')
+  })
+
+  test('rejects whitespace-only string', () => {
+    expect(() => normalizeGheDomain('   ')).toThrow('GHE domain must not be empty')
+  })
+})
+
+describe('buildGitHubUrls', () => {
+  test('no domain returns default GitHub URLs', () => {
+    expect(buildGitHubUrls()).toEqual({
+      baseUrl: 'https://github.com',
+      apiBaseUrl: 'https://api.github.com',
+    })
+  })
+
+  test('undefined domain returns default GitHub URLs', () => {
+    expect(buildGitHubUrls(undefined)).toEqual({
+      baseUrl: 'https://github.com',
+      apiBaseUrl: 'https://api.github.com',
+    })
+  })
+
+  test('GHE domain returns GHE URLs', () => {
+    expect(buildGitHubUrls('company.ghe.com')).toEqual({
+      baseUrl: 'https://company.ghe.com',
+      apiBaseUrl: 'https://api.company.ghe.com',
+    })
+  })
+
+  test('GHE domain with deep subdomain returns correct URLs', () => {
+    expect(buildGitHubUrls('dev.internal.ghe.com')).toEqual({
+      baseUrl: 'https://dev.internal.ghe.com',
+      apiBaseUrl: 'https://api.dev.internal.ghe.com',
+    })
+  })
+
+  test('GHE domain input is normalized before building URLs', () => {
+    expect(buildGitHubUrls('https://Company.GHE.com/')).toEqual({
+      baseUrl: 'https://company.ghe.com',
+      apiBaseUrl: 'https://api.company.ghe.com',
+    })
+  })
+
+  test('invalid domain propagates normalizeGheDomain error', () => {
+    expect(() => buildGitHubUrls('github.example.com')).toThrow('must end with .ghe.com')
+  })
+})
+
+// ── GitHubClient URL routing (real module via import.meta.resolve) ──
 
 // Minimal mock response factory
 function okJson(data: unknown): Response {
@@ -165,5 +261,95 @@ describe('GitHubClient URL routing', () => {
 
       expect(recorder.mock.calls[0]?.[0]).toBe('https://api.company.ghe.com/copilot_internal/user')
     })
+  })
+})
+
+// ── createChatCompletions — header injection + api base resolution ──
+
+// Helper to mock fetch
+const fetchMock = mock(
+  (_url: string, opts: { headers: Record<string, string> }) => {
+    return {
+      ok: true,
+      json: () => ({ id: '123', object: 'chat.completion', choices: [] }),
+      headers: opts.headers,
+    }
+  },
+)
+describe('createChatCompletions', () => {
+  let snapshot: StateSnapshot
+
+  beforeEach(() => {
+    snapshot = saveStateSnapshot()
+    // Mock state applied per-test from a clean snapshot so it never leaks to siblings.
+    authStore.copilotToken = 'test-token'
+    authStore.accountType = 'individual'
+    modelCache.setVSCodeVersion('1.0.0')
+    fetchMock.mockClear()
+  })
+
+  afterEach(() => {
+    restoreStateSnapshot(snapshot)
+  })
+
+  test('sets X-Initiator to agent if tool/assistant present', async () => {
+    const payload: ChatCompletionsPayload = {
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'tool', content: 'tool call' },
+      ],
+      model: 'gpt-test',
+    }
+    const client = new CopilotClient(
+      authStore,
+      getClientConfig(),
+      { fetch: fetchMock as unknown as typeof fetch },
+    )
+    await client.createChatCompletions(payload)
+    expect(fetchMock).toHaveBeenCalled()
+    const headers = (
+      fetchMock.mock.calls[0][1] as { headers: Record<string, string> }
+    ).headers
+    expect(headers['X-Initiator']).toBe('agent')
+  })
+
+  test('sets X-Initiator to user if only user present', async () => {
+    const payload: ChatCompletionsPayload = {
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'user', content: 'hello again' },
+      ],
+      model: 'gpt-test',
+    }
+    const client = new CopilotClient(
+      authStore,
+      getClientConfig(),
+      { fetch: fetchMock as unknown as typeof fetch },
+    )
+    await client.createChatCompletions(payload)
+    expect(fetchMock).toHaveBeenCalled()
+    const headers = (
+      fetchMock.mock.calls[0][1] as { headers: Record<string, string> }
+    ).headers
+    expect(headers['X-Initiator']).toBe('user')
+  })
+
+  test('prefers dynamic copilot api base from token state', async () => {
+    authStore.copilotApiBase = 'https://api.enterprise.githubcopilot.com/'
+
+    const payload: ChatCompletionsPayload = {
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'gpt-test',
+    }
+
+    const client = new CopilotClient(
+      authStore,
+      getClientConfig(),
+      { fetch: fetchMock as unknown as typeof fetch },
+    )
+    await client.createChatCompletions(payload)
+
+    expect(fetchMock).toHaveBeenCalled()
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.enterprise.githubcopilot.com/chat/completions')
   })
 })

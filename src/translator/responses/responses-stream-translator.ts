@@ -391,6 +391,10 @@ export class ResponsesStreamTranslator {
   private handleResponseCompleted(
     rawEvent: ResponseCompletedEvent | ResponseIncompleteEvent,
   ): Array<AnthropicStreamEventData> {
+    if (this.state.messageCompleted) {
+      return []
+    }
+
     const events: Array<AnthropicStreamEventData> = []
     this.closeAllOpenBlocks(events)
     const anthropic = translateResponsesToAnthropic(rawEvent.response)

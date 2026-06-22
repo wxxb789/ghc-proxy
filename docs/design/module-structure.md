@@ -239,7 +239,7 @@ These layers co-exist with the original `src/lib/` and `src/routes/` structure. 
 
 ## Test Coverage Layout
 
-- `tests/api-smoke.test.ts` covers public API compatibility.
+- `tests/contract-smoke.test.ts` covers public API compatibility.
 - `tests/embeddings.test.ts` covers embeddings-specific normalization and diagnostics.
 - `tests/validation.test.ts` covers request-schema validation.
 

@@ -36,7 +36,7 @@ Investigation notes and findings from upstream API behavior analysis.
 
 ## Testing Notes
 
-- `bun test` is part of the publish gate and includes the public API smoke suite in `tests/api-smoke.test.ts`.
+- `bun test` is part of the publish gate and includes the public API smoke suite in `tests/contract-smoke.test.ts`.
 - Use route-specific tests such as `tests/embeddings.test.ts` for proxy-side normalization that should not regress.
 - CI currently runs `tests/github-client.test.ts` in a separate Bun process after the rest of the suite as a temporary workaround for Bun's process-wide `mock.module()` leakage across test files.
 - This workaround should be reverted once Bun ships a proper fix for module-mock restoration or per-file isolation.

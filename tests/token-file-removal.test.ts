@@ -70,7 +70,7 @@ function resetStores() {
   modelCache.clearVSCodeVersion()
 }
 
-describe('Token file removal (RED phase)', () => {
+describe('Token file removal: config.json-only persistence', () => {
   beforeEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true })
     await fs.mkdir(tempDir, { recursive: true })
@@ -83,7 +83,7 @@ describe('Token file removal (RED phase)', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('ensurePaths() should NOT create the old token file', async () => {
+  test('ensurePaths() creates APP_DIR', async () => {
     await ensurePaths()
 
     const appDirExists = await fs

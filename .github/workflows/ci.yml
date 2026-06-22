@@ -62,11 +62,17 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run tests
+        # token-file-removal and token-refresh-retry call
+        # mock.module('../src/clients/github-client'), whose stub leaks across
+        # files via Bun's process-wide module-mock registry and breaks
+        # clients-auth's real-GitHubClient URL routing tests. Run those two in a
+        # separate process so the main run always sees the real module.
+        # Remove the split once Bun isolates mock.module() per file.
         run: >-
-          bun test --exclude tests/github-client.test.ts
-          && bun test tests/github-client.test.ts
-        # Temporary workaround for Bun's process-wide mock.module() registry leak across test files.
-        # Revert this split once Bun lands a proper module-mock restoration/isolation fix.
+          bun test
+          --path-ignore-patterns='**/token-file-removal.test.ts'
+          --path-ignore-patterns='**/token-refresh-retry.test.ts'
+          && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts
 
   build:
     runs-on: ubuntu-latest

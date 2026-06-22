@@ -255,7 +255,7 @@ describe('onChunk — thinking deltas', () => {
     expect(blockStart.index).toBe(1) // next block index
   })
 
-  test('metadata accumulated across thinking deltas', () => {
+  test('two thinking-metadata chunks finalize to end_turn without crashing', () => {
     const translator = new AnthropicStreamTranslator()
 
     translator.onChunk(buildChunk({
@@ -263,8 +263,6 @@ describe('onChunk — thinking deltas', () => {
         index: 0,
         delta: {
           reasoning_text: 'step 1',
-          reasoning_opaque: 'opaque-1',
-          phase: 'phase-1',
         },
         logprobs: null,
         finish_reason: null,
@@ -276,8 +274,6 @@ describe('onChunk — thinking deltas', () => {
         index: 0,
         delta: {
           reasoning_text: 'step 2',
-          reasoning_opaque: 'opaque-2',
-          encrypted_content: 'enc-data',
         },
         logprobs: null,
         finish_reason: null,
@@ -584,9 +580,13 @@ describe('onDone — finalization', () => {
 
     const events = translator.onDone()
 
-    // Should close the open tool call block
-    const blockStops = events.filter(e => e.type === 'content_block_stop')
-    expect(blockStops.length).toBeGreaterThanOrEqual(1)
+    // By the time onDone() runs, the thinking (idx 0) and text (idx 1) blocks
+    // were already closed during their onChunk transitions. Only the tool
+    // block (idx 2) is still open, so onDone() emits exactly one stop for it.
+    const blockStops = events.filter(e => e.type === 'content_block_stop') as
+      Array<AnthropicContentBlockStopEvent>
+    expect(blockStops).toHaveLength(1)
+    expect(blockStops[0].index).toBe(2)
 
     // Should have message_delta and message_stop
     expect(events.find(e => e.type === 'message_delta')).toBeDefined()
