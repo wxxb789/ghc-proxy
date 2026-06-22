@@ -19,7 +19,7 @@ bunx ghc-proxy@latest start
 
 Before you start, make sure you have:
 
-1. **Bun** (>= 1.2) -- a fast JavaScript runtime used to run the proxy
+1. **Bun** (>= 1.3) -- a fast JavaScript runtime used to run the proxy
    - **Windows:** `winget install --id Oven-sh.Bun`
    - **Other platforms:** see the [official installation guide](https://bun.com/docs/installation)
 2. **A GitHub Copilot subscription** -- individual, business, or enterprise
