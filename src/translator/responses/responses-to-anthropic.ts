@@ -14,7 +14,7 @@ import type {
 
 import consola from 'consola'
 
-import { THINKING_TEXT } from './anthropic-to-responses'
+import { THINKING_TEXT } from './response-items'
 import { SignatureCodec } from './signature-codec'
 
 export function translateResponsesToAnthropic(

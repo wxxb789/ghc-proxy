@@ -59,6 +59,14 @@ interface ProbeResult {
   note: string
 }
 
+const STATUS_ICONS: Record<ProbeResult['status'], string> = {
+  pass: '✅',
+  expected_reject: '✅',
+  unexpected_reject: '❌',
+  unexpected_pass: '⚠️',
+  error: '💥',
+}
+
 // ── Probe cases ──
 
 function simpleInput(text = 'Reply with OK.'): Array<Record<string, unknown>> {
@@ -398,16 +406,7 @@ async function main() {
       results.push(result)
 
       if (!jsonMode) {
-        const icon = result.status === 'pass'
-          ? '✅'
-          : result.status === 'expected_reject'
-            ? '✅'
-            : result.status === 'unexpected_reject'
-              ? '❌'
-              : result.status === 'unexpected_pass'
-                ? '⚠️'
-                : '💥'
-        process.stdout.write(`${icon} ${result.status} (${httpStatus}) ${result.note}\n`)
+        process.stdout.write(`${STATUS_ICONS[result.status]} ${result.status} (${httpStatus}) ${result.note}\n`)
       }
     }
     catch (err) {

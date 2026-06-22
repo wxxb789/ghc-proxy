@@ -302,13 +302,6 @@ const responsesCases: Array<RequestCase> = [
           input: [{ type: 'message', role: 'user', content: 'Reply with the single word STORED.' }],
         },
       })
-      if (counted.response.status < 200 || counted.response.status >= 300) {
-        return classifyJsonResult({
-          area: 'responses',
-          name: 'input_tokens',
-        }, model, counted.response.status, counted.payload)
-      }
-
       return classifyJsonResult({
         area: 'responses',
         name: 'input_tokens',

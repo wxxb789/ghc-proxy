@@ -16,11 +16,11 @@ import type {
   ResponseTextDeltaEvent,
   ResponseTextDoneEvent,
 } from '~/types'
-import { THINKING_TEXT } from './anthropic-to-responses'
 import {
   FunctionCallArgumentsValidationError,
   updateWhitespaceRunState,
 } from './function-call-stream-guard'
+import { THINKING_TEXT } from './response-items'
 import { translateResponsesToAnthropic } from './responses-to-anthropic'
 import { SignatureCodec } from './signature-codec'
 
