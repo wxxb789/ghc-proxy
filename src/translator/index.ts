@@ -1,4 +1,4 @@
-export { AnthropicStreamTranslator } from './anthropic/anthropic-stream-translator'
+export { AnthropicStreamTranslator } from './anthropic/anthropic-stream-transducer'
 export type {
   AnthropicAssistantContentBlock,
   AnthropicAssistantMessage,

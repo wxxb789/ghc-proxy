@@ -2,11 +2,6 @@ import type { AnthropicMessagesPayload } from '~/translator'
 import type { Model } from '~/types'
 
 import { configStore, modelCache } from '~/state'
-import {
-  modelSupportsAdaptiveThinking,
-  modelSupportsToolCalls,
-  modelSupportsVision,
-} from './model-capabilities'
 
 const COMPACT_SYSTEM_PROMPT_START
   = 'You are a helpful AI assistant tasked with summarizing conversations'
@@ -80,15 +75,15 @@ function canRouteToSmallModel(
     }
   }
 
-  if (payload.tools?.length && !modelSupportsToolCalls(smallModel)) {
+  if (payload.tools?.length && !(smallModel.capabilities.supports.tool_calls ?? false)) {
     return false
   }
 
-  if (payload.thinking && !modelSupportsAdaptiveThinking(smallModel)) {
+  if (payload.thinking && !(smallModel.capabilities.supports.adaptive_thinking ?? false)) {
     return false
   }
 
-  if (hasVisionInput(payload) && !modelSupportsVision(smallModel)) {
+  if (hasVisionInput(payload) && !(smallModel.capabilities.supports.vision ?? false)) {
     return false
   }
 

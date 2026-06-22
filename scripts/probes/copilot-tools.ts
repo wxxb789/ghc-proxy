@@ -17,8 +17,7 @@
 import type { Model } from '~/types'
 
 import process from 'node:process'
-import { modelCache } from '~/state'
-import { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/transform/model-capabilities'
+import { MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
 
 import { parseProbeArgs } from '../lib/probe-args'
 import { bootstrapProbe, extractErrorMessage, pickMessagesModels, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'
