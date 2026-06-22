@@ -5,7 +5,6 @@ export interface ModelTransformInput {
   payload: unknown
   meta?: { betaHeaders?: string[] }
   resolvedModel?: Model
-  headers?: Headers
 }
 
 export interface ModelTransformOutput {

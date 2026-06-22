@@ -12,8 +12,7 @@ import { cacheModels, cacheVSCodeVersion, getClientConfig } from '~/clients/fact
 import { getCachedConfig, readConfig } from '~/lib/config'
 import { ensurePaths } from '~/lib/paths'
 import { setupCopilotToken, setupGitHubToken } from '~/lib/token'
-import { authStore } from '~/state'
-import { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/transform/model-capabilities'
+import { authStore, MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/state'
 
 export const REQUEST_TIMEOUT_MS = 30_000
 

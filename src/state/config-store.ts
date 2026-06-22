@@ -58,22 +58,6 @@ export class ConfigStore {
   getModelFallback() {
     return getCachedConfig().modelFallback
   }
-
-  getUpstreamQueueConcurrency(): number | undefined {
-    return getCachedConfig().upstreamQueueConcurrency
-  }
-
-  getUpstreamQueueMaxRetries(): number | undefined {
-    return getCachedConfig().upstreamQueueMaxRetries
-  }
-
-  getUpstreamQueueBaseDelaySeconds(): number | undefined {
-    return getCachedConfig().upstreamQueueBaseDelaySeconds
-  }
-
-  getUpstreamQueueMaxDelaySeconds(): number | undefined {
-    return getCachedConfig().upstreamQueueMaxDelaySeconds
-  }
 }
 
 export const configStore = new ConfigStore()
