@@ -62,11 +62,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run tests
-        run: >-
-          bun test --exclude tests/github-client.test.ts
-          && bun test tests/github-client.test.ts
-        # Temporary workaround for Bun's process-wide mock.module() registry leak across test files.
-        # Revert this split once Bun lands a proper module-mock restoration/isolation fix.
+        run: bun test
 
   build:
     runs-on: ubuntu-latest
