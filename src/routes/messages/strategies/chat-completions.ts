@@ -1,4 +1,5 @@
-import type { AnthropicMessagesAdapter, CopilotTransport } from '~/adapters'
+import type { AnthropicMessagesAdapter } from '~/adapters'
+import type { CopilotClient } from '~/clients'
 import type { CapiChatCompletionChunk, CapiExecutionPlan } from '~/core/capi'
 import type { ExecutionStrategy, SSEOutput, SSEStreamChunk } from '~/lib/execution-strategy'
 
@@ -6,10 +7,10 @@ import consola from 'consola'
 import { isNonStreamingResponse } from '~/clients'
 import { serializeAnthropicSSE } from '~/lib/sse-adapter'
 
-type ChatCompletionsResult = Awaited<ReturnType<CopilotTransport['execute']>>
+type ChatCompletionsResult = Awaited<ReturnType<CopilotClient['createChatCompletions']>>
 
 export function createMessagesViaChatCompletionsStrategy(
-  transport: CopilotTransport,
+  client: CopilotClient,
   adapter: AnthropicMessagesAdapter,
   plan: CapiExecutionPlan,
   signal: AbortSignal,
@@ -19,7 +20,11 @@ export function createMessagesViaChatCompletionsStrategy(
 
   return {
     execute() {
-      return transport.execute(plan, { signal })
+      return client.createChatCompletions(plan.payload, {
+        signal,
+        initiator: plan.initiator,
+        requestContext: plan.requestContext,
+      })
     },
 
     isStream(result): result is ChatCompletionsResult & AsyncIterable<SSEStreamChunk> {

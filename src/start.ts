@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import type { RuntimeConfig } from './clients/factory'
 import process from 'node:process'
 import { defineCommand } from 'citty'
 import consola from 'consola'
@@ -81,7 +80,7 @@ async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
 }
 
 async function runServer(options: RunServerOptions): Promise<void> {
-  const accountType: RuntimeConfig['accountType']
+  const accountType: 'individual' | 'business' | 'enterprise'
     = (
       options.accountType === 'individual'
       || options.accountType === 'business'

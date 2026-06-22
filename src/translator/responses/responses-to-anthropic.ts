@@ -9,7 +9,6 @@ import type {
   ResponseOutputReasoning,
   ResponseOutputRefusal,
   ResponseOutputText,
-  ResponseReasoningBlock,
   ResponsesResult,
 } from '~/types'
 
@@ -115,19 +114,12 @@ function extractReasoningText(item: ResponseOutputReasoning): string {
   }
 
   const segments: Array<string> = []
-  collectReasoningSegments(item.summary, segments)
-  return segments.join('').trim()
-}
-
-function collectReasoningSegments(
-  blocks: Array<ResponseReasoningBlock>,
-  segments: Array<string>,
-) {
-  for (const block of blocks) {
+  for (const block of item.summary) {
     if (typeof block.text === 'string') {
       segments.push(block.text)
     }
   }
+  return segments.join('').trim()
 }
 
 function createToolUseContentBlock(

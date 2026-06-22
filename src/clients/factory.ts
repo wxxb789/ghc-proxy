@@ -7,19 +7,6 @@ import { authStore, modelCache } from '~/state'
 import { buildGitHubUrls } from './ghe-domain'
 import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
-export interface RuntimeConfig {
-  accountType: 'individual' | 'business' | 'enterprise'
-  manualApprove: boolean
-  rateLimitSeconds?: number
-  rateLimitWait: boolean
-  showToken: boolean
-  upstreamTimeoutSeconds?: number
-  upstreamQueueConcurrency?: number
-  upstreamQueueMaxRetries?: number
-  upstreamQueueBaseDelaySeconds?: number
-  upstreamQueueMaxDelaySeconds?: number
-}
-
 const upstreamRequestQueue = createDefaultUpstreamRequestQueue()
 
 export function configureUpstreamRequestQueue(

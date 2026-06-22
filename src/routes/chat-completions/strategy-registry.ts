@@ -6,7 +6,7 @@ import type { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 import type { ChatCompletionsPayload } from '~/types'
 
 import consola from 'consola'
-import { CopilotTransport, OpenAIChatAdapter } from '~/adapters'
+import { OpenAIChatAdapter } from '~/adapters'
 import { StrategyRegistry } from '~/dispatch'
 import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
@@ -32,10 +32,8 @@ const chatCompletionsEntry: StrategyEntry<ChatCompletionsStrategyContext> = {
 
     appendModelStepInPlace(ctx.modelMapping, 'MODEL_RESOLVE', plan.resolvedModel)
 
-    const transport = new CopilotTransport(ctx.copilotClient)
-
     consola.debug('Streaming response')
-    const strategy = createChatCompletionsStrategy(transport, adapter, plan, ctx.upstreamSignal.signal)
+    const strategy = createChatCompletionsStrategy(ctx.copilotClient, adapter, plan, ctx.upstreamSignal.signal)
     return await runStrategy(strategy, ctx.upstreamSignal)
   },
 }

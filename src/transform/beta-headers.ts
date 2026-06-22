@@ -2,15 +2,11 @@ import { CONTEXT_BETA_RE } from './constants'
 
 const COPILOT_UNSUPPORTED_BETA_RE = /^mid-conversation-system-\d{4}-\d{2}-\d{2}$/
 
-export interface BetaHeaderResult {
-  header: string | undefined
-}
-
 export function processAnthropicBetaHeader(
   rawHeader: string | null,
-): BetaHeaderResult {
+): string | undefined {
   if (!rawHeader)
-    return { header: undefined }
+    return undefined
 
   const values = rawHeader.split(',').map(v => v.trim()).filter(Boolean)
   const filtered: string[] = []
@@ -26,7 +22,5 @@ export function processAnthropicBetaHeader(
     filtered.push(value)
   }
 
-  return {
-    header: filtered.length > 0 ? filtered.join(',') : undefined,
-  }
+  return filtered.length > 0 ? filtered.join(',') : undefined
 }

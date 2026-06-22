@@ -11,11 +11,9 @@ export type DeliveryResult
 export function deliverResult(
   request: Request,
   result: ExecutionResult,
-  modelMapping?: ModelMappingInfo,
+  modelMapping: ModelMappingInfo,
 ): DeliveryResult {
-  if (modelMapping) {
-    setRequestModelMapping(request, modelMapping)
-  }
+  setRequestModelMapping(request, modelMapping)
   if (result.kind === 'json') {
     return { streaming: false, data: result.data }
   }

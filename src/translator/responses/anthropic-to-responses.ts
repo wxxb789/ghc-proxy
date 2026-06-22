@@ -38,7 +38,7 @@ import { SignatureCodec } from './signature-codec'
 const USER_ID_ACCOUNT_RE = /user_([^_]+)_account/
 const USER_ID_SESSION_RE = /_session_(.+)$/
 
-export { decodeCompactionCarrierSignature, THINKING_TEXT } from './response-items'
+export { THINKING_TEXT } from './response-items'
 
 export interface AnthropicToResponsesOptions {
   reasoningEffortResolver?: (model: string) => string

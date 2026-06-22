@@ -9,12 +9,10 @@ import type {
 import type {
   AnthropicCountTokensPayload,
   AnthropicDocumentBlock,
-  AnthropicMcpToolResultBlock,
   AnthropicMessage,
   AnthropicMessagesPayload,
   AnthropicSearchResultBlock,
   AnthropicServerToolResultBlock,
-  AnthropicToolResultBlock,
   AnthropicToolResultContentBlock,
 } from './types'
 
@@ -49,12 +47,6 @@ function normalizeSystemBlocks(
   }]
 }
 
-function normalizeToolResultContent(
-  block: AnthropicToolResultBlock,
-): Array<NormalizedTextBlock | NormalizedImageBlock> {
-  return normalizeToolResultContentValue(block.content)
-}
-
 function normalizeToolResultContentValue(
   content: string | Array<AnthropicToolResultContentBlock>,
 ): Array<NormalizedTextBlock | NormalizedImageBlock> {
@@ -74,12 +66,6 @@ function normalizeToolResultContentValue(
         return assertNever(contentBlock)
     }
   })
-}
-
-function normalizeMcpToolResultContent(
-  block: AnthropicMcpToolResultBlock,
-): Array<NormalizedTextBlock | NormalizedImageBlock> {
-  return normalizeToolResultContentValue(block.content)
 }
 
 function normalizeServerToolResultContent(
@@ -139,14 +125,14 @@ function normalizeMessage(message: AnthropicMessage): NormalizedTurn {
         return {
           kind: 'tool_result',
           toolUseId: block.tool_use_id,
-          content: normalizeToolResultContent(block),
+          content: normalizeToolResultContentValue(block.content),
           isError: block.is_error,
         }
       case 'mcp_tool_result':
         return {
           kind: 'tool_result',
           toolUseId: block.tool_use_id,
-          content: normalizeMcpToolResultContent(block),
+          content: normalizeToolResultContentValue(block.content),
           isError: block.is_error,
         }
       case 'server_tool_result':

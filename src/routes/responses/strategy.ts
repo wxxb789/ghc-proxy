@@ -21,12 +21,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function createStreamIdTracker(): StreamIdState {
-  return {
-    itemIdsByOutputIndex: new Map(),
-  }
-}
-
 function fixStreamIds(
   rawData: string,
   eventName: string | undefined,
@@ -90,7 +84,7 @@ export function createResponsesPassthroughStrategy(
     onTerminalResponse?: (response: ResponsesResult) => void
   },
 ): ExecutionStrategy<ResponsesResult | AsyncIterable<SSEStreamChunk>, SSEStreamChunk> {
-  const tracker = createStreamIdTracker()
+  const tracker: StreamIdState = { itemIdsByOutputIndex: new Map() }
 
   return {
     async execute() {

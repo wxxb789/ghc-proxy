@@ -34,12 +34,6 @@ const MESSAGE_TYPE = 'message'
 
 export const THINKING_TEXT = 'Thinking...'
 
-export function decodeCompactionCarrierSignature(
-  signature: string,
-): { id: string, encrypted_content: string } | undefined {
-  return SignatureCodec.decodeCompaction(signature)
-}
-
 export function translateUserContentBlock(
   block: AnthropicUserContentBlock,
 ): ResponseInputContent | undefined {
@@ -197,7 +191,7 @@ export function createRedactedReasoningContent(
 export function createCompactionContent(
   block: AnthropicThinkingBlock,
 ): ResponseInputCompaction | undefined {
-  const compaction = decodeCompactionCarrierSignature(block.signature ?? '')
+  const compaction = SignatureCodec.decodeCompaction(block.signature ?? '')
   if (!compaction) {
     return undefined
   }

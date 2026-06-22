@@ -31,10 +31,9 @@ export async function handleMessagesCore(
         if (consola.level >= 4)
           consola.debug('Anthropic request payload:', JSON.stringify(payload))
 
-        const betaResult = processAnthropicBetaHeader(
+        anthropicBetaHeader = processAnthropicBetaHeader(
           reqHeaders.get('anthropic-beta'),
         )
-        anthropicBetaHeader = betaResult.header
         // Side-effect-only hook: forward the ingested payload unchanged. The
         // runner requires a returned payload (replacement callers return a
         // different one); returning ctx.payload is the no-substitution case.

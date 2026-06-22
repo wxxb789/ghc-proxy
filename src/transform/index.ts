@@ -3,7 +3,6 @@ import { modelPolicyStep } from './policy'
 import { rewriteStep } from './rewrite'
 
 export { processAnthropicBetaHeader } from './beta-headers'
-export type { BetaHeaderResult } from './beta-headers'
 export type { ModelTransformChain } from './chain'
 export { normalizeOutputConfigEffort } from './sanitize'
 export type { ModelTransformInput, ModelTransformOutput, ModelTransformStep } from './types'
