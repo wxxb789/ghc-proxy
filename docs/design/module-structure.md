@@ -181,7 +181,7 @@ Several modules formerly under `src/lib/` were relocated during the consolidatio
 - `responses-emulator-state.ts` -> `src/state/responses-emulator-state.ts`.
 - `upstream-request-queue.ts` -> `src/clients/upstream-queue.ts`; `api-config.ts` -> `src/clients/api-config.ts`; `ghe-domain.ts` -> `src/clients/ghe-domain.ts`.
 - `validation/` -> `src/ingest/validation/`.
-- `model-rewrite.ts`, `model-capabilities.ts`, `request-model-policy.ts` -> `src/transform/`.
+- `model-rewrite.ts`, `request-model-policy.ts` -> `src/transform/`.
 - `function-schema.ts` -> `src/translator/responses/function-schema.ts`.
 - `approval.ts` -> `src/guard/approval.ts`.
 - `proxy.ts`, `shell.ts`, `startup-banner.ts` -> `src/cli/`.
