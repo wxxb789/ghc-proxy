@@ -988,6 +988,37 @@ describe('responses and routing', () => {
     ])
   })
 
+  test('/v1/responses accepts image content in function call output', async () => {
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_function_output_image',
+      model: 'gpt-4.1',
+      status: 'completed',
+      usage: null,
+    }), calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4.1',
+        input: [
+          { type: 'function_call', call_id: 'call_1', name: 'view_image', arguments: '{}', status: 'completed' },
+          { type: 'function_call_output', call_id: 'call_1', output: [{ type: 'input_image', detail: 'original' }] },
+        ],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.input).toEqual([
+      { type: 'function_call', call_id: 'call_1', name: 'view_image', arguments: '{}', status: 'completed' },
+      { type: 'function_call_output', call_id: 'call_1', output: [{ type: 'input_image', detail: 'original' }] },
+    ])
+  })
+
   test('/v1/responses surfaces upstream 400 errors without requiring payload dumps', async () => {
     const app = createApp()
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))

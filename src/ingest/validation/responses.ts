@@ -25,7 +25,7 @@ const responsesInputImageSchema = z.object({
   type: z.literal('input_image'),
   image_url: z.string().nullable().optional(),
   file_id: z.string().nullable().optional(),
-  detail: z.enum(['low', 'high', 'auto']).optional(),
+  detail: z.enum(['low', 'high', 'auto', 'original']).optional(),
 }).loose().superRefine((item, ctx) => {
   if (!item.image_url && !item.file_id) {
     ctx.addIssue({
@@ -34,6 +34,13 @@ const responsesInputImageSchema = z.object({
     })
   }
 })
+
+const responsesFunctionCallOutputImageSchema = z.object({
+  type: z.literal('input_image'),
+  image_url: z.string().nullable().optional(),
+  file_id: z.string().nullable().optional(),
+  detail: z.enum(['low', 'high', 'auto', 'original']).optional(),
+}).loose()
 
 const responsesInputFileSchema = z.object({
   type: z.literal('input_file'),
@@ -75,6 +82,13 @@ const responsesInputContentSchema = z.union([
   responsesUnknownContentSchema,
 ])
 
+const responsesFunctionCallOutputContentSchema = z.union([
+  responsesInputTextSchema,
+  responsesFunctionCallOutputImageSchema,
+  responsesInputFileSchema,
+  responsesUnknownContentSchema,
+])
+
 // ── Input Item Schemas ──
 
 const responsesMessageSchema = z.object({
@@ -101,7 +115,7 @@ const responsesFunctionCallOutputSchema = z.object({
   call_id: z.string().min(1),
   output: z.union([
     z.string(),
-    z.array(responsesInputContentSchema),
+    z.array(responsesFunctionCallOutputContentSchema),
   ]),
   status: z.enum(['in_progress', 'completed', 'incomplete']).optional(),
 }).loose()
