@@ -219,7 +219,7 @@ export interface ResponseInputImage {
   type: 'input_image'
   image_url?: string | null
   file_id?: string | null
-  detail?: 'low' | 'high' | 'auto'
+  detail?: 'low' | 'high' | 'auto' | 'original'
 }
 
 export interface ResponseInputFile {
