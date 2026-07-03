@@ -13,6 +13,7 @@ dist/
 # tools
 .aider*
 .alma-snapshots
+.omo/
 .sisyphus/
 docs/superpowers/
 
