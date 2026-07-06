@@ -60,3 +60,11 @@ Tracked items for future work. Items are roughly ordered by priority.
     - Does it support Bun natively?
     - Does it handle Claude/Anthropic tokenization or is it OpenAI-only like `gpt-tokenizer`?
     - Accuracy: does it produce the same token counts for the same inputs?
+
+- [ ] **Evaluate a discriminated `AnthropicDocumentSource` union for `AnthropicDocumentBlock.source`**
+  - Surfaced by a simplify-pass review; anchored at `src/translator/anthropic/types.ts` (`AnthropicDocumentBlock`)
+  - Current: `source: Record<string, unknown>`; `formatDocumentBlock`, `describeDocumentBlock`, and `createDocumentContent` each narrow it at the point of use
+  - **UNVERIFIED — the finding may be wrong. Verify / evaluate / design before acting:**
+    - Confirm the exact set of Anthropic-supported document source variants and their fields against the current Messages API spec (`text | base64 | url | content | file` differ per type). A precise union that omits a real variant would 400 otherwise-valid requests.
+    - Check whether the loose `Record<string, unknown>` is deliberate forward-compat passthrough; the point-of-use narrowing may already make the leak acceptable.
+    - Weigh the type-design blast radius (this type feeds multiple translation paths) against the parse-don't-validate benefit before committing.
