@@ -65,13 +65,15 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
       }),
     )
 
-    applyResponsesParameterFilters(responsesPayload, ctx.selectedModel)
-
     applyContextManagement(
       responsesPayload,
       ctx.selectedModel?.capabilities.limits.max_prompt_tokens,
     )
     compactInputByLatestCompaction(responsesPayload)
+
+    // Runs last so it can strip any request parameter — including fields
+    // injected above (e.g. context_management) — that the model rejects.
+    applyResponsesParameterFilters(responsesPayload, ctx.selectedModel)
 
     const { vision, initiator } = getResponsesRequestOptions(responsesPayload)
     const strategy = createMessagesViaResponsesStrategy(

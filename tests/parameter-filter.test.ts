@@ -178,4 +178,32 @@ describe('parameter-filter native /responses integration', () => {
     expect(response.status).toBe(200)
     expect(calls[0]?.payload.temperature).toBe(0.7)
   })
+
+  test('runs after context_management injection so a user rule can strip it', async () => {
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(
+      buildGptModel('gpt-5.4-mini', { supported_endpoints: ['/responses'] }),
+    ))
+    mockUpstream(calls)
+
+    const config = getCachedConfig() as Record<string, unknown>
+    config.responsesApiAutoContextManagement = true
+    config.responsesApiContextManagementModels = ['gpt-5.4-mini']
+    config.responsesApiParameterFilters = [
+      { models: ['gpt-5.4-mini'], params: ['context_management'] },
+    ]
+
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.4-mini',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect('context_management' in (calls[0]!.payload as ResponsesPayload)).toBe(false)
+  })
 })

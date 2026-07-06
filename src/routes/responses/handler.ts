@@ -65,12 +65,15 @@ export async function handleResponsesCore(
           )
         }
 
-        applyResponsesParameterFilters(payload, selectedModel)
-
         applyContextManagement(
           payload,
           selectedModel.capabilities.limits.max_prompt_tokens,
         )
+
+        // Runs last so it can strip any request parameter — including fields
+        // this proxy injects above (e.g. context_management) — that the model
+        // rejects, per the configured filter rules.
+        applyResponsesParameterFilters(payload, selectedModel)
       },
       buildStrategyContext({ payload, meta, copilotClient, upstreamSignal }) {
         const { vision, initiator } = getResponsesRequestOptions(payload)
