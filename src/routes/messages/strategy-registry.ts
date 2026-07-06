@@ -13,6 +13,7 @@ import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
 import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
+import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
 import { filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeOutputConfig } from '~/transform/sanitize'
 
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
@@ -69,6 +70,10 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
       ctx.selectedModel?.capabilities.limits.max_prompt_tokens,
     )
     compactInputByLatestCompaction(responsesPayload)
+
+    // Runs last so it can strip any request parameter — including fields
+    // injected above (e.g. context_management) — that the model rejects.
+    applyResponsesParameterFilters(responsesPayload, ctx.selectedModel)
 
     const { vision, initiator } = getResponsesRequestOptions(responsesPayload)
     const strategy = createMessagesViaResponsesStrategy(

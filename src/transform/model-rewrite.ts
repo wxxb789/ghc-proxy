@@ -81,7 +81,7 @@ function normalizeToKnownModel(modelId: string): string | undefined {
 const GLOB_SPECIAL_RE = /[.+^${}()|[\]\\]/g
 const GLOB_STAR_RE = /\*/g
 
-function matchesGlob(pattern: string, value: string): boolean {
+export function matchesGlob(pattern: string, value: string): boolean {
   if (!pattern.includes('*')) {
     return pattern === value
   }

@@ -8,6 +8,7 @@ import { configStore, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { responsesModelChain } from '~/transform'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
+import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
 import { normalizeFunctionParametersSchemaForCopilot } from '~/translator/responses/function-schema'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
 import { responsesStrategyRegistry } from './strategy-registry'
@@ -68,6 +69,11 @@ export async function handleResponsesCore(
           payload,
           selectedModel.capabilities.limits.max_prompt_tokens,
         )
+
+        // Runs last so it can strip any request parameter — including fields
+        // this proxy injects above (e.g. context_management) — that the model
+        // rejects, per the configured filter rules.
+        applyResponsesParameterFilters(payload, selectedModel)
       },
       buildStrategyContext({ payload, meta, copilotClient, upstreamSignal }) {
         const { vision, initiator } = getResponsesRequestOptions(payload)

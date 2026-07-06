@@ -29,6 +29,11 @@ const configFileSchema = z.object({
   responsesApiAutoCompactInput: z.boolean().optional(),
   responsesApiAutoContextManagement: z.boolean().optional(),
   responsesApiContextManagementModels: z.array(z.string()).optional(),
+  responsesApiParameterFilters: z.array(z.object({
+    models: z.array(z.string()).min(1),
+    params: z.array(z.string()).min(1),
+  })).optional(),
+  responsesApiParameterFiltersReplaceDefault: z.boolean().optional(),
   responsesOfficialEmulator: z.boolean().optional(),
   responsesOfficialEmulatorTtlSeconds: z.number().int().positive().optional(),
   modelReasoningEfforts: z.record(z.string(), reasoningEffortSchema).optional(),
@@ -51,6 +56,7 @@ export const DEFAULT_USE_FUNCTION_APPLY_PATCH = true
 export const DEFAULT_COMPACT_USE_SMALL_MODEL = false
 export const DEFAULT_RESPONSES_API_AUTO_COMPACT_INPUT = false
 export const DEFAULT_RESPONSES_API_AUTO_CONTEXT_MANAGEMENT = false
+export const DEFAULT_RESPONSES_API_PARAMETER_FILTERS_REPLACE_DEFAULT = false
 export const DEFAULT_RESPONSES_OFFICIAL_EMULATOR = false
 export const DEFAULT_RESPONSES_OFFICIAL_EMULATOR_TTL_SECONDS = 14_400
 

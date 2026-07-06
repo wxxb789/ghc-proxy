@@ -195,6 +195,8 @@ All fields are optional. The full schema:
 | `responsesApiAutoCompactInput` | `boolean` | `false` | Automatically trim Responses `input` to the latest `compaction` item |
 | `responsesApiAutoContextManagement` | `boolean` | `false` | Automatically inject Responses `context_management` for selected models |
 | `responsesApiContextManagementModels` | `string[]` | -- | Models eligible for auto-injected Responses `context_management` |
+| `responsesApiParameterFilters` | `{ models, params }[]` | -- | Extra rules to strip request parameters on the Responses boundary (see [Responses Parameter Filters](#responses-parameter-filters)) |
+| `responsesApiParameterFiltersReplaceDefault` | `boolean` | `false` | Disable the built-in reasoning-model default rule so only your `responsesApiParameterFilters` apply |
 | `responsesOfficialEmulator` | `boolean` | `false` | Enable local OpenAI-style Responses state emulation for `previous_response_id`, `conversation`, retrieve, input_items, delete, and input_tokens |
 | `responsesOfficialEmulatorTtlSeconds` | `number` | `14400` | In-memory TTL for locally emulated Responses state |
 | `modelReasoningEfforts` | `Record<string, string>` | -- | Per-model reasoning effort defaults for Anthropic-to-Responses translation |
@@ -381,6 +383,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 - automatic Responses `context_management` injection is disabled by default and only applies when `responsesApiAutoContextManagement` is `true` and the model matches `responsesApiContextManagementModels`
 - automatic trimming of Responses `input` to the latest `compaction` item is disabled by default and only applies when `responsesApiAutoCompactInput` is `true`
 - reasoning defaults for Anthropic -> Responses translation can be tuned with `modelReasoningEfforts`
+- request parameters that a model rejects (e.g. `temperature`/`top_p` on reasoning models) are stripped on the Responses boundary rather than leaked upstream as a `400`; see [Responses Parameter Filters](#responses-parameter-filters)
 - known unsupported builtin tools, such as `web_search`, fail explicitly with `400` instead of being silently removed
 - external image URLs on the Responses path fail explicitly with `400`; use `file_id` or data URL image input instead
 - official `input_file` and `item_reference` input items are modeled explicitly and validated before forwarding
@@ -398,6 +401,28 @@ Example opt-in configuration for these two Responses-specific policies:
 ```
 
 > See [Responses Upstream Notes](./docs/responses-upstream-notes.md) for detailed upstream compatibility observations from live testing.
+
+### Responses Parameter Filters
+
+Some Copilot models reject request parameters that the OpenAI wire format allows. The clearest case: **reasoning models** (the `gpt-5` family, o-series, codex) reject sampling parameters and answer `POST /responses` with `400 Unsupported parameter: 'temperature' is not supported with this model.` Since the client cannot always be changed, the proxy strips the offending parameters on the Responses boundary instead of leaking the incompatibility outward.
+
+This is expressed as a small rule engine that runs on both the native `/v1/responses` path and the `/v1/messages` → Responses translation path:
+
+- **Built-in default rule:** any model that advertises `reasoning_effort` has `temperature` and `top_p` stripped. This covers the whole reasoning family (including future point releases like `gpt-5.4-mini`) with no configuration.
+- **`responsesApiParameterFilters`:** add your own rules. Each rule is `{ "models": [glob, ...], "params": [name, ...] }`; every rule whose `models` glob matches the resolved model contributes its `params`. Rules are **added** to the default (the union of parameters is stripped). Model globs use the same `*` wildcard as `modelRewrites`.
+- **`responsesApiParameterFiltersReplaceDefault`:** set to `true` to disable the built-in reasoning-model rule, so only your `responsesApiParameterFilters` apply — use this to fully **overwrite** the default behavior.
+
+Stripped parameters are removed entirely (never sent as `null`), because upstream rejects the mere presence of the key.
+
+```json
+{
+  "responsesApiParameterFilters": [
+    { "models": ["gpt-5*", "o1*"], "params": ["temperature", "top_p"] },
+    { "models": ["some-model"], "params": ["top_k"] }
+  ],
+  "responsesApiParameterFiltersReplaceDefault": false
+}
+```
 
 ## Docker
 
