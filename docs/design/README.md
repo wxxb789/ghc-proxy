@@ -17,6 +17,14 @@ Architecture and design documentation for ghc-proxy.
 | [State and Configuration](state-and-config.md) | Global state management, config file, CLI flags, and startup sequence |
 | [Migration: Hono → Elysia](migration-hono-to-elysia.md) | Completed framework migration from Hono to Elysia |
 
+## Design Candidates
+
+Proposed designs that are **not yet implemented**. They record deferred refactors so the systemic root cause is captured against a written plan; do not treat them as describing current behavior.
+
+| Document | Description |
+|----------|-------------|
+| [Native Messages Reconciliation Layer](native-reconciliation-layer.md) | **Candidate.** Collapse the native `/v1/messages` path's imperative Anthropic↔Copilot sanitizers into a declarative, capability-driven reconciler pipeline mirroring the Responses `parameter-filter` rule engine. Deferred; motivated by issue #45. |
+
 ## Related Documentation
 
 | Document | Location |

@@ -69,10 +69,16 @@ const anthropicMcpToolUseBlockSchema = z.object({
   server_name: z.string().min(1),
 }).loose()
 
+const anthropicDocumentBlockSchema = z.object({
+  type: z.literal('document'),
+  source: jsonObjectSchema,
+}).loose()
+
 const anthropicToolResultContentBlockSchema = z.union([
   anthropicTextBlockSchema,
   anthropicImageBlockSchema,
   anthropicSearchResultBlockSchema,
+  anthropicDocumentBlockSchema,
 ])
 
 const anthropicToolResultBlockSchema = z.object({
@@ -108,11 +114,6 @@ const anthropicServerToolResultBlockSchema = z.object({
   tool_use_id: z.string().min(1),
   content: z.unknown(),
   is_error: z.boolean().optional(),
-}).loose()
-
-const anthropicDocumentBlockSchema = z.object({
-  type: z.literal('document'),
-  source: jsonObjectSchema,
 }).loose()
 
 const anthropicUserMessageSchema = z.object({

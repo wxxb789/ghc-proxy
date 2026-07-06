@@ -14,7 +14,7 @@ import { appendModelStepInPlace } from '~/lib/request-logger'
 import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
-import { filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeOutputConfig } from '~/transform/sanitize'
+import { convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeOutputConfig } from '~/transform/sanitize'
 
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 import { createAnthropicAdapter } from './shared'
@@ -38,6 +38,7 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
   canHandle: (model, ctx) => modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
     && !hasOutputConfigFormat(ctx?.anthropicPayload),
   async execute(ctx) {
+    convertEnabledThinkingToAdaptive(ctx.anthropicPayload, ctx.selectedModel)
     filterThinkingBlocksForNativeMessages(ctx.anthropicPayload)
     sanitizeOutputConfig(ctx.anthropicPayload, ctx.selectedModel)
     sanitizeCacheControl(ctx.anthropicPayload)

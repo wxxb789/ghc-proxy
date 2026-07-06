@@ -5,6 +5,7 @@ import { AnthropicMessagesAdapter, OpenAIChatAdapter } from '~/adapters'
 import { CopilotClient } from '~/clients'
 import { getCachedConfig } from '~/lib/config'
 import { authStore } from '~/state'
+import { formatDocumentBlock } from '~/translator/anthropic/document'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 
@@ -259,6 +260,64 @@ describe('Anthropic extended content blocks', () => {
         text: '[search result]\nTitle: Example B\nSource: https://example.com/b\nContent:\nBravo',
       }],
     })
+  })
+
+  test('responses translator preserves file/url/base64 documents in tool_result as input_file', () => {
+    const result = translateAnthropicToResponsesPayload({
+      model: 'claude-opus-4.7',
+      max_tokens: 100,
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'a.pdf' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: [
+                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' } },
+                { type: 'document', source: { type: 'url', url: 'https://example.com/a.pdf' } },
+                { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'inline body' } },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+
+    const input = result.input
+    if (!Array.isArray(input)) {
+      throw new TypeError('Expected responses input to be an array')
+    }
+
+    // Regression (PR #47 review): file/url/base64 tool_result documents must be
+    // preserved as input_file, not gutted to a content-free "[document]".
+    expect(input[1]).toMatchObject({
+      type: 'function_call_output',
+      call_id: 'toolu_1',
+      output: [
+        { type: 'input_file', file_data: 'data:application/pdf;base64,JVBERi0=' },
+        { type: 'input_file', file_url: 'https://example.com/a.pdf' },
+        { type: 'input_text', text: '[document]\ninline body' },
+      ],
+    })
+  })
+
+  test('formatDocumentBlock labels non-text document sources instead of a bare token', () => {
+    expect(formatDocumentBlock({ type: 'document', source: { type: 'url', url: 'https://example.com/a.pdf' } }))
+      .toBe('[document: https://example.com/a.pdf]')
+    expect(formatDocumentBlock({ type: 'document', source: { type: 'file', file_id: 'file_9' } }))
+      .toBe('[document: file_9]')
+    expect(formatDocumentBlock({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'x' } }))
+      .toBe('[document: application/pdf]')
+    // text/content sources still inline their text unchanged.
+    expect(formatDocumentBlock({ type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'hi' } }))
+      .toBe('[document]\nhi')
   })
 })
 

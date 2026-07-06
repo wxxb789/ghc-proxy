@@ -426,6 +426,49 @@ describe('Anthropic payload validation', () => {
     expect(payload.messages).toHaveLength(1)
   })
 
+  test('accepts document blocks inside tool_result content (Anthropic-compatible set)', () => {
+    // Regression for issue #45 (jpsamuelson report): Anthropic allows
+    // text | image | search_result | document inside tool_result.content.
+    // The proxy previously rejected document there with a 400.
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-sonnet-5',
+      max_tokens: 64,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_1',
+          content: [
+            { type: 'text', text: 'Preface' },
+            { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'file body' } },
+          ],
+        }],
+      }],
+    })
+
+    expect(payload.messages).toHaveLength(1)
+  })
+
+  test('rejects unknown block types inside tool_result content (matches Anthropic)', () => {
+    // tool_reference is NOT a valid tool_result content type; the real
+    // Anthropic API rejects it too (anthropics/claude-code#28870), so the
+    // proxy must stay compatible and reject rather than fake-accept it.
+    expect(() =>
+      parseAnthropicMessagesPayload({
+        model: 'claude-sonnet-5',
+        max_tokens: 64,
+        messages: [{
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'toolu_1',
+            content: [{ type: 'tool_reference', tool_name: 'Skill' }],
+          }],
+        }],
+      }),
+    ).toThrow('Invalid request payload')
+  })
+
   test('validation details expand nested union errors', () => {
     try {
       parseAnthropicMessagesPayload({

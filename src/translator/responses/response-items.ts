@@ -6,12 +6,11 @@ import type {
   AnthropicMcpToolResultBlock,
   AnthropicMcpToolUseBlock,
   AnthropicRedactedThinkingBlock,
-  AnthropicSearchResultBlock,
   AnthropicServerToolResultBlock,
   AnthropicServerToolUseBlock,
-  AnthropicTextBlock,
   AnthropicThinkingBlock,
   AnthropicToolResultBlock,
+  AnthropicToolResultContentBlock,
   AnthropicToolUseBlock,
   AnthropicUserContentBlock,
 } from '~/translator'
@@ -26,6 +25,7 @@ import type {
   ResponseInputReasoning,
   ResponseInputText,
 } from '~/types'
+import { formatDocumentBlock } from '~/translator/anthropic/document'
 import { formatSearchResultBlock } from '~/translator/anthropic/search-result'
 
 import { SignatureCodec } from './signature-codec'
@@ -249,7 +249,7 @@ export function isServerToolResultBlock(
 }
 
 function convertToolResultContent(
-  content: string | Array<AnthropicTextBlock | AnthropicImageBlock | AnthropicSearchResultBlock>,
+  content: string | Array<AnthropicToolResultContentBlock>,
 ): string | Array<ResponseInputContent> {
   if (typeof content === 'string') {
     return content
@@ -267,6 +267,19 @@ function convertToolResultContent(
       case 'search_result':
         result.push(createTextContent(formatSearchResultBlock(block)))
         break
+      case 'document': {
+        const source = block.source
+        // file/url/base64 documents carry a real attachment the Responses format
+        // represents as input_file (matching top-level document handling); text
+        // and content sources have no attachment, so flatten them to text.
+        if (source.type === 'file' || source.type === 'url' || source.type === 'base64') {
+          result.push(createDocumentContent(block))
+        }
+        else {
+          result.push(createTextContent(formatDocumentBlock(block)))
+        }
+        break
+      }
       default:
         break
     }

@@ -14,6 +14,7 @@ For the newer per-model routing behavior, including the Anthropic <-> Responses 
 | User `tool_result` | Exact | Converted into ordered `tool` messages without reordering surrounding user text. |
 | User `search_result` | Lossy | Flattened to text containing title, source, and result content. Citation metadata is not preserved. |
 | `tool_result` `search_result` content | Lossy | Flattened into the OpenAI tool message content. |
+| `tool_result` `document` content | Lossy | Flattened to text (`[document]` + inline `text`/`content` source data). Binary/url document sources are placeholdered. |
 | Assistant text | Exact | Preserved as assistant content. |
 | Assistant `tool_use` | Exact | Converted into OpenAI `tool_calls` in order. |
 | Assistant `thinking` history | Lossy | Preserved in IR, omitted from upstream prompt, emits `lossy_thinking_omitted_from_prompt`. |
@@ -51,4 +52,4 @@ The validator currently enforces:
 - Positive `thinking.enabled.budget_tokens`
 - Object-like tool schemas
 - Image block base64 source shape
-- `tool_result` content structure, including Anthropic `search_result` content blocks
+- `tool_result` content structure, including Anthropic `search_result` and `document` content blocks

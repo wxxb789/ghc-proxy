@@ -16,6 +16,7 @@ import type {
   AnthropicToolResultContentBlock,
 } from './types'
 
+import { formatDocumentBlock } from '~/translator/anthropic/document'
 import { formatSearchResultBlock } from '~/translator/anthropic/search-result'
 import { assertNever } from '~/util/assert-never'
 
@@ -62,6 +63,8 @@ function normalizeToolResultContentValue(
         return imageBlock(contentBlock.source.media_type, contentBlock.source.data)
       case 'search_result':
         return textBlock(formatSearchResultBlock(contentBlock))
+      case 'document':
+        return textBlock(formatDocumentBlock(contentBlock))
       default:
         return assertNever(contentBlock)
     }

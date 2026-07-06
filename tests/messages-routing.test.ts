@@ -273,6 +273,124 @@ describe('messages routing', () => {
     expect(calls[0]?.payload.output_config).toEqual({ effort: 'max' })
   })
 
+  test('/v1/messages native path converts enabled thinking to adaptive for adaptive-thinking models', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    // buildModel advertises adaptive_thinking: true by default.
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-sonnet-5', { supported_endpoints: ['/v1/messages'] })))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-sonnet-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+      },
+    }, calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 64,
+        thinking: { type: 'enabled', budget_tokens: 30000 },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    // budget_tokens 30000 -> high; adaptive shape is what upstream accepts.
+    expect(calls[0]?.payload.thinking).toEqual({ type: 'adaptive' })
+    expect(calls[0]?.payload.output_config).toEqual({ effort: 'high' })
+  })
+
+  test('/v1/messages native path keeps enabled thinking for models without adaptive thinking', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-sonnet-4.6', {
+      supported_endpoints: ['/v1/messages'],
+      capabilities: {
+        ...buildModel('claude-sonnet-4.6').capabilities,
+        supports: {
+          ...buildModel('claude-sonnet-4.6').capabilities.supports,
+          adaptive_thinking: false,
+        },
+      },
+    })))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-sonnet-4.6',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+      },
+    }, calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4.6',
+        max_tokens: 64,
+        thinking: { type: 'enabled', budget_tokens: 12000 },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.thinking).toEqual({ type: 'enabled', budget_tokens: 12000 })
+    expect(calls[0]?.payload.output_config).toBeUndefined()
+  })
+
+  test('/v1/messages native path preserves explicit output_config.effort when converting enabled thinking', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-sonnet-5', { supported_endpoints: ['/v1/messages'] })))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-sonnet-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+      },
+    }, calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 64,
+        thinking: { type: 'enabled', budget_tokens: 30000 },
+        output_config: { effort: 'low' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.thinking).toEqual({ type: 'adaptive' })
+    // Explicit effort must win over the budget heuristic.
+    expect(calls[0]?.payload.output_config).toEqual({ effort: 'low' })
+  })
+
   test('/v1/messages routes structured output_config format through Responses when available', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []

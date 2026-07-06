@@ -8,6 +8,7 @@ import type {
   AnthropicUserContentBlock,
 } from '~/translator'
 
+import { formatDocumentBlock } from '~/translator/anthropic/document'
 import { formatSearchResultBlock } from '~/translator/anthropic/search-result'
 import { isAsyncIterable } from '~/util/async-iterable'
 
@@ -90,6 +91,8 @@ function stringifyToolResultContent(content: Array<AnthropicToolResultContentBlo
         return `[image omitted: ${block.source.media_type}]`
       case 'search_result':
         return formatSearchResultBlock(block)
+      case 'document':
+        return formatDocumentBlock(block)
     }
     return ''
   }).filter(Boolean).join('\n\n')

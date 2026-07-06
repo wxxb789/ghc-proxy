@@ -62,6 +62,8 @@ export interface AnthropicImageBlock {
 
 export interface AnthropicDocumentBlock {
   type: 'document'
+  // Kept loose deliberately for now. A discriminated `AnthropicDocumentSource`
+  // union is a candidate but UNVERIFIED — verify/design first (see docs/TODO.md, Research).
   source: Record<string, unknown>
 }
 
@@ -141,6 +143,7 @@ export type AnthropicToolResultContentBlock
   = | AnthropicTextBlock
     | AnthropicImageBlock
     | AnthropicSearchResultBlock
+    | AnthropicDocumentBlock
 
 export type AnthropicUserContentBlock
   = | AnthropicTextBlock
