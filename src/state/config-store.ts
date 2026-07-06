@@ -5,6 +5,7 @@ import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_RESPONSES_API_AUTO_COMPACT_INPUT,
   DEFAULT_RESPONSES_API_AUTO_CONTEXT_MANAGEMENT,
+  DEFAULT_RESPONSES_API_PARAMETER_FILTERS_REPLACE_DEFAULT,
   DEFAULT_RESPONSES_OFFICIAL_EMULATOR,
   DEFAULT_RESPONSES_OFFICIAL_EMULATOR_TTL_SECONDS,
   DEFAULT_USE_FUNCTION_APPLY_PATCH,
@@ -49,6 +50,15 @@ export class ConfigStore {
 
   getReasoningEffort(model: string): ReasoningEffort {
     return getCachedConfig().modelReasoningEfforts?.[model] ?? DEFAULT_REASONING_EFFORT
+  }
+
+  getResponsesParameterFilters(): Array<{ models: Array<string>, params: Array<string> }> {
+    return getCachedConfig().responsesApiParameterFilters ?? []
+  }
+
+  shouldReplaceDefaultParameterFilters(): boolean {
+    return getCachedConfig().responsesApiParameterFiltersReplaceDefault
+      ?? DEFAULT_RESPONSES_API_PARAMETER_FILTERS_REPLACE_DEFAULT
   }
 
   getModelRewrites(): Array<{ from: string, to: string }> {

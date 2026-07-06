@@ -13,6 +13,7 @@ import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
 import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
+import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
 import { filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeOutputConfig } from '~/transform/sanitize'
 
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
@@ -63,6 +64,8 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
         reasoningEffortResolver: model => configStore.getReasoningEffort(model),
       }),
     )
+
+    applyResponsesParameterFilters(responsesPayload, ctx.selectedModel)
 
     applyContextManagement(
       responsesPayload,

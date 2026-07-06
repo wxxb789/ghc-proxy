@@ -68,6 +68,10 @@ export class ModelCache {
     return model?.capabilities.supports.vision ?? false
   }
 
+  supportsReasoningEffort(model: Model | undefined): boolean {
+    return (model?.capabilities.supports.reasoning_effort?.length ?? 0) > 0
+  }
+
   supportsOutputConfig(model: Model | undefined): boolean {
     if (!model)
       return true
