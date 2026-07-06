@@ -1,5 +1,13 @@
 import type { AnthropicDocumentBlock } from './types'
 
+/** Trimmed text of a `content`-source document part, or undefined when it carries none. */
+function documentPartText(part: unknown): string | undefined {
+  if (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') {
+    return (part as { text: string }).text.trim() || undefined
+  }
+  return undefined
+}
+
 /**
  * Flatten an Anthropic `document` content block to plain text for translation
  * paths (Responses / Chat Completions) and for the native mixed-search-result
@@ -15,15 +23,14 @@ export function formatDocumentBlock(block: AnthropicDocumentBlock): string {
   }
 
   if (source.type === 'content' && Array.isArray(source.content)) {
-    const text = source.content
-      .map(part =>
-        part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
-          ? (part as { text: string }).text.trim()
-          : '',
-      )
-      .filter(Boolean)
-      .join('\n')
-    return text ? `[document]\n${text}` : '[document]'
+    const parts: Array<string> = []
+    for (const part of source.content) {
+      const text = documentPartText(part)
+      if (text) {
+        parts.push(text)
+      }
+    }
+    return parts.length ? `[document]\n${parts.join('\n')}` : '[document]'
   }
 
   return '[document]'

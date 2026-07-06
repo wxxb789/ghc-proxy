@@ -104,7 +104,9 @@ export function convertEnabledThinkingToAdaptive(
   const budget = payload.thinking.budget_tokens
   payload.thinking = { type: 'adaptive' }
 
-  if (payload.output_config?.effort == null) {
+  // Only derive an effort for models that accept output_config; sanitizeOutputConfig
+  // would otherwise strip the injected object right afterwards for reject-list models.
+  if (payload.output_config?.effort == null && modelCache.supportsOutputConfig(model)) {
     payload.output_config = {
       ...payload.output_config,
       effort: budgetTokensToEffort(budget),

@@ -6,12 +6,11 @@ import type {
   AnthropicMcpToolResultBlock,
   AnthropicMcpToolUseBlock,
   AnthropicRedactedThinkingBlock,
-  AnthropicSearchResultBlock,
   AnthropicServerToolResultBlock,
   AnthropicServerToolUseBlock,
-  AnthropicTextBlock,
   AnthropicThinkingBlock,
   AnthropicToolResultBlock,
+  AnthropicToolResultContentBlock,
   AnthropicToolUseBlock,
   AnthropicUserContentBlock,
 } from '~/translator'
@@ -250,7 +249,7 @@ export function isServerToolResultBlock(
 }
 
 function convertToolResultContent(
-  content: string | Array<AnthropicTextBlock | AnthropicImageBlock | AnthropicSearchResultBlock | AnthropicDocumentBlock>,
+  content: string | Array<AnthropicToolResultContentBlock>,
 ): string | Array<ResponseInputContent> {
   if (typeof content === 'string') {
     return content
