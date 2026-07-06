@@ -65,6 +65,52 @@ export function normalizeOutputConfigEffort(
 export function hasOutputConfigFormat(payload: AnthropicMessagesPayload | undefined): boolean {
   return payload?.output_config?.format != null
 }
+
+// Heuristic mapping from Anthropic classic `budget_tokens` to an adaptive
+// `output_config.effort`. The result is clamped against the model's advertised
+// efforts by `sanitizeOutputConfig` afterwards, so this only needs to pick a
+// sensible tier from the requested budget.
+function budgetTokensToEffort(budget: number): OutputConfigEffort {
+  if (budget >= 24000) {
+    return 'high'
+  }
+  if (budget >= 8000) {
+    return 'medium'
+  }
+  return 'low'
+}
+
+/**
+ * Models whose upstream `/v1/messages` endpoint only accepts the adaptive
+ * thinking API reject the classic `thinking.type: "enabled"` shape with a 400.
+ * Convert `enabled` → `adaptive` (+ derive `output_config.effort` from the
+ * requested `budget_tokens`) for those models before forwarding. Models that
+ * do not advertise `adaptive_thinking` keep the classic `enabled` shape.
+ *
+ * Must run before `sanitizeOutputConfig` so the derived effort is normalized
+ * against the model's advertised efforts.
+ */
+export function convertEnabledThinkingToAdaptive(
+  payload: AnthropicMessagesPayload,
+  model: Model | undefined,
+): void {
+  if (payload.thinking?.type !== 'enabled') {
+    return
+  }
+  if (!modelCache.supportsAdaptiveThinking(model)) {
+    return
+  }
+
+  const budget = payload.thinking.budget_tokens
+  payload.thinking = { type: 'adaptive' }
+
+  if (payload.output_config?.effort == null) {
+    payload.output_config = {
+      ...payload.output_config,
+      effort: budgetTokensToEffort(budget),
+    }
+  }
+}
 export function sanitizeOutputConfig(
   payload: AnthropicMessagesPayload,
   model: Model | undefined,
