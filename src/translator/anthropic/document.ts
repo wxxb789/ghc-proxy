@@ -8,11 +8,28 @@ function documentPartText(part: unknown): string | undefined {
   return undefined
 }
 
+/** A short reference identifying a non-text document source, or '' when none is available. */
+function documentSourceRef(source: Record<string, unknown>): string {
+  if (typeof source.url === 'string') {
+    return `: ${source.url}`
+  }
+  if (typeof source.file_id === 'string') {
+    return `: ${source.file_id}`
+  }
+  if (typeof source.media_type === 'string') {
+    return `: ${source.media_type}`
+  }
+  return ''
+}
+
 /**
  * Flatten an Anthropic `document` content block to plain text for translation
- * paths (Responses / Chat Completions) and for the native mixed-search-result
- * flatten path. Anthropic allows `document` blocks inside `tool_result.content`
- * alongside `text`, `image`, and `search_result`.
+ * paths that cannot carry an attachment (Chat Completions, and the native
+ * mixed-search-result flatten path). Text and content sources inline their
+ * text; file/url/base64 sources have no text to inline, so they degrade to a
+ * reference-labelled placeholder (mirroring `[image omitted: <media_type>]`)
+ * rather than a content-free token. Anthropic allows `document` blocks inside
+ * `tool_result.content` alongside `text`, `image`, and `search_result`.
  */
 export function formatDocumentBlock(block: AnthropicDocumentBlock): string {
   const source = block.source
@@ -33,5 +50,5 @@ export function formatDocumentBlock(block: AnthropicDocumentBlock): string {
     return parts.length ? `[document]\n${parts.join('\n')}` : '[document]'
   }
 
-  return '[document]'
+  return `[document${documentSourceRef(source)}]`
 }

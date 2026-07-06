@@ -267,9 +267,19 @@ function convertToolResultContent(
       case 'search_result':
         result.push(createTextContent(formatSearchResultBlock(block)))
         break
-      case 'document':
-        result.push(createTextContent(formatDocumentBlock(block)))
+      case 'document': {
+        const source = block.source
+        // file/url/base64 documents carry a real attachment the Responses format
+        // represents as input_file (matching top-level document handling); text
+        // and content sources have no attachment, so flatten them to text.
+        if (source.type === 'file' || source.type === 'url' || source.type === 'base64') {
+          result.push(createDocumentContent(block))
+        }
+        else {
+          result.push(createTextContent(formatDocumentBlock(block)))
+        }
         break
+      }
       default:
         break
     }
