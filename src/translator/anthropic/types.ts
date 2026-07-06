@@ -141,6 +141,7 @@ export type AnthropicToolResultContentBlock
   = | AnthropicTextBlock
     | AnthropicImageBlock
     | AnthropicSearchResultBlock
+    | AnthropicDocumentBlock
 
 export type AnthropicUserContentBlock
   = | AnthropicTextBlock

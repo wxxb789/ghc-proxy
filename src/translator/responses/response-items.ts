@@ -26,6 +26,7 @@ import type {
   ResponseInputReasoning,
   ResponseInputText,
 } from '~/types'
+import { formatDocumentBlock } from '~/translator/anthropic/document'
 import { formatSearchResultBlock } from '~/translator/anthropic/search-result'
 
 import { SignatureCodec } from './signature-codec'
@@ -249,7 +250,7 @@ export function isServerToolResultBlock(
 }
 
 function convertToolResultContent(
-  content: string | Array<AnthropicTextBlock | AnthropicImageBlock | AnthropicSearchResultBlock>,
+  content: string | Array<AnthropicTextBlock | AnthropicImageBlock | AnthropicSearchResultBlock | AnthropicDocumentBlock>,
 ): string | Array<ResponseInputContent> {
   if (typeof content === 'string') {
     return content
@@ -266,6 +267,9 @@ function convertToolResultContent(
         break
       case 'search_result':
         result.push(createTextContent(formatSearchResultBlock(block)))
+        break
+      case 'document':
+        result.push(createTextContent(formatDocumentBlock(block)))
         break
       default:
         break
