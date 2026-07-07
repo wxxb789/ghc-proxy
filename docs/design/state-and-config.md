@@ -183,15 +183,23 @@ The `start` command maps CLI flags onto `authStore` and the upstream queue:
 
 ## Environment Variables
 
-Override configuration values:
+Override configuration values (read directly from `process.env` by the proxy):
 
 | Variable                          | Overrides                           |
 |-----------------------------------|-------------------------------------|
-| `GITHUB_TOKEN`                   | `config.githubToken`               |
 | `DUMP_FAILED_PAYLOADS`           | `runtimeStore.dumpFailedPayloads`  |
 | `MODEL_FALLBACK_CLAUDE_OPUS`    | `config.modelFallback.claudeOpus`  |
 | `MODEL_FALLBACK_CLAUDE_SONNET`  | `config.modelFallback.claudeSonnet` |
 | `MODEL_FALLBACK_CLAUDE_HAIKU`   | `config.modelFallback.claudeHaiku` |
+
+These are the only environment variables the proxy binary reads at runtime for
+configuration (`MODEL_FALLBACK_*` in `src/lib/model-resolver.ts`,
+`DUMP_FAILED_PAYLOADS` in `src/start.ts`). There is **no** `GITHUB_TOKEN` /
+`GH_TOKEN` environment override in application code — supply a GitHub token via
+the `--github-token` (`-g`) flag or a persisted `config.json` (`githubToken`).
+The Docker image is the exception: its [`entrypoint.sh`](../../entrypoint.sh)
+forwards `GH_TOKEN` to `start --github-token`, so `GH_TOKEN` works only inside
+the container, not for the bare binary.
 
 Priority: CLI argument > Environment variable > Config file > Default value. `DUMP_FAILED_PAYLOADS` is a runtime debug flag only and is not persisted to `config.json`.
 

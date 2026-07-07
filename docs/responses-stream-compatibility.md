@@ -30,7 +30,7 @@ are rewritten back to that stable ID when upstream drifts.
 
 Implementation:
 
-- [strategy.ts](/Q:/repos/ghc-proxy/src/routes/responses/strategy.ts)
+- [strategy.ts](../src/routes/responses/strategy.ts)
 
 ### Stable `item_id` Per `output_index`
 
@@ -81,7 +81,7 @@ The local Responses stream type model now includes the currently observed part e
 
 Implementation:
 
-- [responses.ts](/Q:/repos/ghc-proxy/src/types/responses.ts)
+- [responses.ts](../src/types/responses.ts)
 
 ## Verification Coverage
 
@@ -89,8 +89,8 @@ The contract above is covered by focused route-level tests rather than only unit
 
 Relevant suites:
 
-- [responses-stream-id-normalization.test.ts](/Q:/repos/ghc-proxy/tests/responses-stream-id-normalization.test.ts)
-- [responses-and-routing.test.ts](/Q:/repos/ghc-proxy/tests/responses-and-routing.test.ts)
+- [responses-stream-translator.test.ts](../tests/responses-stream-translator.test.ts)
+- [responses-routing.test.ts](../tests/responses-routing.test.ts)
 
 Current checks include:
 
@@ -115,7 +115,7 @@ It only aims to preserve the wire-level invariants that real OpenAI Responses cl
 
 This is also intentionally separate from the broader upstream support gaps documented in:
 
-- [responses-upstream-notes.md](/Q:/repos/ghc-proxy/docs/responses-upstream-notes.md)
+- [responses-upstream-notes.md](responses-upstream-notes.md)
 
 Those notes cover resource-surface issues such as `previous_response_id`, retrieve, delete, and `input_tokens`, which are different from the streaming identity problem described here.
 

@@ -24,12 +24,12 @@ Tracked items for future work. Items are roughly ordered by priority.
 
 - [ ] **Expand test coverage for under-tested modules**
   - Clients (`CopilotClient`, `GitHubClient`, `VSCodeClient`) — only mocked, never directly tested
-  - Rate limiting (`src/lib/rate-limit.ts`) — no dedicated tests
-  - Request guard middleware (`src/routes/request-guard.ts`) — tested indirectly through routes only
+  - Rate limiting (`src/state/rate-limiter.ts`) — no dedicated tests
+  - Request guard middleware (`src/routes/middleware/request-guard.ts`) — tested indirectly through routes only
   - Request logger (`src/lib/request-logger.ts`) — no isolated tests
   - Concurrent request / race condition scenarios
 
-- [ ] **Reduce route registration duplication in `server.ts`**
+- [ ] **Reduce route registration duplication in `src/server.ts`**
   - Root-level and `/v1`-prefixed routes registered separately with identical call lists
   - Could extract shared route array to avoid drift
 

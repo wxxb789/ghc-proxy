@@ -152,7 +152,7 @@ The Responses streaming translator is stateful and emits Anthropic stream events
 - excessive whitespace-only function-call argument streams are rejected with an Anthropic `error` event
 - unfinished streams emit a terminal Anthropic `error` event instead of silently ending
 
-For the current `/v1/responses` stream identity contract, see [responses-stream-compatibility.md](/Q:/repos/ghc-proxy/docs/responses-stream-compatibility.md).
+For the current `/v1/responses` stream identity contract, see [responses-stream-compatibility.md](responses-stream-compatibility.md).
 
 ## Small-Model Routing
 

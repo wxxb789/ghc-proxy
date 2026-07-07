@@ -120,6 +120,10 @@ bunx ghc-proxy@latest selfcheck      # Probe the packaged bundle (loads every to
 | `--proxy-env` | -- | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from env (Node.js only; Bun reads proxy env natively) |
 | `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds (`0` disables; Bun max is `255`; streaming routes disable idle timeout automatically) |
 | `--upstream-timeout` | -- | `1800` | Upstream request timeout in seconds (0 to disable) |
+| `--upstream-queue-concurrency` | -- | `10` | Maximum concurrent Copilot upstream requests |
+| `--upstream-queue-retries` | -- | `5` | Maximum retries for upstream 429 responses |
+| `--upstream-queue-base-delay` | -- | `2` | Base delay in seconds for upstream 429 backoff when `Retry-After` is absent |
+| `--upstream-queue-max-delay` | -- | `60` | Maximum delay in seconds for upstream 429 backoff |
 | `--ghe-domain` | `--ghe` | -- | GitHub Enterprise Cloud company domain (e.g. `company.ghe.com`). Required for GHE.com device login on first run; persisted automatically for later runs. |
 
 ## Rate Limiting
@@ -184,6 +188,7 @@ All fields are optional. The full schema:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `githubToken` | `string` | -- | Persisted GitHub token. Normally written automatically by `auth` / `--github-token`; you rarely set this by hand |
 | `modelRewrites` | `{ from, to }[]` | -- | Glob-pattern model substitution rules (see [Model Rewrites](#model-rewrites)) |
 | `modelFallback` | `object` | -- | Override default model fallbacks (see [Customizing Fallbacks](#customizing-fallbacks)) |
 | `modelFallback.claudeOpus` | `string` | `claude-opus-4.8` | Fallback for `claude-opus-*` models |
@@ -199,7 +204,12 @@ All fields are optional. The full schema:
 | `responsesApiParameterFiltersReplaceDefault` | `boolean` | `false` | Disable the built-in reasoning-model default rule so only your `responsesApiParameterFilters` apply |
 | `responsesOfficialEmulator` | `boolean` | `false` | Enable local OpenAI-style Responses state emulation for `previous_response_id`, `conversation`, retrieve, input_items, delete, and input_tokens |
 | `responsesOfficialEmulatorTtlSeconds` | `number` | `14400` | In-memory TTL for locally emulated Responses state |
-| `modelReasoningEfforts` | `Record<string, string>` | -- | Per-model reasoning effort defaults for Anthropic-to-Responses translation |
+| `modelReasoningEfforts` | `Record<string, string>` | -- | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, or `xhigh` |
+| `upstreamQueueConcurrency` | `number` | `10` | Maximum concurrent Copilot upstream requests |
+| `upstreamQueueMaxRetries` | `number` | `5` | Maximum retries for upstream 429 responses |
+| `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream 429 backoff when `Retry-After` is absent |
+| `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum delay (seconds) for upstream 429 backoff |
+| `gheDomain` | `string` | -- | GitHub Enterprise Cloud company domain (persisted automatically after GHE.com auth) |
 
 Example:
 
@@ -364,10 +374,11 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET`  | `/health` | Liveness/readiness probe — returns `{ status, copilotToken, modelsLoaded, version }` |
 | `GET`  | `/usage` | Copilot quota / usage monitoring |
 | `GET`  | `/token` | Inspect the current Copilot token |
 
-> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses`, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix.
+> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses`, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility endpoints (`/health`, `/usage`, `/token`) are root-only and not exposed under `/v1`.
 
 ## Responses Compatibility
 
@@ -443,10 +454,16 @@ docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-
 
 Authentication and settings are persisted in `copilot-data/config.json` so they survive container restarts.
 
-You can also pass a GitHub token via environment variable:
+You can also pass a GitHub token via environment variable. The container [entrypoint](entrypoint.sh) forwards `GH_TOKEN` to `start --github-token`, so this is Docker-specific — the proxy binary itself does not read `GH_TOKEN` from the environment (outside Docker, use the `--github-token` flag or a persisted `config.json`):
 
 ```bash
 docker run -p 4141:4141 -e GH_TOKEN=your_token ghcr.io/wxxb789/ghc-proxy
+```
+
+To run the one-time device-code auth flow inside the container instead (writes the token into the mounted data volume):
+
+```bash
+docker run -it -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy --auth
 ```
 
 Docker Compose:
