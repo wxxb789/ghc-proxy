@@ -27,8 +27,8 @@ MODEL_FALLBACK_CLAUDE_HAIKU     → config.modelFallback.claudeHaiku
 
 Default fallbacks:
 ```text
-claudeOpus:   claude-opus-4.8
-claudeSonnet: claude-sonnet-4.6
+claudeOpus:   claude-opus-5
+claudeSonnet: claude-sonnet-5
 claudeHaiku:  claude-haiku-4.5
 ```
 
