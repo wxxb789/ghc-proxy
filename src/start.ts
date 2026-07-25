@@ -289,15 +289,15 @@ export const start = defineCommand({
     },
     'upstream-queue-retries': {
       type: 'string',
-      description: 'Maximum retries for upstream 429 responses (default: 5)',
+      description: 'Maximum retries for transient upstream responses (default: 5)',
     },
     'upstream-queue-base-delay': {
       type: 'string',
-      description: 'Base delay in seconds for upstream 429 backoff when Retry-After is absent (default: 2)',
+      description: 'Base delay in seconds for upstream retry backoff when Retry-After is absent (default: 2)',
     },
     'upstream-queue-max-delay': {
       type: 'string',
-      description: 'Maximum delay in seconds for upstream 429 backoff (default: 60)',
+      description: 'Maximum delay in seconds for upstream retry backoff (default: 60)',
     },
     'ghe-domain': {
       alias: 'ghe',

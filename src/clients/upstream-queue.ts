@@ -1,6 +1,6 @@
 import consola from 'consola'
 
-import { HTTPError } from '~/lib/error'
+import { HTTPError, isCapacityLimitStatus, isTransientUpstreamStatus } from '~/lib/error'
 import { formatDurationMs } from '~/util/duration'
 import { sleep as defaultSleep } from '~/util/sleep'
 
@@ -96,8 +96,17 @@ export class UpstreamRequestQueue {
         throw error
       }
 
-      if (response.status !== 429 || !context.retryable || attempt >= this.options.maxRetries) {
-        if (response.status === 429 && !context.retryable) {
+      const { status } = response
+      const isCapacityLimit = isCapacityLimitStatus(status)
+      const willRetry = isTransientUpstreamStatus(status)
+        && context.retryable === true
+        && attempt < this.options.maxRetries
+
+      if (!willRetry) {
+        // Capacity limits are account- or service-wide, so hold the whole queue
+        // back whenever no retry will follow — including budget exhaustion and
+        // a maxRetries of 0, not just non-retryable requests.
+        if (isCapacityLimit) {
           this.applyCooldown(this.getRetryDelayMs(response, 0))
         }
         return {
@@ -108,11 +117,18 @@ export class UpstreamRequestQueue {
 
       const delayMs = this.getRetryDelayMs(response, attempt)
       await discardResponse(response)
+      // Install the cooldown before releasing the lease: release() drains the
+      // queue synchronously, so a waiter freed first would reach fetcher()
+      // before the back-pressure existed.
+      // Request-scoped faults (502, 504, ...) back off this request only.
+      // A global cooldown there would turn one bad request into a proxy stall.
+      if (isCapacityLimit) {
+        this.applyCooldown(delayMs)
+      }
       lease.release()
-      this.applyCooldown(delayMs)
       this.logger.warn(
         [
-          'Upstream rate limited;',
+          `Upstream ${status};`,
           `retrying ${formatRequestContext(context)}`,
           `in ${formatDurationMs(delayMs)}`,
           `(attempt ${attempt + 1}/${this.options.maxRetries})`,

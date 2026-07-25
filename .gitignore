@@ -9,6 +9,7 @@ dist/
 *.local
 /.claude/settings.local.json
 /plans
+/.plans/
 
 # tools
 .aider*

@@ -2,9 +2,9 @@
 
 ## Problem
 
-Copilot can return HTTP 429 for service-wide, account-wide, or model-family limits. The `/v1/messages` upstream currently does not expose a stable public quota that ghc-proxy can encode as a fixed local rate. Some 429 responses are plain text (`too many requests`) and may not include a precise reset time.
+Copilot can return HTTP 429 for service-wide, account-wide, or model-family limits, and 529 when the upstream is overloaded. The `/v1/messages` upstream currently does not expose a stable public quota that ghc-proxy can encode as a fixed local rate. Some 429 responses are plain text (`too many requests`) and may not include a precise reset time.
 
-Returning the first 429 directly makes the proxy available only when Copilot has spare capacity at the exact request instant. For agent clients, that breaks long-running workflows even when a short wait would have succeeded.
+Returning the first transient failure directly makes the proxy available only when Copilot has spare capacity at the exact request instant. For agent clients, that breaks long-running workflows even when a short wait would have succeeded.
 
 ## Design Goals
 
@@ -32,14 +32,26 @@ The queue is below all public API protocol logic. This keeps Anthropic, OpenAI, 
 
 1. Requests acquire a global upstream queue slot before calling Copilot.
 2. The default queue concurrency is `10`, so up to 10 upstream requests can occupy queue slots at the same time.
-3. If upstream returns a non-429 response, the response is handed back to `CopilotClient`.
-4. If upstream returns 429 and retry budget remains:
+3. If upstream returns a non-transient response, the response is handed back to `CopilotClient`.
+4. If upstream returns a transient status (`408`, `429`, `500`, `502`, `503`, `504`, `529`) and retry budget remains:
    - The response body is discarded.
    - A retry delay is selected from `Retry-After` when present.
    - Otherwise exponential backoff is used.
-   - The global queue enters cooldown so other queued requests do not immediately hit the same limit.
+   - For capacity limits (`429`, `529`) the global queue enters cooldown so other queued requests do not immediately hit the same limit.
    - The same request is retried after the delay.
-5. If retry budget is exhausted, the final 429 response is passed to normal upstream error handling.
+5. If retry budget is exhausted, the final response is passed to normal upstream error handling.
+
+### Retry scope vs. cooldown scope
+
+These are two different decisions and the queue treats them separately:
+
+| Status | Retried | Global cooldown |
+|--------|---------|-----------------|
+| `429`, `529` | Yes | Yes — the limit is account- or service-wide |
+| `408`, `500`, `502`, `503`, `504` | Yes | No — request-scoped fault |
+| everything else | No | No |
+
+A request-scoped 5xx says one request failed, not that the account is out of capacity. Applying a queue-wide cooldown there would let a single bad gateway hop stall every other in-flight request.
 
 Queue concurrency counts active upstream occupancy, not just the moment a request is started. For non-streaming responses, the slot is released after the response body is parsed. For streaming responses, the slot is released only when the returned upstream stream is consumed or closed. This prevents the proxy from starting another expensive upstream request while one stream is still active.
 
@@ -82,7 +94,7 @@ CLI flags override config file values for the current process.
 
 ## Error Handling
 
-The queue retries only HTTP 429 responses. Other statuses stay under the existing upstream error flow.
+The queue retries transient upstream statuses (`408`, `429`, `500`, `502`, `503`, `504`, `529`), classified by `isTransientUpstreamStatus()` in `src/lib/error.ts` — the same predicate the Copilot token refresh uses. Other statuses (`400`, `401`, `404`, ...) are returned immediately; retrying a request that can never succeed only multiplies it.
 
 The final exhausted response is still processed by `throwUpstreamError`, which:
 

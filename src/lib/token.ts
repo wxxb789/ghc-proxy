@@ -7,7 +7,7 @@ import { cacheVSCodeVersion, getClientConfig } from '~/clients/factory'
 
 import { authStore, modelCache } from '~/state'
 import { getCachedConfig, writeConfigField } from './config'
-import { HTTPError } from './error'
+import { HTTPError, isTransientUpstreamStatus } from './error'
 import { formatErrorMessage, retryWithBackoff } from './retry'
 
 const TRAILING_SLASHES_RE = /\/+$/
@@ -164,10 +164,8 @@ function isAuthError(error: unknown) {
     && (error.status === 401 || error.status === 403)
 }
 
-const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504])
-
 function isTransientHttpError(error: HTTPError): boolean {
-  return TRANSIENT_HTTP_STATUSES.has(error.status)
+  return isTransientUpstreamStatus(error.status)
 }
 
 async function logUser() {
