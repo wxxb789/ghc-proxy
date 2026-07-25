@@ -29,12 +29,22 @@ async function main() {
       ['npm', 'pack', '--json', '--ignore-scripts', '--silent'],
       repoRoot,
     )
-    const packOutput = extractTrailingJson(decodeOutput(packResult.stdout))
-    const parsed = JSON.parse(packOutput) as Array<NpmPackResult>
+    // npm pack --json --silent emits clean JSON on stdout. Parse it
+    // directly; only fall back to the trailing-JSON heuristic if a runner
+    // prepends noise. npm <=11 returns an array `[{ filename }]`; npm 12
+    // returns an object keyed by package name `{ "<pkg>": { filename } }`.
+    const rawStdout = decodeOutput(packResult.stdout).trim()
+    const parsedRaw = (tryParseJsonOrUndefined(rawStdout)
+      ?? JSON.parse(extractTrailingJson(rawStdout))) as
+      | Array<NpmPackResult>
+      | Record<string, NpmPackResult>
+    const parsed = Array.isArray(parsedRaw)
+      ? parsedRaw
+      : Object.values(parsedRaw)
     const tarballName = parsed[0]?.filename
 
     if (!tarballName) {
-      throw new Error(`npm pack did not return a tarball filename: ${packOutput}`)
+      throw new Error(`npm pack did not return a tarball filename: ${rawStdout}`)
     }
 
     tarballPath = path.join(repoRoot, tarballName)

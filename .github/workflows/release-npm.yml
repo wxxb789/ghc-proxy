@@ -38,6 +38,19 @@ jobs:
       - name: Verify npm pack lifecycle (prepack -> tsdown)
         run: npm pack --dry-run
 
+      - name: Verify tarball ships no source maps
+        run: |
+          # tsdown (prepack) logs to stdout, so parse the file listing npm
+          # prints to stderr rather than --json. Fail if any .map is packed;
+          # trimming lives in package.json "files": dist/**/*.mjs.
+          MAPS="$(npm pack --dry-run 2>&1 >/dev/null | grep -oE 'dist/[^ ]+\.map' || true)"
+          if [ -n "$MAPS" ]; then
+            echo "Source maps must not ship to npm (files should stay dist/**/*.mjs):"
+            echo "$MAPS"
+            exit 1
+          fi
+          echo "OK: no .map files in tarball"
+
       - name: Validate release tag matches package version
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"

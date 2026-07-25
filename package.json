@@ -19,7 +19,7 @@
     "ghc-proxy": "./dist/main.mjs"
   },
   "files": [
-    "dist"
+    "dist/**/*.mjs"
   ],
   "engines": {
     "bun": ">=1.3",
