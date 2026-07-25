@@ -113,6 +113,20 @@ See `tests/AGENTS.md` for the test-runner conventions, helper inventory, and fix
 
 - Feature branches with PRs; squash-merge into `main`.
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`wxxb789/ghc-proxy`), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary; label strings equal the role names. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONCEPTS.md` (glossary) + `docs/design/` (decisions) + `docs/solutions/` (past problems). See `docs/agents/domain.md`.
+
 ## Release Automation
 
 - **Tag-triggered pipeline:** `.github/workflows/release-npm.yml` handles changelog + npm publish.
