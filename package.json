@@ -41,6 +41,7 @@
     "smoke:cache": "bun run scripts/smoke/cache-control.ts",
     "smoke:packaged": "bun run scripts/smoke/packaged-cli.ts",
     "smoke:translation": "bun run scripts/smoke/translation.ts",
+    "serve": "NODE_ENV=production bun run ./src/main.ts start --wait --idle-timeout=255 --upstream-timeout=1800",
     "start": "NODE_ENV=production bun run ./src/main.ts",
     "typecheck": "npx tsc --project tsconfig.json"
   },
