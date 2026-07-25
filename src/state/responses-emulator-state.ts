@@ -10,7 +10,7 @@ import { configStore } from './config-store'
 const DEFAULT_MAX_TOTAL_ENTRIES = 10_000
 const BACKGROUND_PRUNE_INTERVAL_MS = 60_000
 
-export type ResponsesEmulatorDeletionKind = 'response' | 'conversation' | 'input_items'
+export type ResponsesEmulatorDeletionKind = 'response' | 'input_items'
 
 interface StoredEntry<T> {
   expiresAt: number
@@ -35,26 +35,16 @@ export interface ResponsesEmulatorOptions {
   maxTotalEntries?: number
 }
 
-export interface ResponsesEmulatorState {
-  isEnabled: () => boolean
-  getDefaultTtlSeconds: () => number
-  clear: () => void
-  pruneExpired: (now?: number) => void
-  snapshot: (now?: number) => ResponsesEmulatorSnapshot
-  totalEntries: () => number
-  setResponse: (response: ResponsesResult, options?: { ttlSeconds?: number }) => ResponsesResult
-  getResponse: (responseId: string) => ResponsesResult | undefined
-  deleteResponse: (responseId: string, options?: { ttlSeconds?: number }) => ResponseDeletionResult
-  setConversation: (conversation: ResponseConversation, options?: { ttlSeconds?: number }) => ResponseConversation
-  getConversation: (conversationId: string) => ResponseConversation | undefined
-  deleteConversation: (conversationId: string, options?: { ttlSeconds?: number }) => ResponseDeletionResult
-  setConversationHead: (conversationId: string, responseId: string, options?: { ttlSeconds?: number }) => string
-  getConversationHead: (conversationId: string) => string | undefined
-  setInputItems: (responseId: string, inputItems: Array<ResponseInputItem>, options?: { ttlSeconds?: number }) => Array<ResponseInputItem>
-  getInputItems: (responseId: string) => Array<ResponseInputItem> | undefined
-  deleteInputItems: (responseId: string, options?: { ttlSeconds?: number }) => ResponseDeletionResult
-  getDeletionFlag: (kind: ResponsesEmulatorDeletionKind, id: string) => ResponsesEmulatorDeletionFlag | undefined
+/** Per-write TTL override; falls back to the configured emulator TTL. */
+interface TtlOptions {
+  ttlSeconds?: number
 }
+
+/**
+ * The store's shape is inferred from {@link createResponsesEmulatorState}'s
+ * return value rather than declared separately, so the two cannot drift.
+ */
+export type ResponsesEmulatorState = ReturnType<typeof createResponsesEmulatorState>
 
 function cloneValue<T>(value: T): T {
   return structuredClone(value)
@@ -82,7 +72,7 @@ function responseKeyFromConversation(conversation: ResponseConversation): string
     : conversation.id
 }
 
-export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): ResponsesEmulatorState {
+export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions) {
   const maxTotalEntries = opts?.maxTotalEntries ?? DEFAULT_MAX_TOTAL_ENTRIES
 
   const responseRecords = new Map<string, StoredEntry<ResponsesResult>>()
@@ -90,7 +80,6 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
   const conversationHeadRecords = new Map<string, StoredEntry<string>>()
   const inputItemRecords = new Map<string, StoredEntry<Array<ResponseInputItem>>>()
   const responseDeletionFlags = new Map<string, StoredEntry<ResponsesEmulatorDeletionFlag>>()
-  const conversationDeletionFlags = new Map<string, StoredEntry<ResponsesEmulatorDeletionFlag>>()
   const inputItemDeletionFlags = new Map<string, StoredEntry<ResponsesEmulatorDeletionFlag>>()
 
   const allMaps: Array<Map<string, StoredEntry<unknown>>> = [
@@ -99,7 +88,6 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
     conversationHeadRecords,
     inputItemRecords,
     responseDeletionFlags,
-    conversationDeletionFlags,
     inputItemDeletionFlags,
   ] as Array<Map<string, StoredEntry<unknown>>>
 
@@ -216,8 +204,6 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
     switch (kind) {
       case 'response':
         return responseDeletionFlags
-      case 'conversation':
-        return conversationDeletionFlags
       case 'input_items':
         return inputItemDeletionFlags
     }
@@ -229,7 +215,6 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
     pruneMap(conversationHeadRecords, at)
     pruneMap(inputItemRecords, at)
     pruneMap(responseDeletionFlags, at)
-    pruneMap(conversationDeletionFlags, at)
     pruneMap(inputItemDeletionFlags, at)
   }
 
@@ -271,21 +256,12 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
   }
 
   return {
-    isEnabled() {
-      return configStore.isEmulatorEnabled()
-    },
-
-    getDefaultTtlSeconds() {
-      return configStore.getEmulatorTtlSeconds()
-    },
-
     clear() {
       responseRecords.clear()
       conversationRecords.clear()
       conversationHeadRecords.clear()
       inputItemRecords.clear()
       responseDeletionFlags.clear()
-      conversationDeletionFlags.clear()
       inputItemDeletionFlags.clear()
       stopBackgroundPrune()
     },
@@ -306,30 +282,28 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
         inputItems: inputItemRecords.size,
         deletions:
           responseDeletionFlags.size
-          + conversationDeletionFlags.size
           + inputItemDeletionFlags.size,
       }
     },
 
-    setResponse(response, options) {
+    setResponse(response: ResponsesResult, options?: TtlOptions) {
       removeDeletionFlag(responseDeletionFlags, response.id)
       if (response.conversation !== undefined && response.conversation !== null) {
         const conversationId = responseKeyFromConversation(response.conversation)
         writeMap(conversationRecords, conversationId, response.conversation, options?.ttlSeconds)
         writeMap(conversationHeadRecords, conversationId, response.id, options?.ttlSeconds)
-        removeDeletionFlag(conversationDeletionFlags, conversationId)
       }
       return writeMap(responseRecords, response.id, response, options?.ttlSeconds)
     },
 
-    getResponse(responseId) {
+    getResponse(responseId: string): ResponsesResult | undefined {
       if (readDeletionFlag(responseDeletionFlags, responseId)) {
         return undefined
       }
       return readMap(responseRecords, responseId)
     },
 
-    deleteResponse(responseId, options) {
+    deleteResponse(responseId: string, options?: TtlOptions): ResponseDeletionResult {
       pruneExpiredRecords()
       const existing = readMap(responseRecords, responseId)
       deleteMapEntry(responseRecords, responseId)
@@ -350,63 +324,39 @@ export function createResponsesEmulatorState(opts?: ResponsesEmulatorOptions): R
       }
     },
 
-    setConversation(conversation, options) {
+    setConversation(conversation: ResponseConversation, options?: TtlOptions) {
       const conversationId = responseKeyFromConversation(conversation)
-      removeDeletionFlag(conversationDeletionFlags, conversationId)
       return writeMap(conversationRecords, conversationId, conversation, options?.ttlSeconds)
     },
 
-    getConversation(conversationId) {
-      if (readDeletionFlag(conversationDeletionFlags, conversationId)) {
-        return undefined
-      }
+    getConversation(conversationId: string): ResponseConversation | undefined {
       return readMap(conversationRecords, conversationId)
     },
 
-    deleteConversation(conversationId, options) {
-      pruneExpiredRecords()
-      deleteMapEntry(conversationRecords, conversationId)
-      deleteMapEntry(conversationHeadRecords, conversationId)
-      putDeletionFlag(conversationDeletionFlags, conversationId, options?.ttlSeconds)
-      return {
-        id: conversationId,
-        object: 'conversation.deleted',
-        deleted: true,
-      }
-    },
-
-    setConversationHead(conversationId, responseId, options) {
+    setConversationHead(conversationId: string, responseId: string, options?: TtlOptions) {
       return writeMap(conversationHeadRecords, conversationId, responseId, options?.ttlSeconds)
     },
 
-    getConversationHead(conversationId) {
+    getConversationHead(conversationId: string): string | undefined {
       return readMap(conversationHeadRecords, conversationId)
     },
 
-    setInputItems(responseId, inputItems, options) {
+    setInputItems(responseId: string, inputItems: Array<ResponseInputItem>, options?: TtlOptions) {
       removeDeletionFlag(inputItemDeletionFlags, responseId)
       return writeMap(inputItemRecords, responseId, inputItems, options?.ttlSeconds)
     },
 
-    getInputItems(responseId) {
+    getInputItems(responseId: string): Array<ResponseInputItem> | undefined {
       if (readDeletionFlag(inputItemDeletionFlags, responseId)) {
         return undefined
       }
       return readMap(inputItemRecords, responseId)
     },
 
-    deleteInputItems(responseId, options) {
-      pruneExpiredRecords()
-      deleteMapEntry(inputItemRecords, responseId)
-      putDeletionFlag(inputItemDeletionFlags, responseId, options?.ttlSeconds)
-      return {
-        id: responseId,
-        object: 'response.input_items.deleted',
-        deleted: true,
-      }
-    },
-
-    getDeletionFlag(kind, id) {
+    getDeletionFlag(
+      kind: ResponsesEmulatorDeletionKind,
+      id: string,
+    ): ResponsesEmulatorDeletionFlag | undefined {
       return readDeletionFlag(deletionMap(kind), id)
     },
   }
