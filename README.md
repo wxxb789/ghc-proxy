@@ -59,8 +59,8 @@ Create or edit `~/.claude/settings.json` (this applies globally to all projects)
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4141",
     "ANTHROPIC_AUTH_TOKEN": "dummy-token",
-    "ANTHROPIC_MODEL": "claude-opus-4.8",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4.6",
+    "ANTHROPIC_MODEL": "claude-opus-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   },
@@ -87,7 +87,7 @@ bunx ghc-proxy@latest start
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | The model used for Haiku-tier (fast/cheap) tasks |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | Disables telemetry and non-essential network traffic |
 
-> **Tip:** The model names above (e.g. `claude-opus-4.8`) are mapped to actual Copilot models by the proxy. See [Model Mapping](#model-mapping) below for details.
+> **Tip:** The model names above (e.g. `claude-opus-5`) are mapped to actual Copilot models by the proxy. See [Model Mapping](#model-mapping) below for details.
 
 See the [Claude Code settings docs](https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables) for more options.
 
@@ -191,8 +191,8 @@ All fields are optional. The full schema:
 | `githubToken` | `string` | -- | Persisted GitHub token. Normally written automatically by `auth` / `--github-token`; you rarely set this by hand |
 | `modelRewrites` | `{ from, to }[]` | -- | Glob-pattern model substitution rules (see [Model Rewrites](#model-rewrites)) |
 | `modelFallback` | `object` | -- | Override default model fallbacks (see [Customizing Fallbacks](#customizing-fallbacks)) |
-| `modelFallback.claudeOpus` | `string` | `claude-opus-4.8` | Fallback for `claude-opus-*` models |
-| `modelFallback.claudeSonnet` | `string` | `claude-sonnet-4.6` | Fallback for `claude-sonnet-*` models |
+| `modelFallback.claudeOpus` | `string` | `claude-opus-5` | Fallback for `claude-opus-*` models |
+| `modelFallback.claudeSonnet` | `string` | `claude-sonnet-5` | Fallback for `claude-sonnet-*` models |
 | `modelFallback.claudeHaiku` | `string` | `claude-haiku-4.5` | Fallback for `claude-haiku-*` models |
 | `smallModel` | `string` | -- | Target model for compact request routing (see [Small-Model Routing](#small-model-routing)) |
 | `compactUseSmallModel` | `boolean` | `false` | Route compact/summarization requests to `smallModel` |
@@ -219,8 +219,8 @@ Example:
     { "from": "claude-haiku-*", "to": "gpt-4.1-mini" }
   ],
   "modelFallback": {
-    "claudeOpus": "claude-opus-4.8",
-    "claudeSonnet": "claude-sonnet-4.6"
+    "claudeOpus": "claude-opus-5",
+    "claudeSonnet": "claude-sonnet-5"
   },
   "smallModel": "gpt-4.1-mini",
   "compactUseSmallModel": true,
@@ -250,8 +250,8 @@ When Claude Code sends a request for a model like `claude-sonnet-4.6`, the proxy
 
 | Prefix | Default Fallback |
 |--------|-----------------|
-| `claude-opus-*` | `claude-opus-4.8` |
-| `claude-sonnet-*` | `claude-sonnet-4.6` |
+| `claude-opus-*` | `claude-opus-5` |
+| `claude-sonnet-*` | `claude-sonnet-5` |
 | `claude-haiku-*` | `claude-haiku-4.5` |
 
 ### Customizing Fallbacks
@@ -259,8 +259,8 @@ When Claude Code sends a request for a model like `claude-sonnet-4.6`, the proxy
 You can override the defaults with **environment variables**:
 
 ```bash
-MODEL_FALLBACK_CLAUDE_OPUS=claude-opus-4.8
-MODEL_FALLBACK_CLAUDE_SONNET=claude-sonnet-4.6
+MODEL_FALLBACK_CLAUDE_OPUS=claude-opus-5
+MODEL_FALLBACK_CLAUDE_SONNET=claude-sonnet-5
 MODEL_FALLBACK_CLAUDE_HAIKU=claude-haiku-4.5
 ```
 
@@ -269,8 +269,8 @@ Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
 ```json
 {
   "modelFallback": {
-    "claudeOpus": "claude-opus-4.8",
-    "claudeSonnet": "claude-sonnet-4.6",
+    "claudeOpus": "claude-opus-5",
+    "claudeSonnet": "claude-sonnet-5",
     "claudeHaiku": "claude-haiku-4.5"
   }
 }
