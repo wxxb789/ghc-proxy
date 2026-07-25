@@ -44,20 +44,31 @@ The proxy queries each model's metadata from Copilot's model list to determine:
 | `adaptive_thinking`    | Whether to fill thinking config                      |
 | Vision limits          | Max image tokens, max images per request             |
 
-### Model Endpoint Map (June 17, 2026)
+### Model Endpoint Map
+
+Claude `/v1/messages` rows re-probed **2026-07-25** (enterprise endpoint `api.enterprise.githubcopilot.com`); `/responses` and `/chat/completions` rows are the **2026-06-17** baseline and may be stale. Live surface is volatile — re-run the probe scripts before trusting.
 
 | Model | Endpoints | Notes |
 |-------|-----------|-------|
+| `claude-opus-5` | `/v1/messages`, `/chat/completions` | 1000k ctx; `adaptive_thinking`; ~1K cache threshold |
 | `claude-opus-4.8` | `/v1/messages`, `/chat/completions` | 1000k ctx |
 | `claude-opus-4.7` / `-high` / `-xhigh` | `/v1/messages`, `/chat/completions` | 1000k ctx; `-xhigh` has 8K cache threshold |
 | `claude-opus-4.6` | `/v1/messages`, `/chat/completions` | 1000k ctx |
-| `claude-sonnet-4.6` | `/v1/messages`, `/chat/completions` | 1000k ctx |
-| `claude-haiku-4.5` | `/v1/messages`, `/chat/completions` | 200k ctx |
+| `claude-sonnet-5` | `/v1/messages`, `/chat/completions` | 1000k ctx; `adaptive_thinking`; Anthropic-native (accepts bm25 tool search) |
+| `claude-sonnet-4.6` | `/v1/messages`, `/chat/completions` | 1000k ctx; Bedrock-served (rejects bm25) |
+| `claude-sonnet-4.5` | `/v1/messages`, `/chat/completions` | 200k ctx; no `adaptive_thinking`/effort |
+| `claude-haiku-4.5` | `/v1/messages`, `/chat/completions` | 200k ctx; no `adaptive_thinking`/effort |
 | `gpt-5.5` | `/responses` | 1050k ctx; same tool support as gpt-5.4 |
 | `gpt-5.4` / `-mini` | `/responses` | 1050k / 400k ctx |
 | `gpt-5.3-codex` | `/responses` | 400k ctx |
 | `gemini-3.5-flash` | `/chat/completions` | 1000k ctx |
 | `gemini-3.1-pro-preview` | `/chat/completions` | 1000k ctx |
+
+`claude-opus-5` / `claude-sonnet-5` are the default `claude-opus-*` / `claude-sonnet-*` fallbacks; both are live known models, so exact-match resolution returns them directly (the fallback branch never fires for them).
+
+**Reasoning / effort control** (`/v1/messages`): only `output_config.effort` (string, e.g. `high`/`low`/`max`) is accepted; `effort: null`, `reasoning_effort`, and `reasoning.effort` are rejected under strict validation. `adaptive_thinking` models (`opus-4.6`/`4.7`/`4.8`/`5`, `sonnet-4.6`/`5`) accept `thinking: { type: "adaptive" }` and `output_config.effort`; non-adaptive models (`sonnet-4.5`, `haiku-4.5`) reject both. See `docs/messages-routing-and-translation.md` for how the proxy converts classic `thinking: enabled` to adaptive.
+
+**Official tool support** (`/v1/messages`, `opus-5` / `sonnet-5`, 2026-07-25): supported — `standard_function`, `bash_20250124`, `text_editor_20250728`, `memory_20250818`, `custom`, `tool_search_tool_bm25`(+`_20251119`), `tool_search_tool_regex`(+`_20251119`), `code_execution_20250522`/`20250825`/`20260120`. Rejected — older `text_editor` dates, `web_search_*`, `web_fetch_*`, `mcp_*`, `computer_*`. (`code_execution` was `opus-4.8`-only in June; now broadly advertised. `sonnet-4.6` rejected bm25 as Bedrock-served — `sonnet-5` accepts it.)
 
 ## Execution Path Selection
 

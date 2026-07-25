@@ -129,6 +129,8 @@ As of April 30, 2026, the Copilot `/v1/messages` endpoint recognizes type-based 
 
 All Opus 4.7 variants (`claude-opus-4.7`, `claude-opus-4.7-high`, `claude-opus-4.7-xhigh`) have identical tool support. They gained `code_execution` (all three versions) and `tool_search_tool_bm25` compared to Opus 4.6.
 
+**2026-07-25 update (`claude-opus-5`, `claude-sonnet-5`):** both re-probed with an identical surface — 12 supported / 9 rejected. Supported: standard function, `bash_20250124`, `text_editor_20250728`, `memory_20250818`, `custom`, `tool_search_tool_bm25`(+`_20251119`), `tool_search_tool_regex`(+`_20251119`), `code_execution_20250522`/`20250825`/`20260120`. Rejected: older `text_editor` dates, `web_search_*`, `web_fetch_*`, `mcp_*`, `computer_*`. Two shifts from the April-30 baseline: `code_execution` is no longer Opus-4.7-only (both v5 models accept all three versions), and `claude-sonnet-5` accepts `tool_search_tool_bm25` — unlike Bedrock-served `claude-sonnet-4.6`, which rejects bm25 — indicating v5 Sonnet runs on Anthropic-native infra.
+
 On the `/responses` endpoint (GPT models including `gpt-5.5`), `web_search_preview` and custom tools (`apply_patch`, `shell`) are accepted. `file_search`, `code_interpreter`, `computer_use_preview`, `image_generation`, and `mcp` are rejected. `gpt-5.5` has identical tool support to `gpt-5.4`.
 
 ### Prompt caching
@@ -136,6 +138,8 @@ On the `/responses` endpoint (GPT models including `gpt-5.5`), `web_search_previ
 As of April 30, 2026, prompt caching via `cache_control: { type: "ephemeral" }` is supported across all tested models on both `/v1/messages` and `/responses` paths. One notable exception:
 
 - `claude-opus-4.7-xhigh` has a higher minimum cache threshold (~8K tokens vs the standard ~4K for other Opus models). The `cache_control` field is accepted without error, but caching only activates when the cacheable content exceeds approximately 8192 tokens.
+
+**2026-07-25 update:** `claude-opus-5` cache-hits at every probed size down to ~1024 tokens — a lower threshold than the ~8192 measured on `claude-opus-4.6` in June.
 
 Run `bun scripts/probes/cache-threshold.ts --model=<id>` to probe a specific model's cache threshold.
 

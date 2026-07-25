@@ -2,6 +2,15 @@
 
 Tracked items for future work. Items are roughly ordered by priority.
 
+## Upstream Probe Refresh
+
+- [ ] **Re-probe `/responses` + `/chat/completions` (gpt/gemini) upstream surface**
+  - The 2026-07-25 refresh covered only the Claude `/v1/messages` surface (models, output_config/effort, cache threshold, official tools). The `/responses` and gpt/gemini rows in `docs/design/model-routing.md` "Model Endpoint Map" are still the 2026-06-17 baseline and may be stale.
+  - New models observed in the 2026-07-25 listing but NOT behavior-probed: `gpt-5.6-terra` / `-sol` / `-luna` (1050k ctx), `gemini-3.6-flash`, `mai-code-1-flash-picker`, `trajectory-compaction`.
+  - Re-run sequentially (shared rate-limited upstream, burns real quota): `scripts/probes/responses-resilience.ts`, `scripts/probes/copilot-tools.ts` (responses models), `scripts/matrix/live-compat-matrix.ts` as needed.
+  - Confirm June-17 `/responses` findings still hold: `store:true` → 400 (ZDR org), `previous_response_id` → 400, encrypted_content round-trip, gemini-3.1-pro-preview cache-miss.
+  - Update the endpoint map + `docs/messages-routing-and-translation.md` and refresh the `project-copilot-upstream-status` memory snapshot.
+
 ## Best Practices Improvements
 
 ### High Priority
