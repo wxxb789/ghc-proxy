@@ -1,8 +1,15 @@
 import type { CapturedEmbeddingCall } from './helpers'
+import type { EmbeddingRequest, EmbeddingResponse } from '~/types'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { CopilotClient } from '~/clients'
+import { handleEmbeddingsCore } from '~/routes/embeddings/handler'
+import { handleModelsCore } from '~/routes/models/handler'
+import { handleRetrieveResponseCore } from '~/routes/responses/resource-handler'
+import { modelCache } from '~/state'
 
 import {
+  buildModel,
+  buildModelsResponse,
   createApp,
   mockEmbeddings,
   restoreStateSnapshot,
@@ -80,5 +87,75 @@ describe('embeddings route', () => {
       encoding_format: 'float',
       user: 'user-123',
     })
+  })
+})
+
+// The routes that bypass runPipeline construct their own CopilotClient, which
+// left prototype patching as the only way to intercept them. Each now accepts
+// an optional client so a test can hand in a stand-in directly. These tests
+// exercise that seam — note the absence of any CopilotClient.prototype write.
+
+describe('client injection for non-pipeline handlers', () => {
+  test('handleEmbeddingsCore uses an injected client', async () => {
+    const calls: Array<CapturedEmbeddingCall> = []
+    const client = {
+      createEmbeddings: (payload: EmbeddingRequest) => {
+        calls.push({ payload })
+        return Promise.resolve({
+          object: 'list',
+          model: 'text-embedding-3-small',
+          data: [{ object: 'embedding', index: 0, embedding: [0.5] }],
+          usage: { prompt_tokens: 1, total_tokens: 1 },
+        } satisfies EmbeddingResponse)
+      },
+    } as unknown as CopilotClient
+
+    const result = await handleEmbeddingsCore(
+      { model: 'text-embedding-3-small', input: 'hello' },
+      new Headers({ 'content-type': 'application/json' }),
+      client,
+    )
+
+    expect(calls).toHaveLength(1)
+    // Normalization still applies on the injected path.
+    expect(calls[0]?.payload.input).toEqual(['hello'])
+    expect(result).toMatchObject({ object: 'list' })
+  })
+
+  test('handleModelsCore uses an injected client on a cache miss', async () => {
+    modelCache.clearModels()
+    let getModelsCalls = 0
+    const client = {
+      getModels: () => {
+        getModelsCalls++
+        return Promise.resolve(buildModelsResponse(buildModel('claude-opus-4.6')))
+      },
+    } as unknown as CopilotClient
+
+    const result = await handleModelsCore(client) as { data: Array<{ id: string }> }
+
+    expect(getModelsCalls).toBe(1)
+    expect(result.data.map(model => model.id)).toEqual(['claude-opus-4.6'])
+  })
+
+  test('handleRetrieveResponseCore uses an injected client', async () => {
+    const calls: Array<string> = []
+    const client = {
+      getResponse: (responseId: string) => {
+        calls.push(responseId)
+        return Promise.resolve({ id: responseId, object: 'response' })
+      },
+    } as unknown as CopilotClient
+
+    const result = await handleRetrieveResponseCore({
+      params: { responseId: 'resp_injected' },
+      url: 'http://localhost/v1/responses/resp_injected',
+      headers: new Headers(),
+      signal: new AbortController().signal,
+      client,
+    })
+
+    expect(calls).toEqual(['resp_injected'])
+    expect(result).toMatchObject({ id: 'resp_injected' })
   })
 })

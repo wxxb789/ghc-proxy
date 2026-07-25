@@ -1,12 +1,18 @@
+import type { CopilotClient } from '~/clients'
+
 import { cacheModels, createCopilotClient } from '~/clients/factory'
 import { modelCache } from '~/state'
 
 /**
  * Core handler for listing models.
+ *
+ * `client` is an injection seam for tests; production callers omit it. This
+ * route does not go through `runPipeline`, so it constructs its own client on
+ * a cache miss.
  */
-export async function handleModelsCore(): Promise<object> {
+export async function handleModelsCore(client?: CopilotClient): Promise<object> {
   if (!modelCache.getModels()) {
-    const copilotClient = createCopilotClient()
+    const copilotClient = client ?? createCopilotClient()
     await cacheModels(copilotClient)
   }
 
