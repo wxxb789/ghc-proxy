@@ -36,6 +36,26 @@ export class HTTPError extends Error {
   }
 }
 
+const TRANSIENT_UPSTREAM_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529])
+
+/**
+ * Upstream statuses worth retrying: request-scoped faults (timeouts, gateway
+ * errors) plus capacity limits. Shared by `UpstreamRequestQueue` and the
+ * Copilot token refresh so both agree on what "transient" means.
+ */
+export function isTransientUpstreamStatus(status: number): boolean {
+  return TRANSIENT_UPSTREAM_STATUSES.has(status)
+}
+
+/**
+ * Capacity signals that apply to the whole account or service rather than one
+ * request. Only these warrant global back-pressure — applying a queue-wide
+ * cooldown to a request-scoped 5xx turns one bad request into a proxy stall.
+ */
+export function isCapacityLimitStatus(status: number): boolean {
+  return status === 429 || status === 529
+}
+
 export function throwInvalidRequestError(
   message: string,
   param: string,
@@ -94,7 +114,13 @@ function isStructuredErrorPayload(
 }
 
 function upstreamErrorType(status: number): string {
-  return status === 429 ? 'rate_limit_error' : 'upstream_error'
+  if (status === 429)
+    return 'rate_limit_error'
+  // Anthropic clients classify 529 as overloaded_error; leaking a non-standard
+  // type here would break error handling at the proxy boundary.
+  if (status === 529)
+    return 'overloaded_error'
+  return 'upstream_error'
 }
 
 function createFallbackUpstreamError(

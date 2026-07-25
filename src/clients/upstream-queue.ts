@@ -1,6 +1,6 @@
 import consola from 'consola'
 
-import { HTTPError } from '~/lib/error'
+import { HTTPError, isCapacityLimitStatus, isTransientUpstreamStatus } from '~/lib/error'
 import { formatDurationMs } from '~/util/duration'
 import { sleep as defaultSleep } from '~/util/sleep'
 
@@ -96,8 +96,15 @@ export class UpstreamRequestQueue {
         throw error
       }
 
-      if (response.status !== 429 || !context.retryable || attempt >= this.options.maxRetries) {
-        if (response.status === 429 && !context.retryable) {
+      const { status } = response
+      const willRetry = isTransientUpstreamStatus(status)
+        && context.retryable === true
+        && attempt < this.options.maxRetries
+
+      if (!willRetry) {
+        // Capacity limits are account- or service-wide, so hold the whole queue
+        // back even when this request itself won't retry.
+        if (isCapacityLimitStatus(status) && !context.retryable) {
           this.applyCooldown(this.getRetryDelayMs(response, 0))
         }
         return {
@@ -109,10 +116,14 @@ export class UpstreamRequestQueue {
       const delayMs = this.getRetryDelayMs(response, attempt)
       await discardResponse(response)
       lease.release()
-      this.applyCooldown(delayMs)
+      // Request-scoped faults (502, 504, ...) back off this request only.
+      // A global cooldown there would turn one bad request into a proxy stall.
+      if (isCapacityLimitStatus(status)) {
+        this.applyCooldown(delayMs)
+      }
       this.logger.warn(
         [
-          'Upstream rate limited;',
+          `Upstream ${status};`,
           `retrying ${formatRequestContext(context)}`,
           `in ${formatDurationMs(delayMs)}`,
           `(attempt ${attempt + 1}/${this.options.maxRetries})`,

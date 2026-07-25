@@ -121,9 +121,9 @@ bunx ghc-proxy@latest selfcheck      # Probe the packaged bundle (loads every to
 | `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds (`0` disables; Bun max is `255`; streaming routes disable idle timeout automatically) |
 | `--upstream-timeout` | -- | `1800` | Upstream request timeout in seconds (0 to disable) |
 | `--upstream-queue-concurrency` | -- | `10` | Maximum concurrent Copilot upstream requests |
-| `--upstream-queue-retries` | -- | `5` | Maximum retries for upstream 429 responses |
-| `--upstream-queue-base-delay` | -- | `2` | Base delay in seconds for upstream 429 backoff when `Retry-After` is absent |
-| `--upstream-queue-max-delay` | -- | `60` | Maximum delay in seconds for upstream 429 backoff |
+| `--upstream-queue-retries` | -- | `5` | Maximum retries for transient upstream responses (`408`, `429`, `500`, `502`, `503`, `504`, `529`) |
+| `--upstream-queue-base-delay` | -- | `2` | Base delay in seconds for upstream retry backoff when `Retry-After` is absent |
+| `--upstream-queue-max-delay` | -- | `60` | Maximum delay in seconds for upstream retry backoff |
 | `--ghe-domain` | `--ghe` | -- | GitHub Enterprise Cloud company domain (e.g. `company.ghe.com`). Required for GHE.com device login on first run; persisted automatically for later runs. |
 
 ## Rate Limiting
@@ -206,9 +206,9 @@ All fields are optional. The full schema:
 | `responsesOfficialEmulatorTtlSeconds` | `number` | `14400` | In-memory TTL for locally emulated Responses state |
 | `modelReasoningEfforts` | `Record<string, string>` | -- | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, or `xhigh` |
 | `upstreamQueueConcurrency` | `number` | `10` | Maximum concurrent Copilot upstream requests |
-| `upstreamQueueMaxRetries` | `number` | `5` | Maximum retries for upstream 429 responses |
-| `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream 429 backoff when `Retry-After` is absent |
-| `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum delay (seconds) for upstream 429 backoff |
+| `upstreamQueueMaxRetries` | `number` | `5` | Maximum retries for transient upstream responses (`408`, `429`, `500`, `502`, `503`, `504`, `529`) |
+| `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream retry backoff when `Retry-After` is absent |
+| `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum delay (seconds) for upstream retry backoff |
 | `gheDomain` | `string` | -- | GitHub Enterprise Cloud company domain (persisted automatically after GHE.com auth) |
 
 Example:

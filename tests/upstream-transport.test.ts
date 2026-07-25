@@ -738,6 +738,40 @@ describe('upstream error diagnostics', () => {
     })
   })
 
+  test('classifies upstream 529 as overloaded_error', async () => {
+    consola.error = ((..._args: unknown[]) => {}) as typeof consola.error
+
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        fetch: ((async () =>
+          new Response('overloaded\n', {
+            status: 529,
+            statusText: 'Overloaded',
+            headers: { 'content-type': 'text/plain' },
+          })) as unknown) as typeof fetch,
+      },
+    )
+
+    // Anthropic clients retry `overloaded_error`; leaking `upstream_error`
+    // would break their error classification at the proxy boundary.
+    await expect(
+      client.createEmbeddings({
+        model: 'text-embedding-3-small',
+        input: ['hello'],
+      }),
+    ).rejects.toMatchObject({
+      status: 529,
+      body: {
+        error: {
+          message: 'overloaded',
+          type: 'overloaded_error',
+        },
+      },
+    })
+  })
+
   test('retries queued upstream rate limit responses before surfacing success', async () => {
     let now = 1_000
     const requestQueue = new UpstreamRequestQueue(
