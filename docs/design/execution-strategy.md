@@ -145,7 +145,7 @@ The two type parameters let each route keep its own payload and strategy context
 
 1. **Ingest** -- calls `protocolRegistry.ingest()` for the configured protocol ID, producing a validated `payload` and `RequestMeta`.
 2. **afterIngest hook** (optional) -- runs immediately after parsing. Routes use this for debug logging or header pre-processing (e.g., the messages handler extracts the `anthropic-beta` header here).
-3. **Transform** -- applies the route's `ModelTransformChain`, updating the payload model and building a `ModelMappingInfo` trace for request logging.
+3. **Transform** -- calls `resolveRequestModel()`, which applies the model rewrite, optional compact small-model routing, and the cached-model lookup, updating `payload.model` and building a `ModelMappingInfo` trace for request logging.
 4. **afterTransform hook** (optional) -- runs after model transformation. The chat-completions handler uses this to calculate token counts and set `max_tokens` defaults.
 5. **Dispatch** -- creates a `CopilotClient` and upstream signal, builds the strategy context via `buildStrategyContext()`, selects the strategy from the `StrategyRegistry`, and executes it.
 
@@ -154,7 +154,7 @@ The two type parameters let each route keep its own payload and strategy context
 ```typescript
 interface PipelineConfig<TPayload, TStrategyCtx> {
   protocol: ProtocolId
-  transformChain: ModelTransformChain
+  applyModelPolicy?: boolean // compact small-model routing; /v1/messages only
   strategyRegistry: StrategyRegistry<TStrategyCtx>
   buildStrategyContext: (ctx: BuildStrategyContextParams) => TStrategyCtx
   afterIngest?: (ctx: IngestContext<TPayload>) => TPayload
@@ -162,7 +162,7 @@ interface PipelineConfig<TPayload, TStrategyCtx> {
 }
 ```
 
-Each route provides its own protocol ID, transform chain, strategy registry, and a `buildStrategyContext` function that maps the generic pipeline state into the route-specific strategy context type. The lifecycle hooks let routes inject route-specific logic at well-defined points without forking the pipeline. `afterIngest` resolves the payload that flows into transform/dispatch and its return is required: side-effect-only callers end with `return ctx.payload` to forward the ingested payload unchanged, while replacement callers (e.g. `/responses`) return a different payload to swap in the emulator's upstream payload. The required return makes a forgotten replacement a compile error rather than a silent fallback.
+Each route provides its own protocol ID, strategy registry, and a `buildStrategyContext` function that maps the generic pipeline state into the route-specific strategy context type. Model resolution is shared: every route runs the same `resolveRequestModel()`, and `applyModelPolicy` selects whether compact small-model routing participates (only `/v1/messages` sends the Anthropic-shaped payload the policy inspects). The lifecycle hooks let routes inject route-specific logic at well-defined points without forking the pipeline. `afterIngest` resolves the payload that flows into transform/dispatch and its return is required: side-effect-only callers end with `return ctx.payload` to forward the ingested payload unchanged, while replacement callers (e.g. `/responses`) return a different payload to swap in the emulator's upstream payload. The required return makes a forgotten replacement a compile error rather than a silent fallback.
 
 ### Route Handler Integration
 
@@ -175,7 +175,7 @@ export async function handleMessagesCore({ body, signal, headers }) {
     { body, signal, headers },
     {
       protocol: 'anthropic-messages',
-      transformChain: messagesModelChain,
+      applyModelPolicy: true,
       strategyRegistry: defaultStrategyRegistry,
       afterIngest({ payload, headers }) { /* extract beta header */ },
       buildStrategyContext(ctx) { /* map to MessagesStrategyContext */ },

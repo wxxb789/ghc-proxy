@@ -5,7 +5,7 @@ import type { AnthropicMessagesPayload } from '~/translator'
 import consola from 'consola'
 import { runPipeline } from '~/pipeline/runner'
 
-import { messagesModelChain, processAnthropicBetaHeader } from '~/transform'
+import { processAnthropicBetaHeader } from '~/transform'
 import { defaultStrategyRegistry } from './strategy-registry'
 
 export interface MessagesCoreParams {
@@ -25,7 +25,7 @@ export async function handleMessagesCore(
     { body, signal, headers },
     {
       protocol: 'anthropic-messages',
-      transformChain: messagesModelChain,
+      applyModelPolicy: true,
       strategyRegistry: defaultStrategyRegistry,
       afterIngest({ payload, headers: reqHeaders }) {
         if (consola.level >= 4)

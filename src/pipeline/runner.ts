@@ -2,14 +2,13 @@ import type { CopilotClient } from '~/clients'
 import type { StrategyRegistry } from '~/dispatch'
 import type { ProtocolId, RequestMeta } from '~/ingest'
 import type { ExecutionResult } from '~/lib/execution-strategy'
-import type { ModelMappingInfo, ModelTransformTag } from '~/lib/request-logger'
-import type { ModelTransformResult } from '~/pipeline/types'
-import type { ModelTransformChain } from '~/transform'
+import type { ModelMappingInfo } from '~/lib/request-logger'
 import type { Model } from '~/types'
 
 import { createCopilotClient } from '~/clients/factory'
 import { protocolRegistry } from '~/ingest'
 import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
+import { resolveRequestModel } from '~/transform/resolve-model'
 
 export interface PipelineParams {
   body: unknown
@@ -32,13 +31,16 @@ export interface TransformContext<TPayload> {
   payload: TPayload
   meta: RequestMeta
   headers: Headers
-  transformResult: ModelTransformResult
   selectedModel: Model | undefined
 }
 
 export interface PipelineConfig<TPayload, TStrategyCtx> {
   protocol: ProtocolId
-  transformChain: ModelTransformChain
+  /**
+   * Apply compact small-model routing. Only `/v1/messages` sends an
+   * Anthropic-shaped payload for the policy to inspect.
+   */
+  applyModelPolicy?: boolean
   strategyRegistry: StrategyRegistry<TStrategyCtx>
   buildStrategyContext: (ctx: {
     payload: TPayload
@@ -82,29 +84,14 @@ export async function runPipeline<TPayload, TStrategyCtx>(
     ? config.afterIngest({ payload: ingested.payload, meta, headers: params.headers })
     : ingested.payload
 
-  const transformResult = config.transformChain.apply({
-    model: (payload as Record<string, string>).model,
-    payload,
-    meta: { betaHeaders: meta.betaHeaders },
+  const { resolvedModel: selectedModel, modelMapping } = resolveRequestModel({
+    payload: payload as { model: string },
+    betaHeaders: meta.betaHeaders,
+    applyPolicy: config.applyModelPolicy,
   })
 
-  ;(payload as Record<string, string>).model = transformResult.model
-  const selectedModel = transformResult.resolvedModel
-
-  const originalModel = transformResult.trace.length > 0
-    ? transformResult.trace[0].from
-    : (payload as Record<string, string>).model
-  const modelMapping: ModelMappingInfo = {
-    originalModel,
-    steps: transformResult.trace.map(r => ({
-      tag: r.tag as ModelTransformTag,
-      from: r.from,
-      to: r.to,
-    })),
-  }
-
   if (config.afterTransform) {
-    await config.afterTransform({ payload, meta, headers: params.headers, transformResult, selectedModel })
+    await config.afterTransform({ payload, meta, headers: params.headers, selectedModel })
   }
 
   const upstreamSignal = createUpstreamSignalFromConfig(params.signal)

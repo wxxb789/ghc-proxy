@@ -27,9 +27,9 @@ src/
 │   ├── capi/                  # Copilot API abstraction layer
 │   └── conversation/          # Conversation intermediate model
 ├── state/                     # Decomposed state stores
-├── pipeline/                  # Pipeline runner and framework types
+├── pipeline/                  # Pipeline runner (runPipeline)
 ├── ingest/                    # Protocol registry (parse + validate)
-├── transform/                 # Composable model transform chain + sanitizers
+├── transform/                 # Model resolution + payload sanitizers
 ├── dispatch/                  # Strategy registry
 ├── deliver/                   # Response delivery + error utilities
 ├── guard/                     # Request auth + rate limiting guard
@@ -222,9 +222,9 @@ Several modules formerly under `src/lib/` were relocated during the consolidatio
 ```text
 src/
 ├── state/           # Decomposed state singletons (replaced the former global AppState)
-├── pipeline/        # Pipeline runner (runPipeline) and framework types
+├── pipeline/        # Pipeline runner (runPipeline)
 ├── ingest/          # Protocol registry (parse + validate per protocol)
-├── transform/       # Composable model transform chain + payload sanitizers
+├── transform/       # Model resolution + payload sanitizers
 ├── dispatch/        # Strategy registry
 ├── deliver/         # Response delivery + error utilities
 └── guard/           # Request auth + rate limiting guard

@@ -5,7 +5,6 @@ import type { ChatCompletionsPayload } from '~/types'
 import consola from 'consola'
 import { getTokenCount } from '~/lib/tokenizer'
 import { runPipeline } from '~/pipeline/runner'
-import { chatCompletionsModelChain } from '~/transform'
 
 import { chatCompletionsStrategyRegistry } from './strategy-registry'
 
@@ -24,7 +23,6 @@ export async function handleCompletionCore(
     { body, signal, headers },
     {
       protocol: 'openai-chat',
-      transformChain: chatCompletionsModelChain,
       strategyRegistry: chatCompletionsStrategyRegistry,
       afterIngest({ payload }) {
         consola.debug('Request payload:', JSON.stringify(payload).slice(-400))
