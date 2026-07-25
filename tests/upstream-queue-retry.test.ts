@@ -250,6 +250,93 @@ describe('UpstreamRequestQueue global cooldown scope', () => {
     expect(sleeps).toEqual([100])
     expect(timers.every(timer => timer.delay <= 0)).toBe(true)
   })
+
+  test('arms the cooldown before releasing the lease', async () => {
+    // A non-resolving sleep parks the dispatch mid-backoff so the queue can be
+    // inspected at exactly the moment the lease is released.
+    let sleepResolve: (() => void) | undefined
+    const queue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 2, baseDelayMs: 5_000, maxDelayMs: 60_000 },
+      {
+        sleep: () => new Promise<void>((resolve) => { sleepResolve = resolve }),
+        logger: { warn: () => {} },
+      },
+    )
+
+    let waiterCalls = 0
+    const first = queue.dispatch(
+      () => Promise.resolve(new Response('overloaded', { status: 529 })),
+      context,
+    )
+    // Queued behind `first` while it holds the only slot.
+    const waiter = queue.dispatch(
+      () => {
+        waiterCalls++
+        return Promise.resolve(new Response('ok'))
+      },
+      context,
+    )
+
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(sleepResolve).toBeDefined()
+
+    // release() drains synchronously. With the cooldown installed after the
+    // release, this waiter was handed the freed slot and reached fetcher()
+    // before any back-pressure existed — exactly the amplification the
+    // cooldown is meant to prevent.
+    expect(waiterCalls).toBe(0)
+
+    void first
+    void waiter
+  })
+
+  test('applies a cooldown when the retry budget is exhausted', async () => {
+    const { queue, timers } = createHarness({
+      maxRetries: 1,
+      baseDelayMs: 5_000,
+      maxDelayMs: 60_000,
+    })
+
+    const queued = await queue.dispatch(
+      () => Promise.resolve(new Response('overloaded', { status: 529 })),
+      context,
+    )
+    expect(queued.response.status).toBe(529)
+
+    // The earlier retry's cooldown has already elapsed (the injected sleep
+    // advanced `now`), so any timer armed by this release must come from the
+    // final response — which previously set no cooldown at all.
+    const armedBeforeRelease = timers.length
+    queued.release()
+
+    expect(timers.length).toBeGreaterThan(armedBeforeRelease)
+    expect(timers.at(-1)!.delay).toBeGreaterThan(0)
+  })
+
+  test('applies a cooldown for a capacity limit when maxRetries is 0', async () => {
+    const { queue, timers, sleeps } = createHarness({ maxRetries: 0 })
+
+    let calls = 0
+    const queued = await queue.dispatch(
+      () => {
+        calls++
+        return Promise.resolve(
+          new Response('rate limited', {
+            status: 429,
+            headers: { 'retry-after': '6' },
+          }),
+        )
+      },
+      context,
+    )
+
+    expect(calls).toBe(1)
+    expect(sleeps).toEqual([])
+    expect(queued.response.status).toBe(429)
+    queued.release()
+
+    expect(timers.some(timer => timer.delay > 0)).toBe(true)
+  })
 })
 
 describe('UpstreamRequestQueue abort during backoff', () => {

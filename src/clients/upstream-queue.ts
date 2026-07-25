@@ -97,14 +97,16 @@ export class UpstreamRequestQueue {
       }
 
       const { status } = response
+      const isCapacityLimit = isCapacityLimitStatus(status)
       const willRetry = isTransientUpstreamStatus(status)
         && context.retryable === true
         && attempt < this.options.maxRetries
 
       if (!willRetry) {
         // Capacity limits are account- or service-wide, so hold the whole queue
-        // back even when this request itself won't retry.
-        if (isCapacityLimitStatus(status) && !context.retryable) {
+        // back whenever no retry will follow — including budget exhaustion and
+        // a maxRetries of 0, not just non-retryable requests.
+        if (isCapacityLimit) {
           this.applyCooldown(this.getRetryDelayMs(response, 0))
         }
         return {
@@ -115,12 +117,15 @@ export class UpstreamRequestQueue {
 
       const delayMs = this.getRetryDelayMs(response, attempt)
       await discardResponse(response)
-      lease.release()
+      // Install the cooldown before releasing the lease: release() drains the
+      // queue synchronously, so a waiter freed first would reach fetcher()
+      // before the back-pressure existed.
       // Request-scoped faults (502, 504, ...) back off this request only.
       // A global cooldown there would turn one bad request into a proxy stall.
-      if (isCapacityLimitStatus(status)) {
+      if (isCapacityLimit) {
         this.applyCooldown(delayMs)
       }
+      lease.release()
       this.logger.warn(
         [
           `Upstream ${status};`,
