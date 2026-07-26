@@ -897,3 +897,53 @@ describe('reasoning effort max', () => {
     })
   }
 })
+
+// Regression: only the output_config.effort branch was clamped. The three
+// sibling branches each produced a candidate the caller never named — a
+// hardcoded tier or a config default — and forwarded it unchecked, so a model
+// that does not advertise that level returned 400.
+describe('reasoning effort clamping covers every branch', () => {
+  const base = {
+    model: 'claude-opus-4.6',
+    max_tokens: 256,
+    messages: [{ role: 'user' as const, content: 'hello' }],
+  }
+
+  test('thinking:adaptive clamps its hardcoded medium to an advertised level', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      ...base,
+      thinking: { type: 'adaptive' },
+    }, {
+      supportedEfforts: ['high', 'xhigh', 'max'],
+    })
+
+    // Was 'medium' — not advertised, an upstream 400.
+    expect(translated.reasoning?.effort).toBe('max')
+  })
+
+  test('thinking:enabled clamps the configured default', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      ...base,
+      thinking: { type: 'enabled', budget_tokens: 32000 },
+    }, {
+      reasoningEffortResolver: () => 'xhigh',
+      supportedEfforts: ['low', 'medium', 'high', 'max'],
+    })
+
+    // opus-4.6 shape: advertises max but not xhigh.
+    expect(translated.reasoning?.effort).toBe('max')
+  })
+
+  test('thinking:disabled keeps none rather than clamping it upward', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      ...base,
+      thinking: { type: 'disabled' },
+    }, {
+      supportedEfforts: ['low', 'medium', 'high', 'max'],
+    })
+
+    // `none` means "do not reason" — ranking it against the ladder would
+    // invert the caller's intent into maximum reasoning.
+    expect(translated.reasoning?.effort).toBe('none')
+  })
+})

@@ -308,7 +308,28 @@ function resolveResponsesTextConfig(
       }
   }
 }
+/**
+ * Resolve the Responses `reasoning.effort` for an Anthropic request.
+ *
+ * Every branch below produces a *candidate* the caller did not name directly —
+ * a hardcoded tier, a config default, or a mapped `output_config.effort` — so
+ * all of them are clamped at the single exit. Clamping only the
+ * `output_config.effort` branch left the others able to emit a level the model
+ * rejects: `adaptive` sent `medium` to a model advertising `[high, xhigh, max]`,
+ * and `enabled` sent the configured default with an `as` cast and no check.
+ */
 function resolveResponsesReasoningEffort(
+  payload: AnthropicMessagesPayload,
+  options?: AnthropicToResponsesOptions,
+): NonNullable<ResponsesPayload['reasoning']>['effort'] | undefined {
+  const candidate = resolveEffortCandidate(payload, options)
+  if (!candidate) {
+    return candidate
+  }
+  return clampResponsesEffort(candidate, options)
+}
+
+function resolveEffortCandidate(
   payload: AnthropicMessagesPayload,
   options?: AnthropicToResponsesOptions,
 ): NonNullable<ResponsesPayload['reasoning']>['effort'] | undefined {
@@ -317,7 +338,7 @@ function resolveResponsesReasoningEffort(
   }
 
   if (payload.output_config?.effort) {
-    return mapAnthropicEffortToResponses(payload.output_config.effort, options)
+    return payload.output_config.effort
   }
 
   if (payload.thinking?.type === 'adaptive') {
@@ -332,24 +353,23 @@ function resolveResponsesReasoningEffort(
 }
 
 /**
- * Map an Anthropic `output_config.effort` to a Responses `reasoning.effort`.
+ * Clamp a Responses effort to what the target model advertises.
  *
- * The vocabularies agree, but which levels a given model accepts does not:
- * probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`), gpt-5.6 accepts
- * `max` while gpt-5.5 and earlier reject it, and `claude-opus-4.6` /
- * `claude-sonnet-4.6` accept `max` yet reject `xhigh`. Clamping to a fixed
- * fallback is therefore wrong in both directions — it downgrades models that
- * would have accepted the request, and can still land on a level the model
- * rejects. Derive the target from what the model advertises instead.
+ * `none` and `minimal` belong to the Responses vocabulary but not to the
+ * Anthropic `output_config` ladder, so they are passed through rather than
+ * ranked: `none` means "do not reason", and clamping it *up* to the model's
+ * highest advertised level would invert the caller's intent. Every model
+ * observed on `/responses` advertises `none` (probed 2026-07-26).
  *
- * With no advertised list the effort passes through unchanged, preserving the
- * behavior of callers that do not supply `supportedEfforts`.
+ * With no advertised list the effort passes through untouched — with nothing to
+ * derive from, forwarding the request beats guessing at a level that may be both
+ * a downgrade and still unsupported.
  */
-function mapAnthropicEffortToResponses(
-  effort: NonNullable<AnthropicMessagesPayload['output_config']>['effort'],
+function clampResponsesEffort(
+  effort: NonNullable<NonNullable<ResponsesPayload['reasoning']>['effort']>,
   options?: AnthropicToResponsesOptions,
 ): NonNullable<ResponsesPayload['reasoning']>['effort'] {
-  if (!effort) {
+  if (effort === 'none' || effort === 'minimal') {
     return effort
   }
   return clampEffortToAdvertised(effort, options?.supportedEfforts) ?? effort
