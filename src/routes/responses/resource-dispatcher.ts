@@ -68,8 +68,15 @@ class UpstreamResourceDispatcher implements ResourceDispatcher {
   }
 }
 
-export function createResourceDispatcher(): ResourceDispatcher {
+/**
+ * Build the dispatcher backing the `/responses/{id}` resource routes.
+ *
+ * `client` is an injection seam for tests: pass a stand-in to exercise the
+ * upstream path without patching `CopilotClient.prototype`. Production callers
+ * omit it and get the configured client.
+ */
+export function createResourceDispatcher(client?: CopilotClient): ResourceDispatcher {
   return configStore.isEmulatorEnabled()
     ? new EmulatorResourceDispatcher()
-    : new UpstreamResourceDispatcher(createCopilotClient())
+    : new UpstreamResourceDispatcher(client ?? createCopilotClient())
 }

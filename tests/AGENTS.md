@@ -26,7 +26,7 @@ compatibility — if it fails, the package must not ship.
 | Group | Exports |
 |-------|---------|
 | Model builders | `buildModel()`, `buildGptModel()`, `buildVisionModel()`, `buildModelsResponse()`, `buildResponsesResult()` |
-| App factory | `createApp()` — assembles an in-process Elysia app wired to mock Copilot transport |
+| App factory | `createApp()` — assembles an in-process Elysia app over the real route handlers |
 | Mock factories | `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()`, `mockChatCompletions()`, `mockGetResponse()`, `mockGetResponseInputItems()`, `mockCreateResponseInputTokens()`, `mockDeleteResponse()`, `mockEmulatorCreateResponses()` |
 | SSE utilities | `parseSse()` |
 | State isolation | `saveStateSnapshot()`, `restoreStateSnapshot()`, `setupDefaultTestState()`, `clearConfig()` |
@@ -43,6 +43,20 @@ compatibility — if it fails, the package must not ship.
   `setupDefaultTestState()` covers the common default config.
 - **Don't mock what you can use real.** Prefer `createApp()` over hand-rolled
   Elysia wiring; prefer the SSE parsing helpers over inline string splits.
+- **Intercepting upstream calls.** There are two seams, and which one you use
+  depends on what you're testing:
+  - *Transport concerns* (headers, retries, base URL, error mapping) —
+    construct a client directly with an injected fetch:
+    `new CopilotClient(auth, config, { fetch })`. See
+    `upstream-transport.test.ts` and `clients-auth.test.ts`.
+  - *Routing and translation* — assign to `CopilotClient.prototype.*` and
+    restore it in `afterEach`, which is how the route tests reach a client
+    built deep inside the request path.
+
+  The handlers that bypass `runPipeline` (`handleEmbeddingsCore`,
+  `handleModelsCore`, and the `/responses/{id}` resource handlers) also take
+  an optional `client`, so a new test can inject one instead of patching the
+  prototype. Prefer that when calling those handlers directly.
 - **Bun-native APIs are fine here.** Unlike `src/`, the test runtime is
   always Bun.
 - **No fixture files larger than ~5KB inline.** Move large captured payloads
