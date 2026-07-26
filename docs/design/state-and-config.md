@@ -229,7 +229,7 @@ The Responses official emulator is disabled by default. When `responsesOfficialE
 
 ### Memory Management
 
-The emulator state is stored across seven internal maps (responses, conversations, conversation heads, input items, and three deletion flag maps). Without bounds, these can grow unboundedly -- a single `setResponse()` call may write up to 3 entries (response, conversation, conversation head), and deletion methods add deletion flag entries.
+The emulator state is stored across six internal maps (responses, conversations, conversation heads, input items, and two deletion flag maps -- responses and input items). Without bounds, these can grow unboundedly -- a single `setResponse()` call may write up to 3 entries (response, conversation, conversation head), and deletion methods add deletion flag entries.
 
 To prevent unbounded growth, the emulator enforces a hard cap of 10,000 total entries (`DEFAULT_MAX_TOTAL_ENTRIES`, overridable via `maxTotalEntries` option) across all maps. Memory is managed at two layers:
 
