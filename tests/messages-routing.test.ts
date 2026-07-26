@@ -1664,3 +1664,30 @@ describe('/v1/messages serves structured output natively when the model supports
     expect(response.status).toBe(400)
   })
 })
+
+describe('supportsStructuredOutputs excludes Vertex-blocked models', () => {
+  // claude-opus-4.7 and claude-sonnet-4.6 advertise structured_outputs: true,
+  // but a GCP organization policy blocks the feature for their Vertex-served
+  // deployment (probed 2026-07-26). The advertised flag alone would route them
+  // onto a path that 400s upstream.
+  test('returns false for a model blocked by the Vertex org policy', () => {
+    const blocked = buildModel('claude-opus-4.7', { supported_endpoints: ['/v1/messages'] })
+    blocked.capabilities.supports.structured_outputs = true
+
+    expect(modelCache.supportsStructuredOutputs(blocked)).toBe(false)
+  })
+
+  test('returns true for a model that advertises it and is not blocked', () => {
+    const allowed = buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })
+    allowed.capabilities.supports.structured_outputs = true
+
+    expect(modelCache.supportsStructuredOutputs(allowed)).toBe(true)
+  })
+
+  test('returns false when the model does not advertise it', () => {
+    const plain = buildModel('claude-legacy', { supported_endpoints: ['/v1/messages'] })
+    plain.capabilities.supports.structured_outputs = false
+
+    expect(modelCache.supportsStructuredOutputs(plain)).toBe(false)
+  })
+})

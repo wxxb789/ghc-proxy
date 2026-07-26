@@ -76,6 +76,15 @@ one. The two paths need different payload shapes for the same caller request.
 | `+ name` / `+ description` | native, labels stripped |
 | `+ strict` | **not** native — the guarantee cannot be dropped silently |
 | model does not advertise `structured_outputs` | Responses, else explicit 400 |
+| `claude-opus-4.7`, `claude-sonnet-4.6` | Responses, else explicit 400 — excluded by ID |
+
+The last row is the one the advertised capability cannot express: both models
+advertise `structured_outputs: true` and are stopped only by the GCP policy, so
+routing on the flag alone would send them to a path that 400s upstream.
+`MODELS_BLOCKING_NATIVE_STRUCTURED_OUTPUT` (`src/state/model-cache.ts`) carries
+them as a dated ID list, the same shape `MODELS_REJECTING_OUTPUT_CONFIG` uses —
+a policy exclusion written down as a policy exclusion, and bounded in time so
+re-running this probe can retire it.
 
 `strict` is treated as a caller guarantee rather than an annotation: it promises
 the reply conforms to the schema. Stripping it to fit the native shape would

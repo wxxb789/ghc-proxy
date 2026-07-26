@@ -41,7 +41,8 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
   // 2026-07-26 (`scripts/probes/messages/output-format.ts`): 6 of 8 Messages
   // models return 200 for a bare `{ type, schema }`. The two that fail
   // (claude-opus-4.7, claude-sonnet-4.6) fail on a Vertex organization policy
-  // rather than a protocol limit, so they are left to the Responses path.
+  // rather than a protocol limit — they advertise the capability, so
+  // `supportsStructuredOutputs` excludes them by ID rather than by flag.
   canHandle: (model, ctx) => modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
     && (!hasOutputConfigFormat(ctx?.anthropicPayload)
       || (modelCache.supportsStructuredOutputs(model)
