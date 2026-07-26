@@ -445,6 +445,42 @@ describe('messages routing', () => {
     expect(calls[0]?.payload.output_config).toEqual({ effort: 'low' })
   })
 
+  // Loosening the ingress schema only helps if the field survives the pipeline.
+  // sanitizeOutputConfig used to rebuild the object as `{ effort }`, which would
+  // turn a visible 400 into a silent drop — strictly worse for the caller.
+  test('/v1/messages native path forwards unrecognized output_config fields to upstream', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-5',
+        max_tokens: 64,
+        output_config: { effort: 'high', verbosity: 'low' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    const forwarded = calls[0]?.payload.output_config as Record<string, unknown> | undefined
+    expect(forwarded?.effort).toBe('high')
+    expect(forwarded?.verbosity).toBe('low')
+  })
+
   test('/v1/messages routes structured output_config format through Responses when available', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []

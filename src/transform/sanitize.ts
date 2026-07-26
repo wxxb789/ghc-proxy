@@ -141,6 +141,15 @@ export function convertEnabledThinkingToAdaptive(
     }
   }
 }
+/**
+ * Normalize `output_config` for the native `/v1/messages` boundary.
+ *
+ * Rebuilds nothing it does not have to: the effort is clamped in place and
+ * every other key is preserved. `output_config` is loose at ingress precisely
+ * so newer Anthropic fields can reach a model that may accept them — dropping
+ * them here would move the failure from a visible 400 to a silent semantic
+ * change, which is worse.
+ */
 export function sanitizeOutputConfig(
   payload: AnthropicMessagesPayload,
   model: Model | undefined,
@@ -160,9 +169,7 @@ export function sanitizeOutputConfig(
     return
   }
 
-  payload.output_config = {
-    effort: normalizeOutputConfigEffort(effort, model) ?? effort,
-  }
+  payload.output_config.effort = normalizeOutputConfigEffort(effort, model) ?? effort
 }
 
 function normalizeCacheControlBlock(obj: Record<string, unknown>): void {

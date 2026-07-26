@@ -198,6 +198,12 @@ const anthropicThinkingSchema = z.union([
   }).loose(),
 ])
 
+/**
+ * `format` stays strict: an unrecognized key here means the caller expects a
+ * constraint the proxy cannot translate, and silently accepting it would let a
+ * schema-constrained request come back unconstrained. Rejecting is the honest
+ * answer — see docs/solutions/integration-issues/claude-code-messages-startup-payloads.md.
+ */
 const anthropicOutputFormatSchema = z.object({
   type: z.literal('json_schema'),
   schema: jsonObjectSchema,
@@ -206,10 +212,18 @@ const anthropicOutputFormatSchema = z.object({
   strict: z.boolean().optional(),
 }).strict()
 
+/**
+ * `output_config` itself is loose. It is the fastest-moving object in the
+ * Anthropic Messages schema, and it was the only strict container on this
+ * boundary — so every field Anthropic added arrived here as a local 400 before
+ * the request could reach a model that may well accept it. Unknown keys are
+ * forwarded rather than rejected; `format` keeps its own strict contract above,
+ * and `sanitizeOutputConfig` preserves the extras rather than dropping them.
+ */
 const anthropicOutputConfigSchema = z.object({
   effort: z.enum(['low', 'medium', 'high', 'max', 'xhigh']).nullable().optional(),
   format: anthropicOutputFormatSchema.optional(),
-}).strict()
+}).loose()
 
 const anthropicMessagesBasePayloadSchema = z.object({
   model: z.string().min(1),

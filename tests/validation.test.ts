@@ -249,15 +249,41 @@ describe('Anthropic payload validation', () => {
     })
   })
 
-  test('rejects unsupported output_config fields explicitly', () => {
+  // Behavior change: `output_config` was the only strict container on this
+  // boundary, so every field Anthropic added arrived as a local 400 before the
+  // request could reach a model that may well accept it. Unknown keys are now
+  // forwarded and left for upstream to judge.
+  test('forwards unrecognized output_config fields instead of rejecting them', () => {
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-opus-4-8',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Hello!' }],
+      output_config: {
+        effort: 'max',
+        unsupported: true,
+      },
+    })
+
+    expect(payload.output_config?.effort).toBe('max')
+    expect((payload.output_config as Record<string, unknown>).unsupported).toBe(true)
+  })
+
+  // `format` keeps its strict contract: it is the one field carrying a promise
+  // the caller relies on. Accepting an unrecognized key inside it could let a
+  // schema-constrained request come back unconstrained without the caller
+  // knowing — see docs/solutions/integration-issues/claude-code-messages-startup-payloads.md.
+  test('still rejects unrecognized fields inside output_config.format', () => {
     expect(() =>
       parseAnthropicMessagesPayload({
         model: 'claude-opus-4-8',
         max_tokens: 16,
         messages: [{ role: 'user', content: 'Hello!' }],
         output_config: {
-          effort: 'max',
-          unsupported: true,
+          format: {
+            type: 'json_schema',
+            schema: { type: 'object' },
+            unsupported_constraint: true,
+          },
         },
       }),
     ).toThrow('Invalid request payload')
