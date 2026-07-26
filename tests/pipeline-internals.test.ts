@@ -3,185 +3,22 @@ import type { StrategyEntry } from '~/dispatch'
 import type { ExecutionResult } from '~/lib/execution-strategy'
 import type { IngestContext, PipelineConfig, TransformContext } from '~/pipeline/runner'
 
-import type { ModelTransformChain } from '~/transform'
-import type { ModelTransformStep } from '~/transform/types'
 import type { Model } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { StrategyRegistry } from '~/dispatch'
+import { getCachedConfig } from '~/lib/config'
 import { runPipeline } from '~/pipeline/runner'
 import { modelCache } from '~/state'
 
-import { composeModelTransforms } from '~/transform/chain'
 import {
   buildModel,
   buildModelsResponse,
+  clearConfig,
   restoreStateSnapshot,
   saveStateSnapshot,
   setupDefaultTestState,
 } from './helpers'
-
-// ── composeModelTransforms — model transform chain ──
-
-describe('composeModelTransforms', () => {
-  function makeStep(
-    tag: string,
-    applyFn: ModelTransformStep['apply'],
-  ): ModelTransformStep {
-    return { tag, apply: applyFn }
-  }
-
-  function noopStep(tag: string): ModelTransformStep {
-    return makeStep(tag, () => null)
-  }
-
-  function rewriteStep(tag: string, toModel: string): ModelTransformStep {
-    return makeStep(tag, () => ({ model: toModel, tag }))
-  }
-
-  let snapshot: StateSnapshot
-
-  beforeEach(() => {
-    snapshot = saveStateSnapshot()
-    modelCache.cacheModels(buildModelsResponse(
-      buildModel('model-a'),
-      buildModel('model-b'),
-      buildModel('model-c'),
-      buildModel('model-final'),
-    ))
-  })
-
-  afterEach(() => {
-    restoreStateSnapshot(snapshot)
-  })
-
-  test('empty steps — returns original model with empty trace', () => {
-    const chain = composeModelTransforms()
-    const result = chain.apply({ model: 'model-a', payload: {} })
-
-    expect(result.model).toBe('model-a')
-    expect(result.trace).toEqual([])
-  })
-
-  test('single step that returns null (no-op) — model unchanged', () => {
-    const chain = composeModelTransforms(noopStep('noop'))
-    const result = chain.apply({ model: 'model-a', payload: {} })
-
-    expect(result.model).toBe('model-a')
-    expect(result.trace).toEqual([])
-  })
-
-  test('single step with transform — model changed, trace has one entry', () => {
-    const chain = composeModelTransforms(rewriteStep('rewrite', 'model-b'))
-    const result = chain.apply({ model: 'model-a', payload: {} })
-
-    expect(result.model).toBe('model-b')
-    expect(result.trace).toEqual([
-      { tag: 'rewrite', from: 'model-a', to: 'model-b' },
-    ])
-  })
-
-  test('multi-step chain — correct final model and trace order', () => {
-    const chain = composeModelTransforms(
-      rewriteStep('step-1', 'model-b'),
-      rewriteStep('step-2', 'model-c'),
-      rewriteStep('step-3', 'model-final'),
-    )
-    const result = chain.apply({ model: 'model-a', payload: {} })
-
-    expect(result.model).toBe('model-final')
-    expect(result.trace).toEqual([
-      { tag: 'step-1', from: 'model-a', to: 'model-b' },
-      { tag: 'step-2', from: 'model-b', to: 'model-c' },
-      { tag: 'step-3', from: 'model-c', to: 'model-final' },
-    ])
-  })
-
-  test('mutatePayload callback is invoked', () => {
-    const step = makeStep('mutator', () => ({
-      model: 'model-a',
-      tag: 'mutator',
-      mutatePayload: (payload: unknown) => {
-        (payload as Record<string, unknown>).mutated = true
-      },
-    }))
-
-    const payload: Record<string, unknown> = { mutated: false }
-    const chain = composeModelTransforms(step)
-    chain.apply({ model: 'model-a', payload })
-
-    expect(payload.mutated).toBe(true)
-  })
-
-  test('resolvedModel is looked up from modelCache when not set by steps', () => {
-    const chain = composeModelTransforms(noopStep('noop'))
-    const result = chain.apply({ model: 'model-b', payload: {} })
-
-    expect(result.resolvedModel).toBeDefined()
-    expect(result.resolvedModel?.id).toBe('model-b')
-  })
-
-  test('resolvedModel from step overrides modelCache lookup', () => {
-    const customModel = buildModel('custom-resolved')
-    const step = makeStep('resolver', () => ({
-      model: 'model-b',
-      tag: 'resolver',
-      resolvedModel: customModel,
-    }))
-
-    const chain = composeModelTransforms(step)
-    const result = chain.apply({ model: 'model-a', payload: {} })
-
-    expect(result.resolvedModel).toBe(customModel)
-  })
-
-  test('resolvedModel falls back to modelCache.findById for final model', () => {
-    const chain = composeModelTransforms(rewriteStep('rewrite', 'model-c'))
-    const result = chain.apply({ model: 'model-a', payload: {} })
-
-    expect(result.resolvedModel).toBeDefined()
-    expect(result.resolvedModel?.id).toBe('model-c')
-  })
-
-  test('resolvedModel is undefined when final model is not in cache', () => {
-    const chain = composeModelTransforms(rewriteStep('rewrite', 'unknown-model'))
-    const result = chain.apply({ model: 'model-a', payload: {} })
-
-    expect(result.resolvedModel).toBeUndefined()
-  })
-
-  test('mixed no-op and transform steps — only transforms appear in trace', () => {
-    const chain = composeModelTransforms(
-      noopStep('skip-1'),
-      rewriteStep('apply', 'model-b'),
-      noopStep('skip-2'),
-    )
-    const result = chain.apply({ model: 'model-a', payload: {} })
-
-    expect(result.model).toBe('model-b')
-    expect(result.trace).toEqual([
-      { tag: 'apply', from: 'model-a', to: 'model-b' },
-    ])
-  })
-
-  test('step receives current model after previous transforms', () => {
-    const receivedModels: string[] = []
-
-    const spyStep = (tag: string, toModel: string): ModelTransformStep =>
-      makeStep(tag, (input) => {
-        receivedModels.push(input.model)
-        return { model: toModel, tag }
-      })
-
-    const chain = composeModelTransforms(
-      spyStep('s1', 'model-b'),
-      spyStep('s2', 'model-c'),
-    )
-    chain.apply({ model: 'model-a', payload: {} })
-
-    expect(receivedModels).toEqual(['model-a', 'model-b'])
-  })
-})
 
 // ── StrategyRegistry — selection priority + messages registry wiring ──
 
@@ -334,36 +171,13 @@ describe('runPipeline', () => {
 
   beforeEach(() => {
     setupDefaultTestState()
+    clearConfig()
   })
 
   afterEach(() => {
     restoreStateSnapshot(originalState)
+    clearConfig()
   })
-
-  function noopTransformChain(): ModelTransformChain {
-    return {
-      apply: input => ({
-        model: input.model,
-        resolvedModel: undefined,
-        trace: [],
-      }),
-    }
-  }
-
-  function rewriteTransformChain(fromModel: string, toModel: string): ModelTransformChain {
-    return {
-      apply: (input) => {
-        if (input.model === fromModel) {
-          return {
-            model: toModel,
-            resolvedModel: undefined,
-            trace: [{ tag: 'CONFIG_REWRITE', from: fromModel, to: toModel }],
-          }
-        }
-        return { model: input.model, resolvedModel: undefined, trace: [] }
-      },
-    }
-  }
 
   interface SimplePayload {
     model: string
@@ -395,7 +209,6 @@ describe('runPipeline', () => {
   ): PipelineConfig<SimplePayload, { payload: SimplePayload }> {
     return {
       protocol: 'openai-chat',
-      transformChain: noopTransformChain(),
       strategyRegistry: makeStrategyRegistry(),
       buildStrategyContext: ({ payload }) => ({ payload }),
       ...overrides,
@@ -423,7 +236,13 @@ describe('runPipeline', () => {
     expect(modelMapping.originalModel).toBe('claude-sonnet-4.5')
   })
 
-  test('transform chain rewrite is reflected in model mapping trace', async () => {
+  test('model rewrite is reflected in model mapping trace', async () => {
+    // Drives the real rewrite via config rather than a stand-in chain, so the
+    // trace assertion covers the production resolveRequestModel wiring.
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.modelRewrites = [{ from: 'old-model', to: 'new-model' }]
+    modelCache.cacheModels(buildModelsResponse(buildModel('new-model')))
+
     const params = makeParams({ model: 'old-model', messages: [{ role: 'user', content: 'hi' }] })
 
     const executedPayloads: SimplePayload[] = []
@@ -438,7 +257,6 @@ describe('runPipeline', () => {
     })
 
     const config = makeConfig({
-      transformChain: rewriteTransformChain('old-model', 'new-model'),
       strategyRegistry,
     })
 
@@ -523,12 +341,15 @@ describe('runPipeline', () => {
     expect(executedPayloads[0]?.messages[0]?.content).toBe('original')
   })
 
-  test('afterTransform hook is called with transform result', async () => {
+  test('afterTransform hook observes the resolved model', async () => {
     const captured: TransformContext<SimplePayload>[] = []
     const params = makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'test' }] })
 
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.modelRewrites = [{ from: 'claude-sonnet-4.5', to: 'claude-opus-4.6' }]
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-4.6')))
+
     const config = makeConfig({
-      transformChain: rewriteTransformChain('claude-sonnet-4.5', 'claude-opus-4.6'),
       afterTransform: (ctx) => {
         captured.push(ctx)
       },
@@ -537,9 +358,10 @@ describe('runPipeline', () => {
     await runPipeline(params, config)
 
     expect(captured).toHaveLength(1)
-    expect(captured[0]!.transformResult.model).toBe('claude-opus-4.6')
-    expect(captured[0]!.transformResult.trace).toHaveLength(1)
+    // The hook runs after model resolution, so it sees the rewritten model
+    // on both the payload and the resolved model record.
     expect(captured[0]!.payload.model).toBe('claude-opus-4.6')
+    expect(captured[0]!.selectedModel?.id).toBe('claude-opus-4.6')
   })
 
   test('afterTransform hook can mutate payload', async () => {
@@ -612,7 +434,6 @@ describe('runPipeline', () => {
     const params = makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'hi' }] })
     const config: PipelineConfig<SimplePayload, Record<string, unknown>> = {
       protocol: 'openai-chat',
-      transformChain: noopTransformChain(),
       strategyRegistry,
       buildStrategyContext: (ctx) => {
         capturedCtx = ctx as Record<string, unknown>

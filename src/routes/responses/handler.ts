@@ -5,7 +5,6 @@ import consola from 'consola'
 import { throwInvalidRequestError } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
 import { configStore, modelCache, RESPONSES_ENDPOINT } from '~/state'
-import { responsesModelChain } from '~/transform'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
@@ -40,7 +39,6 @@ export async function handleResponsesCore(
     { body, signal, headers },
     {
       protocol: 'responses',
-      transformChain: responsesModelChain,
       strategyRegistry: responsesStrategyRegistry,
       afterIngest({ payload }) {
         originalPayload = payload
