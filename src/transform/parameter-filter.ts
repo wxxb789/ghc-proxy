@@ -125,3 +125,87 @@ export function applyResponsesParameterFilters(
     )
   }
 }
+
+/**
+ * Models whose `/chat/completions` endpoint rejects `max_tokens` and require
+ * `max_completion_tokens` instead:
+ *
+ *   Unsupported parameter: 'max_tokens' is not supported with this model.
+ *   Use 'max_completion_tokens' instead.
+ *
+ * Probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`): reproduced on
+ * gpt-5.4. Every other reachable model accepted both spellings — though for
+ * reasoning models the two differ in meaning, since `max_tokens` counts
+ * thinking tokens against the budget while `max_completion_tokens` does not.
+ *
+ * Copilot advertises nothing that distinguishes these models, so this is an
+ * evidence-backed glob list. Extend it via `chatCompletionsUseMaxCompletionTokens`.
+ */
+const DEFAULT_MAX_COMPLETION_TOKENS_MODELS = ['gpt-5.4', 'gpt-5.4-*'] as const
+
+/**
+ * Rename `max_tokens` to `max_completion_tokens` for models that reject the
+ * former. No-op when the caller sent neither, or when the model accepts
+ * `max_tokens` — which is still the majority.
+ */
+export function applyChatCompletionsTokenParam(
+  payload: { max_tokens?: number | null },
+  model: Model | undefined,
+): void {
+  if (payload.max_tokens == null) {
+    return
+  }
+
+  const modelId = model?.id
+  if (!modelId || !requiresMaxCompletionTokens(modelId)) {
+    return
+  }
+
+  const record = payload as Record<string, unknown>
+  record.max_completion_tokens = payload.max_tokens
+  delete record.max_tokens
+
+  consola.debug(
+    `Renamed max_tokens to max_completion_tokens for model ${modelId}`,
+  )
+}
+
+function requiresMaxCompletionTokens(modelId: string): boolean {
+  const patterns: Array<string> = [
+    ...DEFAULT_MAX_COMPLETION_TOKENS_MODELS,
+    ...configStore.getChatCompletionsMaxCompletionTokensModels(),
+  ]
+  return patterns.some(pattern => matchesGlob(pattern, modelId))
+}
+
+/**
+ * Copilot's `/responses` minimum for `max_output_tokens`:
+ *
+ *   Invalid 'max_output_tokens': integer below minimum value.
+ *   Expected a value >= 16
+ *
+ * Probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`): identical across
+ * all 9 `/responses` models. The ceiling is NOT enforced — the advertised
+ * `limits.max_output_tokens` + 1 was accepted everywhere — so only the floor
+ * is clamped.
+ */
+const RESPONSES_MIN_OUTPUT_TOKENS = 16
+
+/**
+ * Raise a below-minimum `max_output_tokens` to Copilot's floor.
+ *
+ * The client-facing schema still accepts 0..15: those are valid OpenAI input,
+ * and this floor is a Copilot quirk the proxy absorbs rather than leaks back
+ * as a 400.
+ */
+export function clampResponsesOutputTokens(payload: ResponsesPayload): void {
+  const requested = payload.max_output_tokens
+  if (requested == null || requested >= RESPONSES_MIN_OUTPUT_TOKENS) {
+    return
+  }
+
+  payload.max_output_tokens = RESPONSES_MIN_OUTPUT_TOKENS
+  consola.debug(
+    `Raised max_output_tokens from ${requested} to the Copilot minimum of ${RESPONSES_MIN_OUTPUT_TOKENS}`,
+  )
+}

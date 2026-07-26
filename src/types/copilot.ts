@@ -73,7 +73,16 @@ interface ChoiceNonStreaming {
   finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter'
 }
 
-export const REASONING_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high'] as const
+/**
+ * Effort levels Copilot accepts on `reasoning_effort`.
+ *
+ * Probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`): a model accepts
+ * exactly the levels it advertises in `capabilities.supports.reasoning_effort`
+ * and rejects the rest with 400, so always clamp against that list rather than
+ * assuming this union is universally valid. `max` is gpt-5.6-and-later on the
+ * Responses boundary, but available across the Claude family.
+ */
+export const REASONING_EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
 
 // Payload types

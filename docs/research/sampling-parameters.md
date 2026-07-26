@@ -130,3 +130,80 @@ it advertises.
 - Streaming requests. All probes were non-streaming.
 - Whether `top_k` measurably changes output. Probes assert acceptance, not
   effect.
+
+---
+
+## Reasoning effort and output-token parameters (probed)
+
+**Probe:** `scripts/probes/effort-and-tokens.ts`. **Date:** 2026-07-26.
+
+### Reasoning effort
+
+**The advertised list is authoritative.** For every model on every boundary,
+`capabilities.supports.reasoning_effort` matched actual behavior exactly — a
+model accepts precisely the levels it advertises and returns 400 for the rest.
+Clamp against that list rather than a static union.
+
+#### `max`
+
+| Boundary | Accepts `max` | Rejects `max` |
+| --- | --- | --- |
+| `/v1/messages` | all 6 reasoning Claude models | — |
+| `/chat/completions` | all 6 reasoning Claude models | gemini ×3 |
+| `/responses` | **gpt-5.6-luna / sol / terra** | gpt-5.3-codex, 5.4, 5.4-mini, 5.5, gpt-5-mini, mai-code-1 |
+
+```
+Invalid value: 'max'. Supported values are: 'none', 'minimal', 'low', 'medium', 'high', ...
+```
+
+`claude-opus-4.6` and `claude-sonnet-4.6` are instructive: they advertise
+`max` but **not** `xhigh`, and reject `xhigh` while accepting `max`. The levels
+are not a simple ordered ladder every model implements a prefix of.
+
+Before this was probed, the Responses translator downgraded `max` to `xhigh`
+unconditionally — correct for every model that existed at the time, and a
+silent capability loss once gpt-5.6 shipped.
+
+### Output-token parameters
+
+| Boundary | Parameter | Notes |
+| --- | --- | --- |
+| `/v1/messages` | `max_tokens` | **required**; `max_completion_tokens` yields `max_tokens: Field required` |
+| `/chat/completions` | both accepted | except `gpt-5.4`, which rejects `max_tokens` |
+| `/responses` | `max_output_tokens` | floor of **16**, enforced |
+
+```
+Unsupported parameter: 'max_tokens' is not supported with this model.
+Use 'max_completion_tokens' instead.
+
+Invalid 'max_output_tokens': integer below minimum value. Expected a value >= 16
+```
+
+#### The two spellings are not synonyms
+
+On gemini models both are accepted but behave differently: `max_tokens=16`
+returned `finish_reason: length` (truncated), while `max_completion_tokens=16`
+returned `stop`. For reasoning models `max_tokens` counts thinking tokens
+against the budget; `max_completion_tokens` bounds visible output only.
+
+#### Bounds
+
+The floor is enforced; the **ceiling is not**. Passing
+`limits.max_output_tokens + 1` was accepted by all 9 `/responses` models, so
+the advertised ceiling is advisory. Only the floor is clamped by the proxy.
+
+### Resulting proxy behavior
+
+- `max` is preserved when the resolved model advertises it, and clamped to
+  `xhigh` otherwise (`AnthropicToResponsesOptions.supportedEfforts`).
+- `max_tokens` is renamed to `max_completion_tokens` on `/chat/completions`
+  for models that reject it; extend the list via
+  `chatCompletionsUseMaxCompletionTokens`.
+- `max_output_tokens` below 16 is raised to 16 rather than leaking a 400. The
+  client-facing schema still accepts 0..15, since those are valid OpenAI input.
+
+### Not covered
+
+- Whether `max` measurably changes output quality. Probes assert acceptance.
+- `prompt_cache_breakpoint` / `prompt_cache_options` (GPT-5.6 explicit prompt
+  caching). Not probed against Copilot yet.

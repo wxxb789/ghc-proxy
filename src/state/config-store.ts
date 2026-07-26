@@ -65,6 +65,15 @@ export class ConfigStore {
     return getCachedConfig().modelRewrites ?? []
   }
 
+  /**
+   * Extra model globs whose `/chat/completions` requests must send
+   * `max_completion_tokens` instead of `max_tokens`. Adds to the built-in
+   * evidence-backed list rather than replacing it.
+   */
+  getChatCompletionsMaxCompletionTokensModels(): Array<string> {
+    return getCachedConfig().chatCompletionsUseMaxCompletionTokens ?? []
+  }
+
   getModelFallback() {
     return getCachedConfig().modelFallback
   }
