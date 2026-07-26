@@ -10,10 +10,10 @@ The seam between the client-facing API ghc-proxy exposes (OpenAI- or Anthropic-c
 ### Translation policy
 The per-field decision about how a value crosses the proxy boundary: kept exactly, translated losslessly into the upstream shape, or rejected before dispatch. The point is that an incompatibility with Copilot is never resolved by silently dropping a caller-visible field, because that would change request semantics the client still believes are in force.
 
-A policy that rejects or strips a field asserts something about the upstream, and that assertion needs an upstream probe behind it. The proxy's own payload types cannot supply it — they describe what the proxy sends, not what Copilot accepts.
+A policy that rejects or strips a field asserts something about the upstream, and that assertion needs observed upstream behavior behind it — normally a probe, or an upstream error that names the constraint itself. The proxy's own payload types cannot supply it — they describe what the proxy sends, not what Copilot accepts.
 
 ### Upstream probe
-A script that sends real requests to Copilot to establish what it actually accepts, because the API is reverse-engineered and publishes no schema. Probes are the only admissible evidence for a translation policy that rejects or strips a field.
+A script that sends real requests to Copilot to establish what it actually accepts, because the API is reverse-engineered and publishes no schema. A probe is how a translation policy earns the right to reject or strip a field — the exception being a constraint upstream states outright in its own error text, which is already direct evidence and needs no probe to confirm.
 
 A probe result is a dated snapshot, not a permanent fact: the model set changes, and a policy correct when written can become a capability loss later. Constants that encode a probe result cite the probe and its date, so staleness stays visible. Probes cost real quota and share one rate-limited upstream, so they run sequentially. A probe must also control the state its requests land in — a cached prefix or a warm session makes the measurement describe the leftover state rather than the upstream.
 
