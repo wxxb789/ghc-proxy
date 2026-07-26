@@ -202,11 +202,18 @@ function mapResponsesUsage(
   const inputTokens = response.usage?.input_tokens ?? 0
   const outputTokens = response.usage?.output_tokens ?? 0
   const cachedTokens = response.usage?.input_tokens_details?.cached_tokens
+  // Models with explicit prompt caching (gpt-5.6 and later) report what they
+  // wrote to the cache. Anthropic's equivalent is cache_creation_input_tokens,
+  // which clients like Claude Code use to show cache-write cost. A zero write
+  // is omitted rather than reported: `0` would read as "a write happened and
+  // cost nothing", when in fact none happened.
+  const writtenTokens = response.usage?.input_tokens_details?.cache_write_tokens
 
   return {
     input_tokens: inputTokens - (cachedTokens ?? 0),
     output_tokens: outputTokens,
     ...(cachedTokens !== undefined ? { cache_read_input_tokens: cachedTokens } : {}),
+    ...(writtenTokens ? { cache_creation_input_tokens: writtenTokens } : {}),
   }
 }
 

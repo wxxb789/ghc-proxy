@@ -32,6 +32,8 @@ For the newer per-model routing behavior, including the Anthropic <-> Responses 
 | Multiple choices | Lossy | Uses `index=0` only, emits `lossy_multiple_choices_ignored`. |
 | Malformed tool call JSON | Unsupported | Fails as upstream protocol error (`502`). |
 | `finish_reason: content_filter` | Lossy | Mapped to Anthropic `refusal`. |
+| `usage.cached_tokens` | Exact | Mapped to `cache_read_input_tokens` and subtracted from `input_tokens`. |
+| `usage.cache_write_tokens` | Exact | Mapped to `cache_creation_input_tokens` on the Responses path. Omitted when zero — reporting `0` would imply a write that never happened. Only gpt-5.6 and later report it; see [research/prompt-caching.md](research/prompt-caching.md). |
 
 ## OpenAI Stream -> Anthropic Stream
 
