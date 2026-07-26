@@ -142,26 +142,47 @@ it advertises.
 
 ### Reasoning effort
 
-**The advertised list is authoritative.** For every model on every boundary,
-`capabilities.supports.reasoning_effort` matched actual behavior exactly — a
-model accepts precisely the levels it advertises and returns 400 for the rest.
-Clamp against that list rather than a static union.
+**The advertised list is authoritative for rejection.** Re-probed 2026-07-26
+after opus-5 / sonnet-5 / gpt-5.6 shipped: on every boundary a model rejects
+every level it does not advertise. Clamp against that list rather than a static
+union.
 
-#### `max`
+The converse does **not** hold. `gpt-5.3-codex` accepts `none` on `/responses`
+while advertising `["low","medium","high","xhigh"]` — the one case where real
+behavior is *wider* than the advertised list. That asymmetry is harmless for
+clamping (clamping to an advertised level never produces a rejected value) but
+it means the list is a floor on capability, not an exact description.
 
-| Boundary | Accepts `max` | Rejects `max` |
-| --- | --- | --- |
-| `/v1/messages` | all 6 reasoning Claude models | — |
-| `/chat/completions` | all 6 reasoning Claude models | gemini ×3 |
-| `/responses` | **gpt-5.6-luna / sol / terra** | gpt-5.3-codex, 5.4, 5.4-mini, 5.5, gpt-5-mini, mai-code-1 |
+#### Per-model results
+
+| Model | `/v1/messages` | `/chat/completions` | `/responses` | Advertised |
+| --- | --- | --- | --- | --- |
+| `claude-opus-5` | ✅ incl. `xhigh`+`max` | ✅ incl. `xhigh`+`max` | — | `low,medium,high,xhigh,max` |
+| `claude-sonnet-5` | ✅ incl. `xhigh`+`max` | ✅ incl. `xhigh`+`max` | — | `low,medium,high,xhigh,max` |
+| `claude-opus-4.8` / `4.7` | ✅ incl. `xhigh`+`max` | ✅ incl. `xhigh`+`max` | — | `low,medium,high,xhigh,max` |
+| `claude-opus-4.6` | `max` ✅ / `xhigh` ❌ | `max` ✅ / `xhigh` ❌ | — | `low,medium,high,max` |
+| `claude-sonnet-4.6` | `max` ✅ / `xhigh` ❌ | `max` ✅ / `xhigh` ❌ | — | `low,medium,high,max` |
+| `gpt-5.6-luna` / `sol` / `terra` | — | — | ✅ incl. `max` | `none,low,medium,high,xhigh,max` |
+| `gpt-5.5` / `5.4` / `5.4-mini` | — | — | `max` ❌ | `none,low,medium,high,xhigh` |
+| `gpt-5.3-codex` | — | — | `max` ❌, `none` ✅ (unadvertised) | `low,medium,high,xhigh` |
+| gemini ×3 | — | `max` ❌ | — | up to `high` |
+
+`none` and `minimal` are rejected by every Claude model on both Claude-facing
+boundaries — they exist only in the OpenAI vocabulary.
 
 ```
+output_config.effort "xhigh" is not supported by model claude-opus-4.6;
+supported values: [low medium high max]
+
 Invalid value: 'max'. Supported values are: 'none', 'minimal', 'low', 'medium', 'high', ...
 ```
 
-`claude-opus-4.6` and `claude-sonnet-4.6` are instructive: they advertise
-`max` but **not** `xhigh`, and reject `xhigh` while accepting `max`. The levels
-are not a simple ordered ladder every model implements a prefix of.
+`claude-opus-4.6` and `claude-sonnet-4.6` are the load-bearing counterexample:
+they advertise `max` but **not** `xhigh`, and behave that way. The levels are
+not an ordered ladder every model implements a prefix of, so a clamp target must
+be derived from the advertised list — a fixed fallback is wrong in both
+directions, downgrading models that would have accepted the request and still
+able to land on a level the model rejects.
 
 Before this was probed, the Responses translator downgraded `max` to `xhigh`
 unconditionally — correct for every model that existed at the time, and a
@@ -191,14 +212,26 @@ against the budget; `max_completion_tokens` bounds visible output only.
 
 #### Bounds
 
-The floor is enforced; the **ceiling is not**. Passing
-`limits.max_output_tokens + 1` was accepted by all 9 `/responses` models, so
-the advertised ceiling is advisory. Only the floor is clamped by the proxy.
+On `/responses` the floor is enforced and the **ceiling is not**: passing
+`limits.max_output_tokens + 1` was accepted by all 9 models, so the advertised
+ceiling is advisory there.
+
+`/v1/messages` is the opposite — its ceiling is hard:
+
+```
+max_tokens: 64001 > 64000, which is the maximum allowed number of output tokens for claude
+```
+
+The proxy clamps only the `/responses` floor today; the native `/v1/messages`
+ceiling is still forwarded as sent and surfaces upstream as a 400.
 
 ### Resulting proxy behavior
 
-- `max` is preserved when the resolved model advertises it, and clamped to
-  `xhigh` otherwise (`AnthropicToResponsesOptions.supportedEfforts`).
+- Effort is clamped to the model's **highest advertised level**
+  (`clampEffortToAdvertised`, shared by the native and Responses paths). With no
+  advertised list the effort passes through unchanged — with nothing to derive
+  from, forwarding the caller's request beats guessing at a level that may be
+  both a downgrade and still unsupported.
 - `max_tokens` is renamed to `max_completion_tokens` on `/chat/completions`
   for models that reject it; extend the list via
   `chatCompletionsUseMaxCompletionTokens`.
@@ -208,5 +241,6 @@ the advertised ceiling is advisory. Only the floor is clamped by the proxy.
 ### Not covered
 
 - Whether `max` measurably changes output quality. Probes assert acceptance.
-- `prompt_cache_breakpoint` / `prompt_cache_options` (GPT-5.6 explicit prompt
-  caching). Not probed against Copilot yet.
+- The native `/v1/messages` `max_tokens` ceiling is not clamped (see Bounds).
+- Whether other models also accept unadvertised levels the way `gpt-5.3-codex`
+  accepts `none`. Only the advertised set plus `none`/`minimal` were probed.
