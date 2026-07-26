@@ -81,6 +81,7 @@ They are rejected because the current Responses execution path cannot preserve t
 - Known unsupported builtin tools, such as `web_search`, fail explicitly with `400`.
 - External `input_image.image_url` values that point at remote HTTP(S) URLs fail explicitly with `400`.
 - `max_output_tokens` below Copilot's enforced minimum of 16 is raised to 16 rather than leaking a `400`. The client-facing schema still accepts `0..15` because those are valid OpenAI input; the floor is a Copilot quirk the proxy absorbs. See [research/sampling-parameters.md](research/sampling-parameters.md).
+- Explicit prompt-caching controls (`prompt_cache_options`, and `prompt_cache_breakpoint` on content blocks) are modeled and forwarded. `ttl` is constrained to the single value upstream accepts (`30m`) and an unknown `mode` is rejected locally, turning a wasted round-trip into an immediate `400`. Only gpt-5.6 and later accept these — earlier models return `400 ... is not supported on this model` — so the proxy forwards rather than injects them. See [research/prompt-caching.md](research/prompt-caching.md).
 - Official `input_file` and `item_reference` input items are modeled explicitly and validated before forwarding.
 - Unknown fields are passed through when they do not interfere with proxy-side policies, so newer official fields can continue to flow to Copilot when the upstream endpoint supports them.
 

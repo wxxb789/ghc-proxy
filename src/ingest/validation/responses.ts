@@ -16,9 +16,22 @@ import {
 
 // ── Content Schemas ──
 
+/**
+ * Marks where a reusable cache prefix ends. Only models with explicit prompt
+ * caching accept it — probed 2026-07-26, gpt-5.6 returns 200 while gpt-5.5 and
+ * earlier return `400 prompt_cache_breakpoint is not supported on this model`
+ * (`scripts/probes/prompt-caching.ts`).
+ *
+ * `explicit` is the only documented mode.
+ */
+const promptCacheBreakpointSchema = z.object({
+  mode: z.literal('explicit'),
+}).loose()
+
 const responsesInputTextSchema = z.object({
   type: z.enum(['input_text', 'output_text']),
   text: z.string(),
+  prompt_cache_breakpoint: promptCacheBreakpointSchema.nullable().optional(),
 }).loose()
 
 const responsesInputImageSchema = z.object({
@@ -26,6 +39,7 @@ const responsesInputImageSchema = z.object({
   image_url: z.string().nullable().optional(),
   file_id: z.string().nullable().optional(),
   detail: z.enum(['low', 'high', 'auto', 'original']).optional(),
+  prompt_cache_breakpoint: promptCacheBreakpointSchema.nullable().optional(),
 }).loose().superRefine((item, ctx) => {
   if (!item.image_url && !item.file_id) {
     ctx.addIssue({
@@ -303,6 +317,14 @@ function createResponsesPayloadSchema(options: {
     }).loose().nullable().optional(),
     safety_identifier: z.string().nullable().optional(),
     prompt_cache_key: z.string().nullable().optional(),
+    prompt_cache_options: z.object({
+      // `implicit` auto-places a breakpoint on the newest message; `explicit`
+      // caches only what the caller marks, so an explicit request with no
+      // breakpoint caches nothing at all (probed: cached=0, write=0).
+      mode: z.enum(['implicit', 'explicit']).optional(),
+      // Upstream: "Invalid value: '1h'. Supported values are: '30m'."
+      ttl: z.literal('30m').optional(),
+    }).loose().nullable().optional(),
     prompt_cache_retention: z.enum(['in-memory', '24h']).nullable().optional(),
     truncation: z.enum(['auto', 'disabled']).nullable().optional(),
     parallel_tool_calls: z.boolean().nullable().optional(),

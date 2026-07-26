@@ -23,6 +23,16 @@ export interface ResponsesPayload {
   stream_options?: ResponseStreamOptions | null
   safety_identifier?: string | null
   prompt_cache_key?: string | null
+  /**
+   * Explicit prompt-caching controls. Accepted only by models that support
+   * them — probed 2026-07-26: gpt-5.6 returns 200, gpt-5.5 and earlier return
+   * `400 prompt_cache_options is not supported on this model`
+   * (`scripts/probes/prompt-caching.ts`).
+   */
+  prompt_cache_options?: {
+    mode?: 'implicit' | 'explicit'
+    ttl?: '30m'
+  } | null
   prompt_cache_retention?: 'in-memory' | '24h' | null
   truncation?: 'auto' | 'disabled' | null
   parallel_tool_calls?: boolean | null
@@ -366,6 +376,13 @@ export interface ResponseUsage {
   total_tokens: number
   input_tokens_details?: {
     cached_tokens: number
+    /**
+     * Tokens written to the prompt cache. Reported only by models with
+     * explicit prompt caching — probed 2026-07-26, gpt-5.6 reports it on a
+     * cold call while gpt-5.5 always reports 0
+     * (`scripts/probes/prompt-caching.ts`).
+     */
+    cache_write_tokens?: number
   }
   output_tokens_details?: {
     reasoning_tokens: number
