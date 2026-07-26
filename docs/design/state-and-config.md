@@ -145,6 +145,9 @@ interface ConfigFile {
   responsesOfficialEmulator?: boolean // Opt-in local stateful /responses emulator
   responsesOfficialEmulatorTtlSeconds?: number // In-memory TTL for emulator state
 
+  // Chat Completions
+  chatCompletionsUseMaxCompletionTokens?: string[] // Extra model globs that need max_completion_tokens instead of max_tokens
+
   // Reasoning
   modelReasoningEfforts?: Record<string, ReasoningEffort> // Per-model effort defaults
 

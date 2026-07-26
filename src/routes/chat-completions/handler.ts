@@ -5,6 +5,7 @@ import type { ChatCompletionsPayload } from '~/types'
 import consola from 'consola'
 import { getTokenCount } from '~/lib/tokenizer'
 import { runPipeline } from '~/pipeline/runner'
+import { applyChatCompletionsTokenParam } from '~/transform/parameter-filter'
 
 import { chatCompletionsStrategyRegistry } from './strategy-registry'
 
@@ -48,6 +49,11 @@ export async function handleCompletionCore(
           payload.max_tokens = selectedModel?.capabilities.limits.max_output_tokens
           consola.debug('Set max_tokens to:', JSON.stringify(payload.max_tokens))
         }
+
+        // Runs last: some models reject `max_tokens` outright and want
+        // `max_completion_tokens`, so the rename has to see the final value —
+        // including the default injected just above.
+        applyChatCompletionsTokenParam(payload, selectedModel)
       },
       buildStrategyContext({ payload, meta, copilotClient, upstreamSignal, modelMapping }) {
         return {

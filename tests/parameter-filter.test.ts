@@ -7,13 +7,16 @@ import { CopilotClient } from '~/clients'
 import { getCachedConfig } from '~/lib/config'
 import { modelCache } from '~/state'
 import {
+  applyChatCompletionsTokenParam,
   applyResponsesParameterFilters,
+  clampResponsesOutputTokens,
   isReasoningModel,
   resolveStrippedResponsesParams,
 } from '~/transform/parameter-filter'
 
 import {
   buildGptModel,
+  buildModel,
   buildModelsResponse,
   clearConfig,
   createApp,
@@ -231,5 +234,102 @@ describe('reasoning param exemptions', () => {
     ]
     const strip = resolveStrippedResponsesParams(reasoningModel('gpt-5.3-codex'))
     expect([...strip].toSorted()).toEqual(['temperature', 'top_p'])
+  })
+})
+
+// ── Output-token parameter naming ──
+//
+// Probed 2026-07-26 (scripts/probes/effort-and-tokens.ts):
+//   /chat/completions  gpt-5.4 rejects max_tokens with
+//                      "Unsupported parameter: 'max_tokens' is not supported
+//                       with this model. Use 'max_completion_tokens' instead."
+//                      Every other reachable model accepts both.
+//   /v1/messages       requires max_tokens; max_completion_tokens yields
+//                      "max_tokens: Field required".
+//   /responses         max_output_tokens has a hard lower bound of 16.
+
+describe('chat completions output-token parameter', () => {
+  beforeEach(() => clearConfig())
+  afterEach(() => clearConfig())
+
+  test('renames max_tokens for a model that rejects it', () => {
+    const payload = { model: 'gpt-5.4', messages: [], max_tokens: 256 }
+
+    applyChatCompletionsTokenParam(payload, buildGptModel('gpt-5.4'))
+
+    expect('max_tokens' in payload).toBe(false)
+    expect((payload as Record<string, unknown>).max_completion_tokens).toBe(256)
+  })
+
+  test('leaves max_tokens alone for models that accept it', () => {
+    const payload = { model: 'claude-opus-5', messages: [], max_tokens: 256 }
+
+    applyChatCompletionsTokenParam(payload, buildModel('claude-opus-5'))
+
+    expect(payload.max_tokens).toBe(256)
+    expect('max_completion_tokens' in payload).toBe(false)
+  })
+
+  test('is a no-op when max_tokens is absent', () => {
+    const payload: { max_tokens?: number | null } = {}
+
+    applyChatCompletionsTokenParam(payload, buildGptModel('gpt-5.4'))
+
+    expect('max_completion_tokens' in payload).toBe(false)
+  })
+
+  test('a user rule can extend the rename to other models', () => {
+    const config = getCachedConfig() as Record<string, unknown>
+    config.chatCompletionsUseMaxCompletionTokens = ['gemini-*']
+    const payload = { model: 'gemini-3.5-flash', messages: [], max_tokens: 256 }
+
+    applyChatCompletionsTokenParam(payload, buildGptModel('gemini-3.5-flash'))
+
+    expect((payload as Record<string, unknown>).max_completion_tokens).toBe(256)
+  })
+})
+
+// ── Responses output-token floor ──
+//
+// Probed 2026-07-26: every /responses model rejects max_output_tokens below 16
+// with "Invalid 'max_output_tokens': integer below minimum value. Expected a
+// value >= 16". The ceiling is NOT enforced — limits.max_output_tokens + 1 was
+// accepted by all 9 — so only the floor is clamped here.
+//
+// The client-facing schema deliberately still accepts 0..15: that is valid
+// OpenAI input, and the floor is a Copilot quirk the proxy absorbs rather than
+// leaks.
+
+describe('responses output-token floor', () => {
+  test('raises a below-minimum value to the floor', () => {
+    const payload: ResponsesPayload = { model: 'gpt-5.4', max_output_tokens: 1 }
+
+    clampResponsesOutputTokens(payload)
+
+    expect(payload.max_output_tokens).toBe(16)
+  })
+
+  test('leaves a value at the floor untouched', () => {
+    const payload: ResponsesPayload = { model: 'gpt-5.4', max_output_tokens: 16 }
+
+    clampResponsesOutputTokens(payload)
+
+    expect(payload.max_output_tokens).toBe(16)
+  })
+
+  test('leaves a comfortable value untouched', () => {
+    const payload: ResponsesPayload = { model: 'gpt-5.4', max_output_tokens: 4096 }
+
+    clampResponsesOutputTokens(payload)
+
+    expect(payload.max_output_tokens).toBe(4096)
+  })
+
+  test('ignores an absent value', () => {
+    const payload: ResponsesPayload = { model: 'gpt-5.4' }
+
+    clampResponsesOutputTokens(payload)
+
+    expect(payload.max_output_tokens).toBeUndefined()
   })
 })

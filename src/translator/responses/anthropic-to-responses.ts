@@ -40,6 +40,16 @@ const USER_ID_SESSION_RE = /_session_(.+)$/
 
 export interface AnthropicToResponsesOptions {
   reasoningEffortResolver?: (model: string) => string
+  /**
+   * The target model's advertised `reasoning_effort` levels.
+   *
+   * Probing (2026-07-26) confirmed the advertised list matches upstream
+   * behavior exactly — gpt-5.6 accepts `max`, earlier gpt-5.x reject it with
+   * `Invalid value: 'max'` — so it is authoritative for clamping. Omit it and
+   * `max` degrades to `xhigh`, which is the safe choice for every model that
+   * existed before gpt-5.6.
+   */
+  supportedEfforts?: Array<string>
 }
 
 export function translateAnthropicToResponsesPayload(
@@ -302,7 +312,7 @@ function resolveResponsesReasoningEffort(
   }
 
   if (payload.output_config?.effort) {
-    return mapAnthropicEffortToResponses(payload.output_config.effort)
+    return mapAnthropicEffortToResponses(payload.output_config.effort, options)
   }
 
   if (payload.thinking?.type === 'adaptive') {
@@ -316,10 +326,18 @@ function resolveResponsesReasoningEffort(
   return undefined
 }
 
+/**
+ * Map an Anthropic `output_config.effort` to a Responses `reasoning.effort`.
+ *
+ * The two vocabularies agree except at the top: `max` is only valid upstream
+ * for models that advertise it (gpt-5.6 and later). For anything else it is
+ * clamped to `xhigh` — the highest level the earlier gpt-5.x family accepts.
+ */
 function mapAnthropicEffortToResponses(
   effort: NonNullable<AnthropicMessagesPayload['output_config']>['effort'],
+  options?: AnthropicToResponsesOptions,
 ): NonNullable<ResponsesPayload['reasoning']>['effort'] {
-  if (effort === 'max') {
+  if (effort === 'max' && !options?.supportedEfforts?.includes('max')) {
     return 'xhigh'
   }
   return effort

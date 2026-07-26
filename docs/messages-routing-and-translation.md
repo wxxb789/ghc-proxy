@@ -52,7 +52,7 @@ When a model supports `/responses` but not native `/v1/messages`, the proxy tran
 | --- | --- | --- |
 | `thinking: disabled` | Maps to `reasoning.effort = none` | Preserves explicit disable intent. |
 | `thinking: adaptive` with no explicit effort | Maps to `reasoning.effort = medium` | Conservative default for a request that asked for adaptive reasoning but did not fix an effort. |
-| `output_config.effort` | Maps to Responses reasoning effort | Preserves explicit caller intent. |
+| `output_config.effort` | Maps to Responses reasoning effort | Preserves explicit caller intent. `max` is kept when the resolved model advertises it (gpt-5.6 and later) and clamped to `xhigh` otherwise — see [research/sampling-parameters.md](research/sampling-parameters.md). |
 | `output_config.format` | Maps JSON Schema structured output to Responses `text.format` | Preserves schema-constrained output when native `/v1/messages` cannot safely carry the field. |
 | `apply_patch` custom tool | Optional shim to function tool | Controlled by `useFunctionApplyPatch`. |
 | Responses context compaction | Optional policy | Disabled by default. Requires `responsesApiAutoContextManagement: true` and a model match in `responsesApiContextManagementModels`. |
@@ -80,6 +80,7 @@ They are rejected because the current Responses execution path cannot preserve t
 - Automatic prompt slicing to the latest `compaction` item is disabled by default and only applies when explicitly enabled in config.
 - Known unsupported builtin tools, such as `web_search`, fail explicitly with `400`.
 - External `input_image.image_url` values that point at remote HTTP(S) URLs fail explicitly with `400`.
+- `max_output_tokens` below Copilot's enforced minimum of 16 is raised to 16 rather than leaking a `400`. The client-facing schema still accepts `0..15` because those are valid OpenAI input; the floor is a Copilot quirk the proxy absorbs. See [research/sampling-parameters.md](research/sampling-parameters.md).
 - Official `input_file` and `item_reference` input items are modeled explicitly and validated before forwarding.
 - Unknown fields are passed through when they do not interfere with proxy-side policies, so newer official fields can continue to flow to Copilot when the upstream endpoint supports them.
 

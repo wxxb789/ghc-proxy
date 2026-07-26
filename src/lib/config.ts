@@ -12,6 +12,7 @@ const reasoningEffortSchema = z.enum([
   'medium',
   'high',
   'xhigh',
+  'max',
 ])
 
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>
@@ -34,6 +35,7 @@ const configFileSchema = z.object({
     params: z.array(z.string()).min(1),
   })).optional(),
   responsesApiParameterFiltersReplaceDefault: z.boolean().optional(),
+  chatCompletionsUseMaxCompletionTokens: z.array(z.string()).optional(),
   responsesOfficialEmulator: z.boolean().optional(),
   responsesOfficialEmulatorTtlSeconds: z.number().int().positive().optional(),
   modelReasoningEfforts: z.record(z.string(), reasoningEffortSchema).optional(),

@@ -147,7 +147,7 @@ interface ResponseTextFormatJsonSchema {
 }
 
 export interface ResponseReasoningConfig {
-  effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null
+  effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null
   generate_summary?: 'auto' | 'concise' | 'detailed' | null
   summary?: 'auto' | 'concise' | 'detailed' | null
 }

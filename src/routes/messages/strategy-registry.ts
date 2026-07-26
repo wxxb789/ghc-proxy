@@ -13,7 +13,7 @@ import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
 import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
-import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
+import { applyResponsesParameterFilters, clampResponsesOutputTokens } from '~/transform/parameter-filter'
 import { stripPhaseFromInputMessages } from '~/transform/responses-input'
 import { convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeExclusiveSamplingParams, sanitizeOutputConfig } from '~/transform/sanitize'
 
@@ -65,6 +65,7 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
     const responsesPayload = withTranslationErrors(() =>
       translateAnthropicToResponsesPayload(ctx.anthropicPayload, {
         reasoningEffortResolver: model => configStore.getReasoningEffort(model),
+        supportedEfforts: ctx.selectedModel?.capabilities.supports.reasoning_effort,
       }),
     )
 
@@ -83,6 +84,7 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
     // Runs last so it can strip any request parameter — including fields
     // injected above (e.g. context_management) — that the model rejects.
     applyResponsesParameterFilters(responsesPayload, ctx.selectedModel)
+    clampResponsesOutputTokens(responsesPayload)
 
     const { vision, initiator } = getResponsesRequestOptions(responsesPayload)
     const strategy = createMessagesViaResponsesStrategy(

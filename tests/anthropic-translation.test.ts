@@ -810,3 +810,52 @@ describe('sampling parameters', () => {
     expect(kinds).not.toContain('unsupported_top_k')
   })
 })
+
+// ── reasoning effort: max ──
+//
+// Probed 2026-07-26 (scripts/probes/effort-and-tokens.ts): gpt-5.6-luna/sol/
+// terra accept reasoning.effort='max' (200); every other gpt-5.x returns
+// 400 "Invalid value: 'max'". Claude accepts it on both the messages and
+// chat-completions boundaries. In every case the model's advertised
+// `capabilities.supports.reasoning_effort` matched its actual behavior, so
+// the advertised list is authoritative and the effort must not be downgraded
+// blindly.
+
+describe('reasoning effort max', () => {
+  test('max is preserved for a model that advertises it', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      model: 'gpt-5.6-luna',
+      max_tokens: 256,
+      output_config: { effort: 'max' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }, {
+      supportedEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    })
+
+    expect(translated.reasoning?.effort).toBe('max')
+  })
+
+  test('max is clamped to the highest level a model actually advertises', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      model: 'gpt-5.4',
+      max_tokens: 256,
+      output_config: { effort: 'max' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }, {
+      supportedEfforts: ['none', 'low', 'medium', 'high', 'xhigh'],
+    })
+
+    expect(translated.reasoning?.effort).toBe('xhigh')
+  })
+
+  test('max falls back to xhigh when the model list is unknown', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      model: 'gpt-5.4',
+      max_tokens: 256,
+      output_config: { effort: 'max' },
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+
+    expect(translated.reasoning?.effort).toBe('xhigh')
+  })
+})
