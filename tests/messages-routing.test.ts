@@ -15,6 +15,7 @@ import {
   buildGptModel,
   buildModel,
   buildModelsResponse,
+  buildResponsesResult,
   buildVisionModel,
   clearConfig,
   createApp,
@@ -112,6 +113,59 @@ describe('messages routing', () => {
     expect(json.content[0]).toMatchObject({ type: 'text', text: 'translated' })
     expect(calls[0]?.payload.model).toBe('gpt-5')
     expect(calls[0]?.payload.context_management).toBeUndefined()
+  })
+
+  // Regression: the Anthropic -> Responses translator emits `phase` on
+  // assistant messages (translator/responses/response-items.ts), but `phase`
+  // is an output-only annotation that some models reject as input — this repo
+  // documented it as a 400 cause in docs/investigation-responses-404.md.
+  // The stripper only ran on POST /v1/responses, so this path leaked it.
+  test('/v1/messages responses path strips phase from translated input items', async () => {
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_phase',
+      status: 'completed',
+      output: [],
+      output_text: '',
+    }), calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5',
+        max_tokens: 256,
+        messages: [
+          { role: 'user', content: 'run the tool' },
+          {
+            // Text alongside tool_use makes resolveAssistantPhase() emit
+            // 'commentary'; text alone would emit 'final_answer'. Either way
+            // the field must not reach upstream.
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'calling it now' },
+              { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { cmd: 'ls' } },
+            ],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }],
+          },
+        ],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+
+    const input = calls[0]!.payload.input as Array<Record<string, unknown>>
+    expect(input.length).toBeGreaterThan(0)
+    for (const item of input) {
+      expect(item).not.toHaveProperty('phase')
+    }
   })
 
   test('/v1/messages accepts system messages before model rewrite', async () => {

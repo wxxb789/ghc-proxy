@@ -664,6 +664,24 @@ describe('API smoke', () => {
     ])
   })
 
+  // Regression: /models was registered without requestGuardPlugin and without
+  // { guarded: true }, so it bypassed rate limiting and manual approval — and
+  // it is not inert, since a cache miss drives an upstream call.
+  test('GET /models is covered by the request guard', async () => {
+    const app = createApp()
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-sonnet-4.5')))
+
+    // Reject rather than queue, so an unguarded route is visible as a 200.
+    authStore.rateLimitSeconds = 3600
+    authStore.rateLimitWait = false
+
+    const first = await app.handle(new Request('http://localhost/v1/models'))
+    expect(first.status).toBe(200)
+
+    const second = await app.handle(new Request('http://localhost/v1/models'))
+    expect(second.status).toBe(429)
+  })
+
   test('OpenAI streaming preserves public reasoning_text but does not leak Copilot-private fields', async () => {
     const app = createApp()
     const calls: Array<CapturedChatCall> = []

@@ -8,7 +8,7 @@ import { authStore, modelCache } from '~/state'
 import { CopilotClient } from '../src/clients/copilot-client'
 import { getClientConfig } from '../src/clients/factory'
 
-import { buildGitHubUrls, normalizeGheDomain } from '../src/clients/ghe-domain'
+import { applyGheDomain, buildGitHubUrls, normalizeGheDomain } from '../src/clients/ghe-domain'
 import { restoreStateSnapshot, saveStateSnapshot } from './helpers'
 
 // Use import.meta.resolve to get the absolute file URL, bypassing Bun's mock.module registry.
@@ -98,6 +98,62 @@ describe('buildGitHubUrls', () => {
 
   test('invalid domain propagates normalizeGheDomain error', () => {
     expect(() => buildGitHubUrls('github.example.com')).toThrow('must end with .ghe.com')
+  })
+})
+
+// ── applyGheDomain — shared bootstrap resolution ──
+//
+// Regression: check-usage assigned gheDomain but skipped the account-type
+// promotion that start.ts and auth.ts perform, so copilotBaseUrl() sent GHE
+// users to the public endpoint. The three bootstraps now share this function.
+
+describe('applyGheDomain', () => {
+  function makeAuth(accountType: 'individual' | 'business' | 'enterprise' = 'individual') {
+    return { gheDomain: undefined as string | undefined, accountType }
+  }
+
+  test('promotes an individual account to enterprise when a domain is configured', () => {
+    const auth = makeAuth()
+
+    applyGheDomain(auth, 'company.ghe.com')
+
+    expect(auth.gheDomain).toBe('company.ghe.com')
+    expect(auth.accountType).toBe('enterprise')
+  })
+
+  test('leaves account type alone when no domain is in play', () => {
+    const auth = makeAuth()
+
+    applyGheDomain(auth, undefined)
+
+    expect(auth.gheDomain).toBeUndefined()
+    expect(auth.accountType).toBe('individual')
+  })
+
+  test('does not downgrade an already-business account', () => {
+    const auth = makeAuth('business')
+
+    applyGheDomain(auth, 'company.ghe.com')
+
+    expect(auth.accountType).toBe('business')
+  })
+
+  test('CLI override replaces the configured domain and normalizes it', () => {
+    const auth = makeAuth()
+
+    applyGheDomain(auth, 'configured.ghe.com', 'https://Override.GHE.com/')
+
+    expect(auth.gheDomain).toBe('override.ghe.com')
+    expect(auth.accountType).toBe('enterprise')
+  })
+
+  test('an empty CLI override clears a persisted domain', () => {
+    const auth = makeAuth()
+
+    applyGheDomain(auth, 'configured.ghe.com', '')
+
+    expect(auth.gheDomain).toBeUndefined()
+    expect(auth.accountType).toBe('individual')
   })
 })
 

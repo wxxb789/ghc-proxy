@@ -34,6 +34,44 @@ export function normalizeGheDomain(input: string): string {
   return domain
 }
 
+/** The `authStore` fields this resolution reads and writes. */
+export interface GheDomainTarget {
+  gheDomain?: string
+  accountType: 'individual' | 'business' | 'enterprise'
+}
+
+/**
+ * Resolve the effective GHE domain onto `authStore` and promote the account
+ * type when one is in play.
+ *
+ * Every entry point (`start`, `auth`, `check-usage`) needs both halves: the
+ * domain selects the GitHub URLs, while `accountType` selects the Copilot base
+ * URL in `copilotBaseUrl()`. Applying only the first sends GHE users to the
+ * public Copilot endpoint, so the two are resolved together here rather than
+ * re-derived per command.
+ *
+ * @param auth Mutated in place — receives the resolved domain and, when a
+ * domain is in play, an account type promoted from `individual`.
+ * @param configuredDomain Persisted `gheDomain` from config.json.
+ * @param overrideDomain CLI argument. `undefined` leaves the persisted value
+ * alone; an empty string explicitly clears it.
+ */
+export function applyGheDomain(
+  auth: GheDomainTarget,
+  configuredDomain: string | undefined,
+  overrideDomain?: string,
+): void {
+  auth.gheDomain = configuredDomain
+
+  if (overrideDomain !== undefined) {
+    auth.gheDomain = overrideDomain ? normalizeGheDomain(overrideDomain) : undefined
+  }
+
+  if (auth.gheDomain && auth.accountType === 'individual') {
+    auth.accountType = 'enterprise'
+  }
+}
+
 /**
  * Build GitHub base URL and API base URL for a given GHE domain,
  * or return the public GitHub defaults when no domain is provided.

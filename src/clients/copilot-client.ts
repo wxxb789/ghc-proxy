@@ -194,11 +194,17 @@ export class CopilotClient {
 
   async createEmbeddings(
     payload: EmbeddingRequest,
+    options?: { signal?: AbortSignal },
   ): Promise<EmbeddingResponse> {
     return this.requestJson<EmbeddingResponse>(
       '/embeddings',
       'Failed to create embeddings',
-      { method: 'POST', body: JSON.stringify(payload), retryable: true },
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        signal: options?.signal,
+        retryable: true,
+      },
     )
   }
 

@@ -8,6 +8,7 @@ import { configStore, modelCache, RESPONSES_ENDPOINT } from '~/state'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
+import { stripPhaseFromInputMessages } from '~/transform/responses-input'
 import { normalizeFunctionParametersSchemaForCopilot } from '~/translator/responses/function-schema'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
 import { responsesStrategyRegistry } from './strategy-registry'
@@ -206,33 +207,6 @@ function applyResponsesInputPolicies(payload: ResponsesPayload): void {
   stripUnresolvableInputItems(payload)
   stripPhaseFromInputMessages(payload)
   rejectUnsupportedRemoteImageUrls(payload)
-}
-
-/**
- * Strip `phase` from input message items. The `phase` field is an output
- * annotation that some models may reject when sent back as input.
- */
-function stripPhaseFromInputMessages(payload: ResponsesPayload): void {
-  if (!Array.isArray(payload.input)) {
-    return
-  }
-
-  let stripped = 0
-  for (const item of payload.input) {
-    if (typeof item !== 'object' || item === null) {
-      continue
-    }
-    const rec = item as Record<string, unknown>
-    const isMessage = !('type' in rec) || rec.type === 'message'
-    if (isMessage && 'phase' in rec) {
-      delete rec.phase
-      stripped++
-    }
-  }
-
-  if (stripped > 0) {
-    consola.debug(`Stripped phase from ${stripped} input message item(s)`)
-  }
 }
 
 /**

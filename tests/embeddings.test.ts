@@ -122,6 +122,45 @@ describe('client injection for non-pipeline handlers', () => {
     expect(result).toMatchObject({ object: 'list' })
   })
 
+  // Regression: createEmbeddings had no signal parameter at all, and this
+  // route does not go through runPipeline (where the upstream signal is
+  // wired), so a client disconnect left the upstream request running and the
+  // configured upstream timeout had nothing to act on.
+  test('handleEmbeddingsCore forwards an abort signal to the client', async () => {
+    const controller = new AbortController()
+    let abortedDuringCall: boolean | undefined
+
+    const client = {
+      createEmbeddings: async (_payload: EmbeddingRequest, options?: { signal?: AbortSignal }) => {
+        const signal = options?.signal
+        if (!signal) {
+          throw new Error('no signal reached the client')
+        }
+        // Abort while the upstream call is still in flight — that is the
+        // window a client disconnect actually falls in.
+        expect(signal.aborted).toBe(false)
+        controller.abort()
+        abortedDuringCall = signal.aborted
+
+        return {
+          object: 'list',
+          model: 'text-embedding-3-small',
+          data: [],
+          usage: { prompt_tokens: 0, total_tokens: 0 },
+        } satisfies EmbeddingResponse
+      },
+    } as unknown as CopilotClient
+
+    await handleEmbeddingsCore(
+      { model: 'text-embedding-3-small', input: 'hello' },
+      new Headers({ 'content-type': 'application/json' }),
+      client,
+      controller.signal,
+    )
+
+    expect(abortedDuringCall).toBe(true)
+  })
+
   test('handleModelsCore uses an injected client on a cache miss', async () => {
     modelCache.clearModels()
     let getModelsCalls = 0
