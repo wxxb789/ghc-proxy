@@ -94,6 +94,51 @@ export function hasOutputConfigFormat(payload: AnthropicMessagesPayload | undefi
   return payload?.output_config?.format != null
 }
 
+/**
+ * Whether {@link reduceOutputFormatForNativeMessages} can produce a
+ * native-acceptable format without dropping a caller guarantee.
+ *
+ * Split from the reducer so strategy selection stays a pure predicate.
+ */
+export function canReduceOutputFormatForNativeMessages(
+  payload: AnthropicMessagesPayload | undefined,
+): boolean {
+  const format = payload?.output_config?.format
+  return !format || format.strict === undefined
+}
+
+/**
+ * Reduce `output_config.format` to the shape Copilot's native `/v1/messages`
+ * accepts.
+ *
+ * Probed 2026-07-26 (`scripts/probes/messages/output-format.ts`): native
+ * Messages serves a bare `{ type, schema }` on every model that advertises
+ * `structured_outputs`, but rejects the optional Anthropic annotations —
+ * `output_config.format.name: Extra inputs are not permitted`, same for
+ * `strict`. The Anthropic schema allows both, so a caller can legitimately send
+ * them.
+ *
+ * `name` and `description` are labels; dropping them costs the caller nothing.
+ * `strict` is not — it is a promise about the reply — so
+ * {@link canReduceOutputFormatForNativeMessages} keeps those requests off this
+ * path entirely rather than stripping the guarantee here.
+ */
+export function reduceOutputFormatForNativeMessages(
+  payload: AnthropicMessagesPayload,
+): void {
+  const format = payload.output_config?.format
+  if (!format) {
+    return
+  }
+
+  if (format.name !== undefined || format.description !== undefined) {
+    payload.output_config = {
+      ...payload.output_config,
+      format: { type: format.type, schema: format.schema },
+    }
+  }
+}
+
 // Heuristic mapping from Anthropic classic `budget_tokens` to an adaptive
 // `output_config.effort`. The result is clamped against the model's advertised
 // efforts by `sanitizeOutputConfig` afterwards, so this only needs to pick a
@@ -165,6 +210,13 @@ export function sanitizeOutputConfig(
 
   const effort = payload.output_config.effort
   if (effort == null) {
+    // A null effort is a no-op, but the object may still carry `format` — the
+    // usual shape of a structured-output request, which sends no effort at all.
+    // Deleting the container here would drop the caller's schema silently.
+    if (payload.output_config.format) {
+      delete payload.output_config.effort
+      return
+    }
     delete payload.output_config
     return
   }

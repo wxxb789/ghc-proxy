@@ -79,6 +79,10 @@ export class ModelCache {
       return true
     return !MODELS_REJECTING_OUTPUT_CONFIG.has(model.id)
   }
+
+  supportsStructuredOutputs(model: Model | undefined): boolean {
+    return model?.capabilities.supports.structured_outputs ?? false
+  }
 }
 
 export const modelCache = new ModelCache()

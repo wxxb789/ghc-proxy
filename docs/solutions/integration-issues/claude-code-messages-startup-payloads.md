@@ -83,10 +83,16 @@ const anthropicOutputFormatSchema = z.object({
 }).strict()
 
 const anthropicOutputConfigSchema = z.object({
-  effort: z.enum(['low', 'medium', 'high', 'max', 'xhigh']).nullable().optional(),
+  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).nullable().optional(),
   format: anthropicOutputFormatSchema.optional(),
-}).strict()
+}).loose()
 ```
+
+> **Amended 2026-07-27.** The container was `.strict()` as originally written and
+> is now `.loose()`. It was the only strict container on this boundary, so every
+> field Anthropic added arrived as a local 400 before the request could reach a
+> model that might accept it. `format` keeps its own `.strict()` — an
+> unrecognized key *inside* it still means a constraint the proxy cannot carry.
 
 Make Messages strategy selection payload-aware. Native Messages still wins for ordinary native-compatible payloads, but payloads with `output_config.format` need the Responses translator so the schema is preserved:
 
@@ -98,6 +104,21 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
   // ...
 }
 ```
+
+> **Superseded 2026-07-27.** The blanket exclusion above was wrong, and this doc
+> is the record of how it got that way. The Vertex rejection that motivated it
+> was an *organization-policy* constraint on `claude-opus-4-7`
+> (`constraints/vertexai.allowedPartnerModelFeatures`), not a limit of Anthropic
+> Messages — but it was generalized into a permanent rule for every model.
+> Probing native Messages directly for the first time
+> (`scripts/probes/messages/output-format.ts`, results in
+> `docs/research/structured-output-native.md`) found 6 of 8 models serve a bare
+> `{ type, schema }`. `claude-opus-5` and `claude-sonnet-5` have no `/responses`
+> endpoint, so the rule left their structured-output requests with no path at
+> all — a local 400. Native now handles them when the model advertises
+> `structured_outputs`; `strict` requests still route away, since dropping that
+> key would silently discard a caller guarantee, which is the failure this doc
+> got right.
 
 Translate Anthropic JSON Schema output config to Responses `text.format`:
 
