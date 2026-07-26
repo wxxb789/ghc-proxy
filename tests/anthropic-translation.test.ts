@@ -947,3 +947,61 @@ describe('reasoning effort clamping covers every branch', () => {
     expect(translated.reasoning?.effort).toBe('none')
   })
 })
+
+// Regression: output_config.effort was dropped entirely on the chat-completions
+// fallback — normalizeAnthropicRequest never read it, and no TranslationPolicy
+// issue was recorded either. Not a 400, a silent capability loss: the caller
+// asked for `max` and got whatever the budget heuristic produced ('high' at
+// most). Copilot does accept reasoning_effort here (probed 2026-07-26).
+describe('output_config.effort on the chat-completions fallback', () => {
+  test('an explicit effort wins over the budget heuristic', () => {
+    const translator = new AnthropicMessagesAdapter()
+    const payload = translator.toCapiPlan({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      thinking: { type: 'enabled', budget_tokens: 4000 },
+      output_config: { effort: 'max' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }).payload
+
+    // budget 4000 infers 'low'; the caller named 'max'.
+    expect(payload.reasoning_effort).toBe('max')
+  })
+
+  test('an explicit effort applies without any thinking config', () => {
+    const translator = new AnthropicMessagesAdapter()
+    const payload = translator.toCapiPlan({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      output_config: { effort: 'xhigh' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }).payload
+
+    expect(payload.reasoning_effort).toBe('xhigh')
+  })
+
+  test('the budget heuristic still applies when no effort is named', () => {
+    const translator = new AnthropicMessagesAdapter()
+    const payload = translator.toCapiPlan({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      thinking: { type: 'enabled', budget_tokens: 4000 },
+      messages: [{ role: 'user', content: 'hello' }],
+    }).payload
+
+    expect(payload.reasoning_effort).toBe('low')
+  })
+
+  test('thinking:disabled sends no effort even when one is named', () => {
+    const translator = new AnthropicMessagesAdapter()
+    const payload = translator.toCapiPlan({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      thinking: { type: 'disabled' },
+      output_config: { effort: 'max' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }).payload
+
+    expect(payload.reasoning_effort).toBeUndefined()
+  })
+})

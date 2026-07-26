@@ -22,6 +22,24 @@ function inferReasoningEffort(budgetTokens: number): ReasoningEffort {
   return 'high'
 }
 
+/**
+ * The effort to send upstream: the level the caller named, else one inferred
+ * from the thinking budget.
+ *
+ * `output_config.effort` used to be dropped entirely on this path — it is not
+ * part of the OpenAI chat schema, so the normalizer never read it — which
+ * silently downgraded a caller asking for `max` to whatever the budget
+ * heuristic produced (`high` at most). Copilot does accept `reasoning_effort`
+ * here: probed 2026-07-26, every reasoning Claude model on `/chat/completions`
+ * accepts the levels it advertises, `max` included.
+ */
+function resolveRequestEffort(
+  request: ConversationRequest,
+  budgetTokens: number,
+): ReasoningEffort {
+  return request.outputEffort ?? inferReasoningEffort(budgetTokens)
+}
+
 export function inferModelFamily(model: string): CapiProfile['family'] {
   if (model.startsWith('claude')) {
     return 'claude'
@@ -42,8 +60,13 @@ const baseProfile: CapiProfile = {
   includeUsageOnStream: true,
   applyThinking(request) {
     const thinking = request.thinking
-    if (!thinking || thinking.type === 'disabled') {
+    if (thinking?.type === 'disabled') {
       return {}
+    }
+    if (!thinking) {
+      // An explicit effort still applies: the caller can name an effort level
+      // without also configuring a thinking budget.
+      return request.outputEffort ? { reasoning_effort: request.outputEffort } : {}
     }
 
     const budgetTokens = thinking.type === 'adaptive'
@@ -51,7 +74,7 @@ const baseProfile: CapiProfile = {
       : thinking.budgetTokens
 
     return {
-      reasoning_effort: inferReasoningEffort(budgetTokens),
+      reasoning_effort: resolveRequestEffort(request, budgetTokens),
     }
   },
 }
@@ -63,8 +86,11 @@ const claudeProfile: CapiProfile = {
   includeUsageOnStream: true,
   applyThinking(request) {
     const thinking = request.thinking
-    if (!thinking || thinking.type === 'disabled') {
+    if (thinking?.type === 'disabled') {
       return {}
+    }
+    if (!thinking) {
+      return request.outputEffort ? { reasoning_effort: request.outputEffort } : {}
     }
 
     const budgetTokens = thinking.type === 'adaptive'
@@ -72,7 +98,7 @@ const claudeProfile: CapiProfile = {
       : thinking.budgetTokens
 
     return {
-      reasoning_effort: inferReasoningEffort(budgetTokens),
+      reasoning_effort: resolveRequestEffort(request, budgetTokens),
       thinking_budget: budgetTokens,
     }
   },

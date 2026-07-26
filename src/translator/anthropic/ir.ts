@@ -79,6 +79,14 @@ export interface NormalizedAnthropicRequest {
   tools?: Array<NormalizedToolDefinition>
   toolChoice?: NormalizedToolChoice
   thinking?: NormalizedThinkingConfig
+  /**
+   * The caller's explicit `output_config.effort`, when they set one.
+   *
+   * Kept separate from `thinking`: the thinking config only carries a token
+   * budget, from which an effort can be *inferred*, while this is the level the
+   * caller actually named. It therefore wins over the inferred value.
+   */
+  outputEffort?: NonNullable<AnthropicMessagesPayload['output_config']>['effort']
   serviceTier?: AnthropicMessagesPayload['service_tier']
 }
 

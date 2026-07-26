@@ -224,6 +224,7 @@ export function normalizeAnthropicConversation(
       })),
       toolChoice: normalized.toolChoice,
       thinking: normalized.thinking,
+      outputEffort: normalized.outputEffort ?? undefined,
     },
     issues: context.getIssues(),
   }
