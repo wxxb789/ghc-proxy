@@ -39,7 +39,7 @@ Plus one **known-missing** reconciler discovered in live testing (issue #45 foll
 
 The Responses boundary already solved the isomorphic problem with a **declarative, capability-driven, config-extensible rule engine**: [`parameter-filter.ts`](../../src/transform/parameter-filter.ts).
 
-- `resolveStrippedResponsesParams(model)` composes a **built-in default rule** (any model advertising `reasoning_effort` strips `temperature`/`top_p`) with **user rules** (`responsesApiParameterFilters`, glob-matched by model id), taking the **union**.
+- `resolveStrippedResponsesParams(model)` composes a **built-in default rule** (any model advertising `reasoning_effort` strips `temperature`/`top_p`, minus evidence-backed per-model exemptions — codex keeps `top_p`) with **user rules** (`responsesApiParameterFilters`, glob-matched by model id), taking the **union**.
 - `responsesApiParameterFiltersReplaceDefault` lets user rules fully overwrite the default.
 - `applyResponsesParameterFilters(payload, model)` runs the resolved set against the payload.
 

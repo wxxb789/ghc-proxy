@@ -99,17 +99,6 @@ export function recordAnthropicRequestIssues(
   request: NormalizedAnthropicRequest,
   context: TranslationContext,
 ) {
-  if (request.topK !== undefined) {
-    context.record(
-      {
-        kind: 'unsupported_top_k',
-        severity: 'warning',
-        message: 'Anthropic top_k is not supported by the upstream Copilot CAPI payload and was dropped.',
-      },
-      { fatalInStrict: true },
-    )
-  }
-
   if (request.serviceTier !== undefined) {
     context.record(
       {
@@ -226,6 +215,7 @@ export function normalizeAnthropicConversation(
       stream: normalized.stream,
       temperature: normalized.temperature,
       topP: normalized.topP,
+      topK: normalized.topK,
       userId: normalized.userId,
       tools: normalized.tools?.map(tool => ({
         name: tool.name,

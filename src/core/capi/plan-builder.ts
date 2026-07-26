@@ -306,6 +306,7 @@ export function buildCapiExecutionPlan(
     stream: request.stream,
     temperature: request.temperature,
     top_p: request.topP,
+    ...(request.topK != null ? { top_k: request.topK } : {}),
     user: request.userId,
     tools: serializeTools(request.tools),
     tool_choice: serializeToolChoice(request.toolChoice),

@@ -22,7 +22,7 @@ Caught at request ingress via Zod schemas:
 Caught during protocol translation:
 
 - **Strict mode**: Lossy translations that would lose semantics (e.g., thinking history omission)
-- **Always**: Explicitly unsupported fields (e.g., `top_k`, `service_tier` on Responses path, `stop_sequences` on Responses path)
+- **Always**: Explicitly unsupported fields (e.g., `service_tier` on Responses path, `stop_sequences` on Responses path)
 
 ### Upstream Errors (Pass-through)
 
@@ -111,7 +111,6 @@ Issue kinds used in the codebase:
 | `lossy_thinking_omitted_from_prompt`   | warning     | Thinking history blocks removed from upstream prompt  |
 | `lossy_interleaving_flattened`         | warning     | Text/tool_use interleaving flattened in assistant turn |
 | `lossy_multiple_choices_ignored`       | warning     | Only choice[0] used from multi-choice response        |
-| `unsupported_top_k`                    | error       | `top_k` parameter cannot be translated                |
 | `unsupported_service_tier`             | error       | `service_tier` parameter cannot be translated         |
 | `unsupported_stop_sequences`           | error       | `stop_sequences` cannot be forwarded on Responses path |
 

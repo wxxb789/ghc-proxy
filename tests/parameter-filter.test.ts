@@ -207,3 +207,29 @@ describe('parameter-filter native /responses integration', () => {
     expect('context_management' in (calls[0]!.payload as ResponsesPayload)).toBe(false)
   })
 })
+
+// ── Evidence-backed exemptions (scripts/probes/sampling-params.ts, 2026-07-26) ──
+
+describe('reasoning param exemptions', () => {
+  beforeEach(() => clearConfig())
+  afterEach(() => clearConfig())
+
+  test('codex models keep top_p — probed as accepted where siblings reject it', () => {
+    const strip = resolveStrippedResponsesParams(reasoningModel('gpt-5.3-codex'))
+    expect([...strip].toSorted()).toEqual(['temperature'])
+  })
+
+  test('non-codex reasoning models still lose both params', () => {
+    const strip = resolveStrippedResponsesParams(reasoningModel('gpt-5.4'))
+    expect([...strip].toSorted()).toEqual(['temperature', 'top_p'])
+  })
+
+  test('a user rule can still strip an exempted param', () => {
+    const config = getCachedConfig() as Record<string, unknown>
+    config.responsesApiParameterFilters = [
+      { models: ['*-codex'], params: ['top_p'] },
+    ]
+    const strip = resolveStrippedResponsesParams(reasoningModel('gpt-5.3-codex'))
+    expect([...strip].toSorted()).toEqual(['temperature', 'top_p'])
+  })
+})

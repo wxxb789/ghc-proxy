@@ -15,7 +15,7 @@ import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
 import { stripPhaseFromInputMessages } from '~/transform/responses-input'
-import { convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeOutputConfig } from '~/transform/sanitize'
+import { convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeExclusiveSamplingParams, sanitizeOutputConfig } from '~/transform/sanitize'
 
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 import { createAnthropicAdapter } from './shared'
@@ -42,6 +42,7 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
     convertEnabledThinkingToAdaptive(ctx.anthropicPayload, ctx.selectedModel)
     filterThinkingBlocksForNativeMessages(ctx.anthropicPayload)
     sanitizeOutputConfig(ctx.anthropicPayload, ctx.selectedModel)
+    sanitizeExclusiveSamplingParams(ctx.anthropicPayload)
     sanitizeCacheControl(ctx.anthropicPayload)
 
     const strategy = createNativeMessagesStrategy(

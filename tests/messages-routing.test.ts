@@ -1352,3 +1352,82 @@ describe('POST /v1/messages/count_tokens', () => {
     expect(json.error.message).toContain('The selected model could not be resolved')
   })
 })
+
+// ── Sampling parameters on the native path ──
+//
+// Probed 2026-07-26 (scripts/probes/sampling-params.ts): Copilot's
+// /v1/messages rejects temperature+top_p together for non-reasoning Claude
+// models with "cannot both be specified for this model". top_k, by contrast,
+// was accepted by every model on every boundary.
+
+describe('native messages sampling params', () => {
+  function nativeModel() {
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('claude-sonnet-4.5', { supported_endpoints: ['/v1/messages'] }),
+    ))
+  }
+
+  function mockNativeCapture(calls: Array<CapturedMessagesCall>) {
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      model: 'claude-sonnet-4.5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+  }
+
+  async function post(app: ReturnType<typeof createApp>, body: Record<string, unknown>) {
+    return app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4.5',
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'hello' }],
+        ...body,
+      }),
+    }))
+  }
+
+  test('drops top_p when temperature is also present', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    nativeModel()
+    mockNativeCapture(calls)
+
+    const response = await post(app, { temperature: 0.5, top_p: 0.9 })
+
+    expect(response.status).toBe(200)
+    const payload = calls[0]!.payload as unknown as Record<string, unknown>
+    expect(payload.temperature).toBe(0.5)
+    expect('top_p' in payload).toBe(false)
+  })
+
+  test('keeps top_p when temperature is absent', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    nativeModel()
+    mockNativeCapture(calls)
+
+    await post(app, { top_p: 0.9 })
+
+    const payload = calls[0]!.payload as unknown as Record<string, unknown>
+    expect(payload.top_p).toBe(0.9)
+  })
+
+  test('forwards top_k unchanged', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    nativeModel()
+    mockNativeCapture(calls)
+
+    await post(app, { top_k: 40 })
+
+    const payload = calls[0]!.payload as unknown as Record<string, unknown>
+    expect(payload.top_k).toBe(40)
+  })
+})
