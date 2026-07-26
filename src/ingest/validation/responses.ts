@@ -6,6 +6,7 @@ import type {
 import { z } from 'zod'
 
 import { configStore } from '~/state'
+import { REASONING_EFFORT_VALUES } from '~/types'
 
 import {
   finiteNumberSchema,
@@ -244,7 +245,7 @@ const responsesToolChoiceSchema = z.union([
 // ── Config Schemas ──
 
 const responsesReasoningConfigSchema = z.object({
-  effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).nullable().optional(),
+  effort: z.enum(REASONING_EFFORT_VALUES).nullable().optional(),
   generate_summary: z.enum(['auto', 'concise', 'detailed']).nullable().optional(),
   summary: z.enum(['auto', 'concise', 'detailed']).nullable().optional(),
 }).loose()
