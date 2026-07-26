@@ -221,7 +221,7 @@ const anthropicOutputFormatSchema = z.object({
  * and `sanitizeOutputConfig` preserves the extras rather than dropping them.
  */
 const anthropicOutputConfigSchema = z.object({
-  effort: z.enum(['low', 'medium', 'high', 'max', 'xhigh']).nullable().optional(),
+  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).nullable().optional(),
   format: anthropicOutputFormatSchema.optional(),
 }).loose()
 

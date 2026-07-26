@@ -116,6 +116,6 @@ export interface ConversationRequest {
    * An effort level the caller named explicitly, independent of any thinking
    * budget. Takes precedence over the level inferred from `thinking`.
    */
-  outputEffort?: 'low' | 'medium' | 'high' | 'max' | 'xhigh'
+  outputEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   completionOptions?: CompletionOptions
 }

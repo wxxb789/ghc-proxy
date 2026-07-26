@@ -202,7 +202,7 @@ describe('Anthropic payload validation', () => {
   })
 
   test('accepts output_config effort values', () => {
-    for (const effort of ['low', 'medium', 'high', 'max', 'xhigh'] as const) {
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
       const payload = parseAnthropicMessagesPayload({
         model: 'claude-haiku-4.5',
         max_tokens: 16,

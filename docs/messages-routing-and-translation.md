@@ -52,7 +52,7 @@ When a model supports `/responses` but not native `/v1/messages`, the proxy tran
 | --- | --- | --- |
 | `thinking: disabled` | Maps to `reasoning.effort = none` | Preserves explicit disable intent. |
 | `thinking: adaptive` with no explicit effort | Maps to `reasoning.effort = medium` | Conservative default for a request that asked for adaptive reasoning but did not fix an effort. |
-| `output_config.effort` | Maps to Responses reasoning effort | Preserves explicit caller intent. `max` is kept when the resolved model advertises it (gpt-5.6 and later) and clamped to `xhigh` otherwise — see [research/sampling-parameters.md](research/sampling-parameters.md). |
+| `output_config.effort` | Maps to Responses reasoning effort | Preserves explicit caller intent. Clamped to the highest level the resolved model advertises — the canonical order is `low < medium < high < xhigh < max`, and the levels are not a ladder every model implements a prefix of (`claude-opus-4.6` advertises `max` but not `xhigh`). See [research/sampling-parameters.md](research/sampling-parameters.md). |
 | `output_config.format` | Maps JSON Schema structured output to Responses `text.format` | Preserves schema-constrained output when native `/v1/messages` cannot safely carry the field. |
 | `apply_patch` custom tool | Optional shim to function tool | Controlled by `useFunctionApplyPatch`. |
 | Responses context compaction | Optional policy | Disabled by default. Requires `responsesApiAutoContextManagement: true` and a model match in `responsesApiContextManagementModels`. |

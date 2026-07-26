@@ -204,7 +204,7 @@ All fields are optional. The full schema:
 | `responsesApiParameterFiltersReplaceDefault` | `boolean` | `false` | Disable the built-in reasoning-model default rule so only your `responsesApiParameterFilters` apply |
 | `responsesOfficialEmulator` | `boolean` | `false` | Enable local OpenAI-style Responses state emulation for `previous_response_id`, `conversation`, retrieve, input_items, delete, and input_tokens |
 | `responsesOfficialEmulatorTtlSeconds` | `number` | `14400` | In-memory TTL for locally emulated Responses state |
-| `modelReasoningEfforts` | `Record<string, string>` | -- | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, or `xhigh` |
+| `modelReasoningEfforts` | `Record<string, string>` | -- | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (ascending) |
 | `upstreamQueueConcurrency` | `number` | `10` | Maximum concurrent Copilot upstream requests |
 | `upstreamQueueMaxRetries` | `number` | `5` | Maximum retries for transient upstream responses. Completion requests (`/v1/messages`, `/chat/completions`, `/responses`) retry only `429`/`529`; effect-free requests also retry `408`, `500`, `502`, `503`, `504` |
 | `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream retry backoff when `Retry-After` is absent |

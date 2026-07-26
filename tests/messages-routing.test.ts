@@ -638,7 +638,7 @@ describe('messages routing', () => {
       },
     }, calls)
 
-    for (const effort of ['max', 'xhigh'] as const) {
+    for (const effort of ['xhigh', 'max'] as const) {
       const response = await app.handle(new Request('http://localhost/v1/messages', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
