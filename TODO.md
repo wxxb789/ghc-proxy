@@ -7,7 +7,8 @@ to pick them up cold. Each entry states why it was left, not just what is left.
 
 ## 1. `/v1/responses` passthrough applies no effort clamping
 
-**Status:** open. Defensible as-is — this is a consistency question, not a bug.
+**Status:** DONE. Resolved as a managed boundary — see below for why that came
+out differently than the entry originally guessed.
 
 ### What
 
@@ -18,38 +19,36 @@ in `capabilities.supports.reasoning_effort`:
 - Anthropic → Responses → `resolveResponsesReasoningEffort` → `clampResponsesEffort`
 - chat-completions fallback → `resolveRequestEffort` in the CAPI profiles
 
-The `/v1/responses` passthrough route does not. A client sending
-`reasoning: { effort: 'max' }` to a model that does not advertise `max` gets the
+The `/v1/responses` route did not. A client sending
+`reasoning: { effort: 'max' }` to a model that does not advertise `max` got the
 upstream 400 rather than a clamped-and-served request.
 
-### Why it was left
+### How it was resolved
 
-The argument for leaving it is real: on this route the client named both the
-model and the effort level explicitly, in the upstream's own vocabulary. The
-proxy is a passthrough here, and silently rewriting a value the caller chose
-deliberately is arguably worse than surfacing upstream's answer. The
-`/v1/messages` paths clamp because they are *translating* — the caller expressed
-intent in Anthropic terms and the proxy picks the OpenAI-side representation, so
-choosing a valid level is part of the translation.
+The entry framed this as passthrough-vs-managed and said a decision was needed.
+Reading `afterTransform` settled it: the route was **already** a managed
+boundary. `applyResponsesParameterFilters` strips `temperature`/`top_p` for
+reasoning models, and `clampResponsesOutputTokens` raises a below-minimum
+`max_output_tokens`. Effort was not an intact passthrough — it was the one
+parameter where the proxy knew the request would 400 and forwarded it anyway.
 
-The argument against is consistency: the same client-visible outcome (a 400 the
-proxy could have avoided) depends on which route was used.
+`clampResponsesReasoningEffort` (`src/transform/parameter-filter.ts`) now runs
+alongside them. `none` and `minimal` pass through unranked, matching the
+Anthropic-to-Responses path: they are Responses-only levels rather than rungs on
+the ladder, and clamping `none` upward would invert the caller's intent.
 
-### What would settle it
-
-A decision about whether `/v1/responses` is a passthrough or a managed boundary.
-If passthrough, document the asymmetry in
-`docs/messages-routing-and-translation.md` so the inconsistency is intentional
-rather than accidental. If managed, apply `clampEffortToAdvertised` in
-`afterTransform` (`src/routes/responses/handler.ts`) alongside the existing
-`applyResponsesParameterFilters` and `clampResponsesOutputTokens`.
+The lesson worth keeping is about the framing, not the fix: "is this route a
+passthrough?" was answerable from the code, not a matter of taste. The question
+had been left open on an assumption about the route's character that one file
+read disproved.
 
 ---
 
 ## 2. The native `/v1/messages` `max_tokens` ceiling is not clamped
 
-**Status:** open. This one is a real leak, same shape as the bug that started
-the reasoning-effort work.
+**Status:** DONE. Fixed on the branch that opened this entry — kept here for the
+background, since the reasoning about *why* clamping down is not obviously right
+outlives the fix.
 
 ### What
 
@@ -62,41 +61,29 @@ ceiling differently.
 | `/responses` (`max_output_tokens`) | advisory | `limits.max_output_tokens + 1` was accepted by all 9 models |
 | `/v1/messages` (`max_tokens`) | **hard** | `max_tokens: 64001 > 64000, which is the maximum allowed number of output tokens for claude` |
 
-The proxy clamps only the `/responses` **floor** (`clampResponsesOutputTokens`,
-raising below-16 values to Copilot's minimum of 16). The native `/v1/messages`
-ceiling is forwarded as sent, so a client asking for more than the model's
-`capabilities.limits.max_output_tokens` receives an upstream 400 the proxy had
-every input needed to prevent — the limit is in the cached model record.
+The proxy clamped only the `/responses` **floor**
+(`clampResponsesOutputTokens`, raising below-16 values to Copilot's minimum of
+16). The native `/v1/messages` ceiling was forwarded as sent, so a client asking
+for more than the model's `capabilities.limits.max_output_tokens` received an
+upstream 400 the proxy had every input needed to prevent — the limit is in the
+cached model record.
 
-### Why it was left
+### How it was resolved
 
-Scope. It surfaced while probing effort levels, and PR #67 was already carrying
-five distinct fixes; adding a sixth unrelated one would have made it harder to
-review and harder to revert. It is recorded in
-`docs/research/sampling-parameters.md` under both "Bounds" and "Not covered" so
-the evidence does not go stale in someone's head.
+`clampMessagesOutputTokens` (`src/transform/parameter-filter.ts`) lowers an
+over-ceiling `max_tokens` to the advertised value, wired into the native path in
+`src/routes/messages/strategy-registry.ts` alongside the other sanitizers.
 
-### Why it matters
+Two decisions worth keeping:
 
-This is the same failure shape as the bug that opened this whole thread: a
-client-visible 400 the proxy could have absorbed, on a value the proxy already
-knows the correct bound for. See
-`docs/solutions/conventions/duplicated-semantic-rules-diverge-silently.md` —
-clamping is a rule that already exists in this codebase, and the ceiling is one
-more place it is not applied.
+1. **It warns rather than logging at debug level.** Unlike the `/responses`
+   floor — where raising 0..15 to 16 costs the caller nothing — lowering
+   `max_tokens` is a real semantic change: the caller receives less output than
+   they asked for. That deserves a visible line, not a debug one.
+2. **No advertised ceiling means no clamp.** An unknown bound is not a reason to
+   guess one, so a model record without `limits.max_output_tokens` forwards the
+   request untouched.
 
-### What to do
-
-Clamp `max_tokens` down to `model.capabilities.limits.max_output_tokens` on the
-native path, mirroring how the floor is handled on `/responses`. Two cautions:
-
-1. **Clamping down is not obviously right.** Silently reducing a caller's
-   `max_tokens` changes how much output they get. That is less severe than a
-   400, but it is still a semantic change — decide deliberately and document it
-   as a translation policy, the same way the `temperature`/`top_p` conflict
-   resolution was.
-2. **Probe before generalizing.** The 64000 ceiling was observed on one Claude
-   model. Whether every model enforces its advertised ceiling, and whether the
-   advertised value is always the real one, is not established — the
-   `/responses` side already proved the advertised ceiling can be advisory
-   rather than enforced.
+Still not established: whether every model enforces its advertised ceiling. The
+`/responses` side already proved an advertised ceiling can be advisory rather
+than enforced, so this is a per-boundary fact, not a general one.

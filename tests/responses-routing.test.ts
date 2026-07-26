@@ -1329,3 +1329,63 @@ describe('responses failed payload dumps', () => {
     })
   })
 })
+
+// This route forwards the caller's own vocabulary, so leaving effort alone
+// looks defensible in isolation — but afterTransform already strips
+// temperature/top_p and raises a below-minimum max_output_tokens, so effort was
+// the one parameter where the proxy knew a request would 400 and sent it anyway.
+describe('POST /v1/responses clamps reasoning.effort to the advertised set', () => {
+  function cacheModelWithEfforts(efforts: Array<string>) {
+    const model = buildModel('gpt-5.5', { supported_endpoints: ['/responses'] })
+    model.capabilities.supports.reasoning_effort = efforts
+    modelCache.cacheModels(buildModelsResponse(model))
+  }
+
+  async function sendEffort(effort: string, calls: Array<CapturedResponsesCall>) {
+    CopilotClient.prototype.createResponses = mockResponses(
+      buildResponsesResult({ id: 'resp_1', status: 'completed', output: [], output_text: '' }),
+      calls,
+    )
+
+    return createApp().handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.5',
+        input: [{ type: 'message', role: 'user', content: 'hi' }],
+        reasoning: { effort },
+      }),
+    }))
+  }
+
+  test('lowers an unadvertised effort to the highest advertised level', async () => {
+    // gpt-5.5 shape: advertises up to xhigh, rejects max (probed 2026-07-26).
+    cacheModelWithEfforts(['none', 'low', 'medium', 'high', 'xhigh'])
+    const calls: Array<CapturedResponsesCall> = []
+
+    const response = await sendEffort('max', calls)
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.reasoning?.effort).toBe('xhigh')
+  })
+
+  test('leaves an advertised effort untouched', async () => {
+    cacheModelWithEfforts(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+    const calls: Array<CapturedResponsesCall> = []
+
+    await sendEffort('max', calls)
+
+    expect(calls[0]?.payload.reasoning?.effort).toBe('max')
+  })
+
+  test('passes none through rather than ranking it', async () => {
+    // Clamping `none` upward would invert the caller's intent — they asked for
+    // no reasoning and would get the model's maximum.
+    cacheModelWithEfforts(['low', 'medium', 'high', 'max'])
+    const calls: Array<CapturedResponsesCall> = []
+
+    await sendEffort('none', calls)
+
+    expect(calls[0]?.payload.reasoning?.effort).toBe('none')
+  })
+})

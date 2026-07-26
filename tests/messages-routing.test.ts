@@ -1471,3 +1471,69 @@ describe('native messages sampling params', () => {
     expect(payload.top_k).toBe(40)
   })
 })
+
+// Copilot's native /v1/messages enforces its output ceiling (probed 2026-07-26:
+// `max_tokens: 64001 > 64000` returns 400), unlike /responses where the
+// advertised value is advisory. The model record already carries the bound, so
+// forwarding an over-ceiling value leaks a 400 the proxy could have absorbed.
+describe('/v1/messages native path clamps max_tokens to the advertised ceiling', () => {
+  function cacheModelWithCeiling(ceiling: number) {
+    const model = buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })
+    model.capabilities.limits.max_output_tokens = ceiling
+    modelCache.cacheModels(buildModelsResponse(model))
+  }
+
+  async function sendMaxTokens(maxTokens: number, calls: Array<CapturedMessagesCall>) {
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+
+    return createApp().handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-5',
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    }))
+  }
+
+  test('lowers an over-ceiling max_tokens to the advertised limit', async () => {
+    cacheModelWithCeiling(64000)
+    const calls: Array<CapturedMessagesCall> = []
+
+    const response = await sendMaxTokens(64001, calls)
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.max_tokens).toBe(64000)
+  })
+
+  test('leaves a within-ceiling max_tokens untouched', async () => {
+    cacheModelWithCeiling(64000)
+    const calls: Array<CapturedMessagesCall> = []
+
+    await sendMaxTokens(1024, calls)
+
+    expect(calls[0]?.payload.max_tokens).toBe(1024)
+  })
+
+  test('does not clamp when the model advertises no ceiling', async () => {
+    const model = buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })
+    delete (model.capabilities.limits as { max_output_tokens?: number }).max_output_tokens
+    modelCache.cacheModels(buildModelsResponse(model))
+    const calls: Array<CapturedMessagesCall> = []
+
+    // An unknown bound is not a reason to guess one.
+    await sendMaxTokens(999999, calls)
+
+    expect(calls[0]?.payload.max_tokens).toBe(999999)
+  })
+})

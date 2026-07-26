@@ -222,8 +222,11 @@ ceiling is advisory there.
 max_tokens: 64001 > 64000, which is the maximum allowed number of output tokens for claude
 ```
 
-The proxy clamps only the `/responses` floor today; the native `/v1/messages`
-ceiling is still forwarded as sent and surfaces upstream as a 400.
+The proxy clamps the `/responses` floor and, since this was probed, the native
+`/v1/messages` ceiling too (`clampMessagesOutputTokens`) — the model record
+carries the bound, so leaking a 400 for a value the proxy could correct is the
+worse outcome. The `/responses` ceiling stays unclamped because upstream does
+not enforce it.
 
 ### Resulting proxy behavior
 
@@ -241,6 +244,8 @@ ceiling is still forwarded as sent and surfaces upstream as a 400.
 ### Not covered
 
 - Whether `max` measurably changes output quality. Probes assert acceptance.
-- The native `/v1/messages` `max_tokens` ceiling is not clamped (see Bounds).
+- Whether every model enforces its advertised `max_tokens` ceiling. Observed on
+  one Claude model; the `/responses` side proves an advertised ceiling can be
+  advisory, so this is a per-boundary fact rather than a general one.
 - Whether other models also accept unadvertised levels the way `gpt-5.3-codex`
   accepts `none`. Only the advertised set plus `none`/`minimal` were probed.

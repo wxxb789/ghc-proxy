@@ -13,7 +13,7 @@ import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
 import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
-import { applyResponsesParameterFilters, clampResponsesOutputTokens } from '~/transform/parameter-filter'
+import { applyResponsesParameterFilters, clampMessagesOutputTokens, clampResponsesOutputTokens } from '~/transform/parameter-filter'
 import { stripPhaseFromInputMessages } from '~/transform/responses-input'
 import { convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeExclusiveSamplingParams, sanitizeOutputConfig } from '~/transform/sanitize'
 
@@ -44,6 +44,7 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
     sanitizeOutputConfig(ctx.anthropicPayload, ctx.selectedModel)
     sanitizeExclusiveSamplingParams(ctx.anthropicPayload)
     sanitizeCacheControl(ctx.anthropicPayload)
+    clampMessagesOutputTokens(ctx.anthropicPayload, ctx.selectedModel)
 
     const strategy = createNativeMessagesStrategy(
       ctx.copilotClient,
