@@ -35,7 +35,7 @@ class HTTPError extends Error {
 }
 ```
 
-Before a transient Copilot status (`408`, `429`, `500`, `502`, `503`, `504`, `529`) reaches this helper, `UpstreamRequestQueue` retries it, with global back-pressure for capacity limits. See [Upstream Request Queue](upstream-request-queue.md).
+Before a transient Copilot status reaches this helper, `UpstreamRequestQueue` may retry it, with global back-pressure for capacity limits. Which statuses are replayed depends on what a duplicate would cost: completion requests replay only `429`/`529`, effect-free requests also replay `408`, `500`, `502`, `503`, `504`. See [Upstream Request Queue](upstream-request-queue.md).
 
 The upstream error helper (`throwUpstreamError`) extracts the response body and status code. Structured upstream error bodies are forwarded as-is. Plain-text upstream bodies are returned as the client-facing error message, with HTTP 429 classified as `rate_limit_error`. If the upstream body is empty, the client gets the fallback proxy error message while logs still include upstream status metadata and a safe body preview.
 

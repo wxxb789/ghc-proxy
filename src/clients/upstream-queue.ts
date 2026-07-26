@@ -15,7 +15,21 @@ export interface UpstreamRequestQueueOptions {
 export interface UpstreamRequestContext {
   method?: string
   url: string
-  retryable?: boolean
+  /**
+   * Which upstream failures may be replayed for this request. Omitted = none.
+   *
+   * - `true` — replay every status in {@link isTransientUpstreamStatus}
+   *   (408, 429, 500, 502, 503, 504, 529). Only for requests where a duplicate
+   *   costs nothing but a round trip.
+   * - `'capacity'` — replay only 429/529, the statuses where the upstream is
+   *   declining to serve rather than reporting a failure while serving. That is
+   *   a *lower prior* on duplicated work, not a guarantee: no HTTP status proves
+   *   a request went unprocessed. Every one of 408/500/502/503/504 can be
+   *   emitted after the origin fully processed the request — a proxy
+   *   stream-idle timeout surfaces as 408, and Envoy maps upstream connection
+   *   termination to 503. Use for anything whose replay spends model quota.
+   */
+  retryable?: boolean | 'capacity'
 }
 
 export interface QueuedUpstreamResponse {
@@ -98,9 +112,10 @@ export class UpstreamRequestQueue {
 
       const { status } = response
       const isCapacityLimit = isCapacityLimitStatus(status)
-      const willRetry = isTransientUpstreamStatus(status)
-        && context.retryable === true
-        && attempt < this.options.maxRetries
+      const mayReplay = context.retryable === 'capacity'
+        ? isCapacityLimit
+        : context.retryable === true && isTransientUpstreamStatus(status)
+      const willRetry = mayReplay && attempt < this.options.maxRetries
 
       if (!willRetry) {
         // Capacity limits are account- or service-wide, so hold the whole queue

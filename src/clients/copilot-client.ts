@@ -33,7 +33,7 @@ interface RequestOptions {
   signal?: AbortSignal
   headerOptions?: CopilotHeaderOptions
   extraHeaders?: Record<string, string>
-  retryable?: boolean
+  retryable?: boolean | 'capacity'
 }
 
 interface FetchParams {
@@ -118,12 +118,19 @@ export class CopilotClient {
     path: string,
     payload: { stream?: boolean | null },
     errorMessage: string,
-    options?: Omit<RequestOptions, 'method' | 'body'>,
+    options?: Omit<RequestOptions, 'method' | 'body' | 'retryable'>,
   ) {
     const { response, release } = await this.request(path, errorMessage, {
       method: 'POST',
       body: JSON.stringify(payload),
-      retryable: true,
+      // Every completion endpoint routes through here, and each one bills a
+      // generation. An upstream 5xx does not mean the request was refused —
+      // it may have been fully processed before failing — so replaying one
+      // can double-spend quota for a single client request. Only 429/529 are
+      // replayed: there the upstream declined to serve. The `retryable` key is
+      // excluded from `options` above so a future caller cannot widen this
+      // back to the full transient set without saying so here.
+      retryable: 'capacity',
       ...options,
     })
 
@@ -141,7 +148,7 @@ export class CopilotClient {
 
   private async fetchWithQueue(
     request: FetchParams,
-    retryable?: boolean,
+    retryable?: boolean | 'capacity',
   ): Promise<QueuedUpstreamResponse> {
     const fetcher = () => this.fetchImpl(request.url, request.init)
     if (this.requestQueue) {
