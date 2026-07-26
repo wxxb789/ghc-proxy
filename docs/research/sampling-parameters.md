@@ -15,7 +15,10 @@ sent directly to the upstream endpoint (no proxy in the path).
 | `/chat/completions` | accepted | accepted | **accepted** | — |
 | `/responses` | **rejected** | rejected (except codex) | **accepted** | reasoning-only model set |
 
-`top_k` was accepted by **30/30** reachable model-boundary pairs.
+`top_k` was accepted by **every model that could be reached** — 8 on
+`/v1/messages`, 12 on `/chat/completions`, 9 on `/responses`. The two remaining
+`/chat/completions` models failed their *baseline* request for unrelated reasons
+(see that section below), so no `top_k` verdict exists for them either way.
 
 ## What this corrected
 
