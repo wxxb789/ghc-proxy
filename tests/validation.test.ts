@@ -9,6 +9,7 @@ import {
   parseResponsesPayload,
 } from '~/ingest/validation'
 import { HTTPError } from '~/lib/error'
+import { REASONING_EFFORT_VALUES } from '~/types'
 
 describe('OpenAI payload validation', () => {
   test('accepts optional embedding fields', () => {
@@ -726,6 +727,22 @@ describe('Responses payload validation', () => {
       summary: 'detailed',
     })
   })
+
+  // Regression: the /responses ingress schema hardcoded its own effort enum
+  // and was never extended when `max` shipped (PR #63), so gpt-5.6 and the
+  // Claude family were rejected at the proxy boundary with a local 400 —
+  // before the request ever reached a model that advertises `max`.
+  for (const effort of REASONING_EFFORT_VALUES) {
+    test(`accepts reasoning.effort "${effort}"`, () => {
+      const payload = parseResponsesPayload({
+        model: 'gpt-5.6-sol',
+        reasoning: { effort },
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+      })
+
+      expect(payload.reasoning?.effort).toBe(effort)
+    })
+  }
 
   test('rejects previous_response_id together with conversation', () => {
     expect(() =>
