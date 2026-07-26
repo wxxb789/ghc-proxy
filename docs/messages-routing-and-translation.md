@@ -62,10 +62,11 @@ When a model supports `/responses` but not native `/v1/messages`, the proxy tran
 These Anthropic fields are rejected with `400` when the request must execute through `/responses`:
 
 - `stop_sequences`
-- `top_k`
 - `service_tier`
 
 They are rejected because the current Responses execution path cannot preserve their semantics safely. The proxy does not silently drop them.
+
+`top_k` used to be rejected here too. Probing showed Copilot accepts it on every boundary, so it is now forwarded as a Copilot extension — see [research/sampling-parameters.md](research/sampling-parameters.md).
 
 ## Responses API Compatibility Policies
 

@@ -107,6 +107,7 @@ export interface ConversationRequest {
   stream?: boolean
   temperature?: number | null
   topP?: number | null
+  topK?: number | null
   userId?: string
   tools?: Array<ConversationTool>
   toolChoice?: ConversationToolChoice

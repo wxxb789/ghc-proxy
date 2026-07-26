@@ -9,6 +9,13 @@ export interface ResponsesPayload {
   tool_choice?: ResponseToolChoice | null
   temperature?: number | null
   top_p?: number | null
+  /**
+   * Not part of the official Responses API — Copilot accepts it as an
+   * extension. Probed 2026-07-26: accepted by 9/9 `/responses` models
+   * (`scripts/probes/sampling-params.ts`). Only ever populated from an
+   * Anthropic caller's `top_k`; the OpenAI-facing schema does not accept it.
+   */
+  top_k?: number | null
   max_output_tokens?: number | null
   max_tool_calls?: number | null
   metadata?: Record<string, string> | null

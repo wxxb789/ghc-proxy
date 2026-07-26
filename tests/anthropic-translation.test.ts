@@ -378,6 +378,20 @@ describe('responses translation policy', () => {
     expect(translated.reasoning).toBeUndefined()
   })
 
+  // Probed 2026-07-26 (scripts/probes/sampling-params.ts): every /responses
+  // model accepted top_k — 9/9, including the gpt-5.x family. The previous
+  // hard 400 rejected a parameter upstream actually supports.
+  test('forwards top_k on the Responses path', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      model: 'gpt-5',
+      max_tokens: 256,
+      top_k: 40,
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+
+    expect(translated.top_k).toBe(40)
+  })
+
   test('maps Anthropic structured output_config format to Responses text format', () => {
     const schema = {
       type: 'object',
@@ -745,5 +759,54 @@ describe('CAPI planning', () => {
     for (const key of ['n', 'frequency_penalty', 'response_format', 'seed'] as const) {
       expect(key in nulled.payload).toBe(false)
     }
+  })
+})
+
+// ── Sampling parameters — grounded in scripts/probes/sampling-params.ts ──
+//
+// Probed 2026-07-26 across all three upstream boundaries. Findings that drove
+// these tests, each contradicting a prior assumption:
+//   1. top_k accepted by 30/30 model-boundary pairs. The proxy had dropped it
+//      on the chat path and 400'd it on the Responses path since #5/#6,
+//      without ever probing.
+//   2. temperature and top_p are mutually exclusive on /v1/messages for
+//      non-reasoning Claude models (sonnet-4.5, haiku-4.5) — a real upstream
+//      400 the proxy did not model.
+
+describe('sampling parameters', () => {
+  test('top_k survives Anthropic -> CAPI planning', () => {
+    const adapter = new AnthropicMessagesAdapter()
+    const plan = adapter.toCapiPlan({
+      model: 'claude-sonnet-4.5',
+      max_tokens: 256,
+      top_k: 40,
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+
+    expect(plan.payload.top_k).toBe(40)
+  })
+
+  test('top_k is omitted when the caller did not send it', () => {
+    const adapter = new AnthropicMessagesAdapter()
+    const plan = adapter.toCapiPlan({
+      model: 'claude-sonnet-4.5',
+      max_tokens: 256,
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+
+    expect('top_k' in plan.payload).toBe(false)
+  })
+
+  test('top_k no longer records an unsupported issue', () => {
+    const adapter = new AnthropicMessagesAdapter()
+    adapter.toCapiPlan({
+      model: 'claude-sonnet-4.5',
+      max_tokens: 256,
+      top_k: 40,
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+
+    const kinds = adapter.getLastIssues().map(issue => issue.kind)
+    expect(kinds).not.toContain('unsupported_top_k')
   })
 })

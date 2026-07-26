@@ -1,6 +1,7 @@
 import type { AnthropicMessagesPayload } from '~/translator'
 import type { Model } from '~/types'
 
+import consola from 'consola'
 import { modelCache } from '~/state'
 import { SignatureCodec } from '~/translator/responses/signature-codec'
 
@@ -164,4 +165,34 @@ export function sanitizeCacheControl(payload: AnthropicMessagesPayload): void {
       normalizeCacheControlBlock(tool as unknown as Record<string, unknown>)
     }
   }
+}
+
+/**
+ * Drop `top_p` when `temperature` is also present.
+ *
+ * Copilot's native `/v1/messages` endpoint rejects the pair outright for
+ * non-reasoning Claude models:
+ *
+ *   `temperature` and `top_p` cannot both be specified for this model.
+ *   Please use only one.
+ *
+ * Probed 2026-07-26 (`scripts/probes/sampling-params.ts`): reproduced on
+ * claude-sonnet-4.5 and claude-haiku-4.5; every reasoning model accepted both.
+ * Rather than leak a 400 for a combination clients send routinely, the proxy
+ * keeps `temperature` — the more widely used control, and the one both the
+ * Anthropic and OpenAI defaults are expressed in — and drops `top_p`.
+ *
+ * Applied unconditionally on this boundary: models that accept the pair are
+ * unaffected in practice, since sending only `temperature` is always valid.
+ */
+export function sanitizeExclusiveSamplingParams(payload: AnthropicMessagesPayload): void {
+  if (payload.temperature === undefined || payload.top_p === undefined) {
+    return
+  }
+
+  consola.warn(
+    `Dropped top_p=${payload.top_p}: Copilot rejects temperature and top_p together on /v1/messages. `
+    + `Keeping temperature=${payload.temperature}.`,
+  )
+  delete payload.top_p
 }

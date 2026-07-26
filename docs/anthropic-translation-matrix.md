@@ -20,7 +20,7 @@ For the newer per-model routing behavior, including the Anthropic <-> Responses 
 | Assistant `thinking` history | Lossy | Preserved in IR, omitted from upstream prompt, emits `lossy_thinking_omitted_from_prompt`. |
 | Assistant `text/tool_use/text` interleaving | Lossy | Flattened into assistant content plus `tool_calls`, emits `lossy_interleaving_flattened`. |
 | `thinking.adaptive` | Lossy | Mapped to `reasoning_effort: medium` and hard-coded budget `24000`. |
-| `top_k` | Unsupported | Dropped with `unsupported_top_k`. |
+| `top_k` | Exact | Forwarded as a Copilot extension on all paths. See [research/sampling-parameters.md](research/sampling-parameters.md). |
 | `service_tier` | Unsupported | Dropped with `unsupported_service_tier`. |
 
 ## OpenAI Response -> Anthropic Response

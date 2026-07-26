@@ -16,6 +16,13 @@ import { authStore, MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/state'
 
 export const REQUEST_TIMEOUT_MS = 30_000
 
+/**
+ * Copilot's OpenAI-compatible chat endpoint. Unlike MESSAGES_ENDPOINT and
+ * RESPONSES_ENDPOINT this has no constant in `~/state` — the client inlines it
+ * (src/clients/copilot-client.ts) — so probes get it from here.
+ */
+export const CHAT_COMPLETIONS_ENDPOINT = '/chat/completions' as const
+
 export interface ProbeResult {
   name: string
   extraFields: Record<string, unknown>
@@ -93,11 +100,15 @@ export async function bootstrapProbe(options?: { silent?: boolean, timeoutMs?: n
 }
 
 /**
- * Send a raw request to Copilot's /v1/messages endpoint and return the result.
+ * Send a raw request to a Copilot upstream endpoint and classify the result.
+ *
+ * `options.endpoint` defaults to `/v1/messages`; pass `RESPONSES_ENDPOINT` to
+ * probe the Responses boundary with the same accepted/rejected classification.
  */
-export async function probeMessagesEndpoint(
+export async function probeEndpoint(
   body: Record<string, unknown>,
   baseFields?: Record<string, unknown>,
+  options?: { endpoint?: string, timeoutMs?: number },
 ): Promise<ProbeResult> {
   const extraFields: Record<string, unknown> = {}
   if (baseFields) {
@@ -109,7 +120,7 @@ export async function probeMessagesEndpoint(
   }
 
   try {
-    const { httpStatus, parsed } = await sendRaw(body)
+    const { httpStatus, parsed } = await sendRaw(body, options)
 
     if (httpStatus >= 200 && httpStatus < 300) {
       return {
@@ -143,6 +154,36 @@ export async function probeMessagesEndpoint(
   }
 }
 
+/**
+ * Send a raw request to Copilot's /v1/messages endpoint and return the result.
+ */
+export async function probeMessagesEndpoint(
+  body: Record<string, unknown>,
+  baseFields?: Record<string, unknown>,
+): Promise<ProbeResult> {
+  return probeEndpoint(body, baseFields, { endpoint: MESSAGES_ENDPOINT })
+}
+
+/**
+ * Send a raw request to Copilot's /responses endpoint and return the result.
+ */
+export async function probeResponsesEndpoint(
+  body: Record<string, unknown>,
+  baseFields?: Record<string, unknown>,
+): Promise<ProbeResult> {
+  return probeEndpoint(body, baseFields, { endpoint: RESPONSES_ENDPOINT })
+}
+
+/**
+ * Send a raw request to Copilot's /chat/completions endpoint and return the result.
+ */
+export async function probeChatCompletionsEndpoint(
+  body: Record<string, unknown>,
+  baseFields?: Record<string, unknown>,
+): Promise<ProbeResult> {
+  return probeEndpoint(body, baseFields, { endpoint: CHAT_COMPLETIONS_ENDPOINT })
+}
+
 export function extractErrorMessage(payload: unknown): string {
   if (typeof payload === 'object' && payload !== null) {
     const err = (payload as { error?: { message?: string } }).error?.message
@@ -157,8 +198,21 @@ export function extractErrorMessage(payload: unknown): string {
 function summarizeResponse(payload: unknown): string {
   if (typeof payload === 'object' && payload !== null) {
     const p = payload as Record<string, unknown>
+
+    // Anthropic Messages
     if (p.type === 'message' && p.stop_reason) {
       return `stop_reason=${p.stop_reason}`
+    }
+
+    // Responses
+    if (p.object === 'response' && p.status) {
+      return `status=${p.status}`
+    }
+
+    // OpenAI Chat Completions
+    if (p.object === 'chat.completion' && Array.isArray(p.choices)) {
+      const finish = (p.choices[0] as { finish_reason?: unknown } | undefined)?.finish_reason
+      return `finish_reason=${String(finish ?? '-')}`
     }
   }
   return JSON.stringify(payload).slice(0, 200)

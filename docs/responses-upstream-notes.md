@@ -44,6 +44,7 @@ Reasoning models (the `gpt-5` family, o-series, codex) reject sampling parameter
 Implemented in `applyResponsesParameterFilters()` (`src/transform/parameter-filter.ts`) and invoked from both Responses dispatch paths — the native handler (`src/routes/responses/handler.ts` `afterTransform`) and the `/v1/messages` → Responses strategy (`src/routes/messages/strategy-registry.ts`):
 
 - **Default rule:** any model advertising `reasoning_effort` has `temperature` and `top_p` stripped. Detection is capability-based (`isReasoningModel`), so new reasoning variants are covered without a hardcoded ID list.
+- **Evidence-backed exemptions:** `REASONING_PARAM_EXEMPTIONS` narrows the default where probing showed the model accepts a param anyway — currently codex models keep `top_p`. Copilot advertises no per-parameter support, so this cannot be derived from the model record. See [research/sampling-parameters.md](research/sampling-parameters.md). A user rule naming the same param still strips it.
 - **User rules (`responsesApiParameterFilters`):** `{ models: glob[], params: string[] }` entries whose model glob matches the resolved model add their params to the strip set (union with the default).
 - **`responsesApiParameterFiltersReplaceDefault`:** disables the default rule so only user rules apply.
 

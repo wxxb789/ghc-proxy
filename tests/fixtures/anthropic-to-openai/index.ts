@@ -1,10 +1,15 @@
+import type { CapiChatCompletionsPayload } from '~/core/capi'
 import type { AnthropicMessagesPayload } from '~/translator'
-import type { ChatCompletionsPayload } from '~/types'
 
 export interface AnthropicToOpenAIFixture {
   name: string
   input: AnthropicMessagesPayload
-  expected: Partial<ChatCompletionsPayload>
+  /**
+   * These fixtures assert on `toCapiPlan().payload`, which is the Copilot
+   * (CAPI) shape — a superset of the OpenAI chat payload carrying extensions
+   * such as `top_k` and `copilot_cache_control`.
+   */
+  expected: Partial<CapiChatCompletionsPayload>
   expectedIssues: Array<string>
 }
 
@@ -182,7 +187,10 @@ export const anthropicToOpenAIFixtures: Array<AnthropicToOpenAIFixture> = [
     expectedIssues: [],
   },
   {
-    name: 'unsupported-top-k-and-service-tier',
+    // top_k is forwarded as a Copilot extension — probed 2026-07-26, accepted
+    // by every reachable model on every boundary. service_tier remains
+    // unsupported (no upstream field, and not probed).
+    name: 'top-k-forwarded-service-tier-unsupported',
     input: {
       model: 'gpt-4o',
       messages: [{ role: 'user', content: 'Hello' }],
@@ -193,7 +201,8 @@ export const anthropicToOpenAIFixtures: Array<AnthropicToOpenAIFixture> = [
     expected: {
       model: 'gpt-4o',
       messages: [{ role: 'user', content: 'Hello' }],
+      top_k: 16,
     },
-    expectedIssues: ['unsupported_top_k', 'unsupported_service_tier'],
+    expectedIssues: ['unsupported_service_tier'],
   },
 ]

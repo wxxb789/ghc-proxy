@@ -64,6 +64,7 @@ export function translateAnthropicToResponsesPayload(
     instructions: translateSystemPrompt(payload.system),
     temperature: payload.temperature ?? null,
     top_p: payload.top_p ?? null,
+    ...(payload.top_k !== undefined ? { top_k: payload.top_k } : {}),
     max_output_tokens: payload.max_tokens,
     tools: convertAnthropicTools(payload.tools),
     tool_choice: convertAnthropicToolChoice(payload.tool_choice),
@@ -333,16 +334,6 @@ function assertResponsesCompatibleRequest(
       {
         status: 400,
         kind: 'unsupported_stop_sequences',
-      },
-    )
-  }
-
-  if (payload.top_k !== undefined) {
-    throw new TranslationFailure(
-      'Anthropic top_k is not supported on the Responses execution path.',
-      {
-        status: 400,
-        kind: 'unsupported_top_k',
       },
     )
   }

@@ -49,6 +49,14 @@ export interface CapiChatCompletionsPayload
   messages: Array<CapiMessage>
   tools?: Array<CapiTool> | null
   stream_options?: CapiStreamOptions | null
+  /**
+   * Not part of the OpenAI chat schema — Copilot accepts it as an extension.
+   * Probed 2026-07-26: accepted by every reachable model on both
+   * `/chat/completions` and `/v1/messages`
+   * (`scripts/probes/sampling-params.ts`). Only ever populated from an
+   * Anthropic caller's `top_k`; the OpenAI-facing schema does not accept it.
+   */
+  top_k?: number | null
 }
 
 export interface CapiResponseMessage
