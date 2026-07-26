@@ -156,3 +156,11 @@ The generated Responses schema name is also intentional. Anthropic's raw `output
 ## Related Issues
 
 - `gh issue list --search "output_config structured output responses messages" --state all --limit 5` found no related GitHub issues.
+
+## Related
+
+- `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md` — the
+  same failure surface from the other direction. Here an inbound Anthropic field
+  was under-modelled and nearly dropped silently; there an outbound field was
+  wrongly declared unsupported because it was missing from a hand-written type.
+  Both resolve to modelling the field explicitly at the boundary.
