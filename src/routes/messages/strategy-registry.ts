@@ -14,6 +14,7 @@ import { appendModelStepInPlace } from '~/lib/request-logger'
 import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters } from '~/transform/parameter-filter'
+import { stripPhaseFromInputMessages } from '~/transform/responses-input'
 import { convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeOutputConfig } from '~/transform/sanitize'
 
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
@@ -71,6 +72,12 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
       ctx.selectedModel?.capabilities.limits.max_prompt_tokens,
     )
     compactInputByLatestCompaction(responsesPayload)
+
+    // The translator emits `phase` on assistant messages, and some models
+    // reject it as input with a 400. Strip it here for the same reason
+    // /responses does — this path generates the field rather than receiving
+    // it, so it is if anything more exposed.
+    stripPhaseFromInputMessages(responsesPayload)
 
     // Runs last so it can strip any request parameter — including fields
     // injected above (e.g. context_management) — that the model rejects.

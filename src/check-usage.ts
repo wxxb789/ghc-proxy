@@ -8,6 +8,7 @@ import { GitHubClient } from '~/clients'
 
 import { authStore } from '~/state'
 import { cacheVSCodeVersion, getClientConfig } from './clients/factory'
+import { applyGheDomain } from './clients/ghe-domain'
 import { getCachedConfig, readConfig } from './lib/config'
 import { ensurePaths } from './lib/paths'
 import { setupGitHubToken } from './lib/token'
@@ -20,7 +21,7 @@ export const checkUsage = defineCommand({
   async run() {
     await ensurePaths()
     await readConfig()
-    authStore.gheDomain = getCachedConfig().gheDomain
+    applyGheDomain(authStore, getCachedConfig().gheDomain)
     await cacheVSCodeVersion()
     await setupGitHubToken()
     try {

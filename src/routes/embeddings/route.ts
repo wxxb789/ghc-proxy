@@ -8,6 +8,6 @@ export function createEmbeddingRoutes() {
   return new Elysia()
     .use(requestGuardPlugin)
     .post('/embeddings', async ({ body, request }) => {
-      return handleEmbeddingsCore(body, request.headers)
+      return handleEmbeddingsCore(body, request.headers, undefined, request.signal)
     }, { guarded: true })
 }

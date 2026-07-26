@@ -9,7 +9,7 @@ import { initProxyFromEnv } from './cli/proxy'
 import { generateEnvScript } from './cli/shell'
 import { printStartupBanner } from './cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from './clients/factory'
-import { normalizeGheDomain } from './clients/ghe-domain'
+import { applyGheDomain } from './clients/ghe-domain'
 import { getCachedConfig, readConfig } from './lib/config'
 import { ensurePaths } from './lib/paths'
 import { setupCopilotToken, setupGitHubToken } from './lib/token'
@@ -139,13 +139,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
 
   // Load persisted GHE domain from config, then override with CLI arg if provided.
   // Pass --ghe-domain "" (empty string) to explicitly clear a persisted domain.
-  authStore.gheDomain = cachedConfig.gheDomain
-  if (options.gheDomain !== undefined) {
-    authStore.gheDomain = options.gheDomain ? normalizeGheDomain(options.gheDomain) : undefined
-  }
-  if (authStore.gheDomain && authStore.accountType === 'individual') {
-    authStore.accountType = 'enterprise'
-  }
+  applyGheDomain(authStore, cachedConfig.gheDomain, options.gheDomain)
 
   await cacheVSCodeVersion()
 
