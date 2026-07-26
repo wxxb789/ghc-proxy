@@ -8,7 +8,8 @@ import {
   parseResponsesInputTokensPayload,
   parseResponsesPayload,
 } from '~/ingest/validation'
-import { HTTPError } from '~/lib/error'
+import { HTTPError, withTranslationErrors } from '~/lib/error'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { REASONING_EFFORT_VALUES } from '~/types'
 
 describe('OpenAI payload validation', () => {
@@ -846,5 +847,40 @@ describe('Responses payload validation', () => {
         },
       }),
     ).toThrow('Invalid request payload')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TranslationFailure -> HTTPError mapping
+// ---------------------------------------------------------------------------
+
+describe('withTranslationErrors', () => {
+  // The kind was dropped on both the wire and the log, so a translation-path
+  // 400 was indistinguishable from any other and left no trace at all —
+  // onError returns early for HTTPError, so nothing downstream reported it.
+  test('carries the TranslationFailure kind into the error body', () => {
+    const thrown = (() => {
+      try {
+        withTranslationErrors(() => {
+          throw new TranslationFailure('nope', { status: 400, kind: 'unsupported_service_tier' })
+        })
+      }
+      catch (error) {
+        return error
+      }
+    })()
+
+    expect(thrown).toBeInstanceOf(HTTPError)
+    const httpError = thrown as HTTPError
+    expect(httpError.status).toBe(400)
+    expect(httpError.body.error.type).toBe('translation_error')
+    expect(httpError.body.error.code).toBe('unsupported_service_tier')
+  })
+
+  test('passes non-TranslationFailure errors through untouched', () => {
+    const sentinel = new Error('unrelated')
+    expect(() => withTranslationErrors(() => {
+      throw sentinel
+    })).toThrow(sentinel)
   })
 })

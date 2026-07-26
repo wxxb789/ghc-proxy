@@ -56,11 +56,21 @@ export function isCapacityLimitStatus(status: number): boolean {
   return status === 429 || status === 529
 }
 
+/**
+ * Reject a request locally with a 400.
+ *
+ * Logs on the way out. `onError` in `src/server.ts` returns early for
+ * `code === 'HTTP'` (HTTPError carries its own `toResponse`), so nothing
+ * downstream reports these — without this line a locally rejected request is
+ * indistinguishable in the logs from one that reached upstream and came back
+ * fine, leaving only the access-log status to go on.
+ */
 export function throwInvalidRequestError(
   message: string,
   param: string,
   code?: string,
 ): never {
+  consola.warn('Rejected request', { param, code, message })
   throw new HTTPError(400, {
     error: {
       message,
@@ -71,9 +81,14 @@ export function throwInvalidRequestError(
   })
 }
 
-function fromTranslationFailure(failure: { message: string, status: number }): HTTPError {
+function fromTranslationFailure(failure: { message: string, status: number, kind?: string }): HTTPError {
+  consola.warn('Translation failed', { kind: failure.kind, status: failure.status, message: failure.message })
   return new HTTPError(failure.status, {
-    error: { message: failure.message, type: 'translation_error' },
+    error: {
+      message: failure.message,
+      type: 'translation_error',
+      ...(failure.kind ? { code: failure.kind } : {}),
+    },
   })
 }
 
