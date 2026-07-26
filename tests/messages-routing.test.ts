@@ -839,6 +839,115 @@ describe('messages routing', () => {
     expect(chatCalls[0]?.payload.model).toBe('claude-opus-4.6')
   })
 
+  // Regression: model rewrite and compact routing must compose on ONE request.
+  // applyMessagesModelPolicy reads payload.model (request-model-policy.ts), so
+  // compact routing only sees the rewritten model if the rewrite result was
+  // written back to the payload before the policy runs. Testing either feature
+  // alone cannot catch a break in that hand-off.
+  test('compact routing evaluates the REWRITTEN model, not the requested one', async () => {
+    const app = createApp()
+    const chatCalls: Array<CapturedChatCall> = []
+    // 'claude-opus-4.6' is NOT in the model list — only its rewrite target is.
+    // If compact routing ran against the pre-rewrite id, the capability check
+    // would look up an unknown model and refuse to route to the small model.
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('claude-opus-5'),
+      buildModel('gpt-4.1-mini'),
+    ))
+
+    const config = getCachedConfig() as Record<string, unknown>
+    config.modelRewrites = [{ from: 'claude-opus-4.6', to: 'claude-opus-5' }]
+    config.smallModel = 'gpt-4.1-mini'
+    config.compactUseSmallModel = true
+
+    CopilotClient.prototype.createChatCompletions = mockChatCompletions({
+      id: 'chat_1',
+      object: 'chat.completion',
+      created: 1,
+      model: 'gpt-4.1-mini',
+      choices: [{
+        index: 0,
+        finish_reason: 'stop',
+        logprobs: null,
+        message: { role: 'assistant', content: 'ok' },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }, chatCalls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-4.6',
+        max_tokens: 1024,
+        system: 'You are a helpful AI assistant tasked with summarizing conversations for context.',
+        messages: [{ role: 'user', content: 'Summarize the conversation so far.' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    // Both transforms applied, in order: rewrite THEN compact.
+    expect(chatCalls[0]?.payload.model).toBe('gpt-4.1-mini')
+  })
+
+  // Companion to the test above: when the rewrite target cannot support the
+  // request, compact routing must decline — proving the capability check reads
+  // the rewritten model rather than blindly routing.
+  test('compact routing declines when the rewritten model out-classes the small model', async () => {
+    const app = createApp()
+    const chatCalls: Array<CapturedChatCall> = []
+    modelCache.cacheModels(buildModelsResponse(
+      buildVisionModel('claude-opus-5'),
+      buildModel('gpt-4.1-mini'),
+    ))
+
+    const config = getCachedConfig() as Record<string, unknown>
+    config.modelRewrites = [{ from: 'claude-opus-4.6', to: 'claude-opus-5' }]
+    config.smallModel = 'gpt-4.1-mini'
+    config.compactUseSmallModel = true
+
+    CopilotClient.prototype.createChatCompletions = mockChatCompletions({
+      id: 'chat_1',
+      object: 'chat.completion',
+      created: 1,
+      model: 'claude-opus-5',
+      choices: [{
+        index: 0,
+        finish_reason: 'stop',
+        logprobs: null,
+        message: { role: 'assistant', content: 'ok' },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }, chatCalls)
+
+    await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-4.6',
+        max_tokens: 1024,
+        system: 'You are a helpful AI assistant tasked with summarizing conversations for context.',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'summarize this image' },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Zs6QAAAAASUVORK5CYII=',
+              },
+            },
+          ],
+        }],
+      }),
+    }))
+
+    // Rewrite applied; compact declined because gpt-4.1-mini lacks vision.
+    expect(chatCalls[0]?.payload.model).toBe('claude-opus-5')
+  })
+
   test('/v1/messages responses streaming path emits anthropic error event on malformed upstream chunk', async () => {
     const app = createApp()
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] })))

@@ -1,9 +1,11 @@
+import type { ModelMappingInfo } from '~/lib/request-logger'
 import type { AnthropicMessagesPayload } from '~/translator'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { getCachedConfig } from '~/lib/config'
 import { DEFAULT_FALLBACKS, resolveModel } from '~/lib/model-resolver'
+import { appendModelStepInPlace, getEffectiveModel, logRequest } from '~/lib/request-logger'
 import { modelCache } from '~/state'
 import { rewriteModel } from '~/transform/model-rewrite'
 import { applyMessagesModelPolicy, isCompactRequest } from '~/transform/request-model-policy'
@@ -310,5 +312,103 @@ describe('request model policy', () => {
       expect(result.routedModel).toBe('gpt-4.1-mini')
       expect(result.reason).toBe('compact')
     })
+  })
+})
+
+// ── Model trace rendering — the ONLY user-visible output of the transform chain ──
+//
+// The trace is printed to stdout on every request (src/server.ts onAfterResponse
+// -> logRequest -> formatModelMapping). Nothing else in the suite asserts on it,
+// so a refactor that drops a tag or reorders the chain would be invisible.
+// These tests lock the rendered shape.
+
+// Built from a char code so the source carries no literal control character.
+const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, 'g')
+
+function stripAnsi(value: string): string {
+  return value.replace(ANSI_RE, '')
+}
+
+/** Capture the single line logRequest writes to stdout, with colors stripped. */
+function captureLogLine(modelInfo?: ModelMappingInfo): string {
+  const lines: Array<string> = []
+  // eslint-disable-next-line no-console
+  const originalLog = console.log
+  // eslint-disable-next-line no-console
+  console.log = ((...args: Array<unknown>) => {
+    lines.push(args.map(String).join(' '))
+  }) as typeof console.log
+
+  try {
+    logRequest('POST', 'http://localhost/v1/messages', 200, '1ms', modelInfo)
+  }
+  finally {
+    // eslint-disable-next-line no-console
+    console.log = originalLog
+  }
+
+  expect(lines).toHaveLength(1)
+  return stripAnsi(lines[0]!)
+}
+
+describe('model trace rendering', () => {
+  test('renders no model segment when there is no mapping', () => {
+    expect(captureLogLine()).not.toContain('model=')
+  })
+
+  test('renders no model segment for an empty mapping', () => {
+    expect(captureLogLine({ steps: [] })).not.toContain('model=')
+  })
+
+  test('renders the original model alone when no steps ran', () => {
+    const line = captureLogLine({ originalModel: 'claude-opus-4.6', steps: [] })
+
+    expect(line).toContain('model=claude-opus-4.6')
+    expect(line).not.toContain('->')
+  })
+
+  test('renders a single step as original -[TAG]-> target', () => {
+    const line = captureLogLine({
+      originalModel: 'claude-opus-4.6',
+      steps: [{ tag: 'CONFIG_REWRITE', from: 'claude-opus-4.6', to: 'claude-opus-5' }],
+    })
+
+    expect(line).toContain('model=claude-opus-4.6 -[CONFIG_REWRITE]-> claude-opus-5')
+  })
+
+  test('renders every tag in a multi-step chain, in order', () => {
+    const line = captureLogLine({
+      originalModel: 'claude-opus-4.9',
+      steps: [
+        { tag: 'AUTO_CORRECT', from: 'claude-opus-4.9', to: 'claude-opus-4-9' },
+        { tag: 'COMPACT', from: 'claude-opus-4-9', to: 'gpt-4.1-mini' },
+        { tag: 'MODEL_RESOLVE', from: 'gpt-4.1-mini', to: 'gpt-4.1-mini-2025' },
+      ],
+    })
+
+    expect(line).toContain(
+      'model=claude-opus-4.9'
+      + ' -[AUTO_CORRECT]-> claude-opus-4-9'
+      + ' -[COMPACT]-> gpt-4.1-mini'
+      + ' -[MODEL_RESOLVE]-> gpt-4.1-mini-2025',
+    )
+  })
+
+  test('getEffectiveModel reports the last hop, or the original when no steps ran', () => {
+    expect(getEffectiveModel({ originalModel: 'a', steps: [] })).toBe('a')
+    expect(getEffectiveModel({
+      originalModel: 'a',
+      steps: [{ tag: 'CONFIG_REWRITE', from: 'a', to: 'b' }],
+    })).toBe('b')
+  })
+
+  test('appendModelStepInPlace appends only when the model actually changed', () => {
+    const info: ModelMappingInfo = { originalModel: 'a', steps: [] }
+
+    appendModelStepInPlace(info, 'MODEL_RESOLVE', 'a')
+    expect(info.steps).toHaveLength(0)
+
+    appendModelStepInPlace(info, 'MODEL_RESOLVE', 'b')
+    expect(info.steps).toEqual([{ tag: 'MODEL_RESOLVE', from: 'a', to: 'b' }])
   })
 })
