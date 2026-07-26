@@ -23,7 +23,7 @@ export interface AnthropicMessagesPayload {
     | { type: 'disabled' }
     | { type: 'adaptive' }
   output_config?: {
-    effort?: 'low' | 'medium' | 'high' | 'max' | 'xhigh' | null
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null
     format?: AnthropicOutputFormat
   }
   service_tier?: 'auto' | 'standard_only'

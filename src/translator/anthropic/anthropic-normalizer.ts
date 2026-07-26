@@ -222,6 +222,7 @@ export function normalizeAnthropicRequest(
     })),
     toolChoice: normalizeToolChoice(payload.tool_choice),
     thinking: normalizeThinking(payload.thinking),
+    outputEffort: payload.output_config?.effort ?? undefined,
     serviceTier: payload.service_tier,
   }
 }

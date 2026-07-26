@@ -829,3 +829,126 @@ describe('upstream error diagnostics', () => {
     expect(calls).toBe(2)
   })
 })
+
+describe('completion POSTs are not replayed on ambiguous upstream failures', () => {
+  function buildClient(status: number, calls: { n: number }) {
+    // `now` must advance with `sleep`: a capacity status (429/529) arms the
+    // global cooldown, and drain() only releases waiters once `now` has passed
+    // it. A frozen clock parks the retry forever.
+    let now = 1_000
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1 },
+      {
+        now: () => now,
+        sleep: (ms) => {
+          now += ms
+          return Promise.resolve()
+        },
+        logger: { warn: () => {} },
+        setTimeout: ((_cb: () => void) => undefined as unknown as ReturnType<typeof setTimeout>) as typeof setTimeout,
+        clearTimeout: (() => {}) as typeof clearTimeout,
+      },
+    )
+
+    return new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        fetch: ((async () => {
+          calls.n++
+          if (calls.n === 1) {
+            return new Response('upstream failed', { status })
+          }
+          return Response.json({ id: 'msg_1', content: [] })
+        }) as unknown) as typeof fetch,
+      },
+    )
+  }
+
+  const messagesPayload = {
+    model: 'claude-opus-5',
+    max_tokens: 16,
+    messages: [{ role: 'user' as const, content: 'hi' }],
+  }
+
+  // A 5xx does not mean the request was refused. It may have been fully
+  // processed before failing — a proxy stream-idle timeout surfaces as 408,
+  // and Envoy maps upstream connection termination to 503 — so replaying a
+  // completion can bill the same client request twice.
+  for (const status of [408, 500, 502, 503, 504]) {
+    test(`createMessages does not replay upstream ${status}`, async () => {
+      const calls = { n: 0 }
+      const client = buildClient(status, calls)
+
+      await expect(client.createMessages(messagesPayload)).rejects.toMatchObject({ status })
+      expect(calls.n).toBe(1)
+    })
+  }
+
+  // 429/529 stay retried: the upstream declined to serve rather than failing
+  // while serving, and this is the case the queue was built for.
+  for (const status of [429, 529]) {
+    test(`createMessages still replays upstream ${status}`, async () => {
+      const calls = { n: 0 }
+      const client = buildClient(status, calls)
+
+      await client.createMessages(messagesPayload)
+      expect(calls.n).toBe(2)
+    })
+  }
+
+  test('createResponses does not replay upstream 500', async () => {
+    const calls = { n: 0 }
+    const client = buildClient(500, calls)
+
+    await expect(client.createResponses({
+      model: 'gpt-5.6-sol',
+      input: [],
+    })).rejects.toMatchObject({ status: 500 })
+    expect(calls.n).toBe(1)
+  })
+
+  test('createChatCompletions does not replay upstream 502', async () => {
+    const calls = { n: 0 }
+    const client = buildClient(502, calls)
+
+    await expect(client.createChatCompletions({
+      model: 'gpt-5.6-sol',
+      messages: [{ role: 'user', content: 'hi' }],
+    })).rejects.toMatchObject({ status: 502 })
+    expect(calls.n).toBe(1)
+  })
+
+  // Effect-free reads keep the wide tier — a duplicate costs a round trip.
+  test('getModels still replays upstream 500', async () => {
+    const calls = { n: 0 }
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1 },
+      {
+        now: () => 1_000,
+        sleep: () => Promise.resolve(),
+        logger: { warn: () => {} },
+        setTimeout: ((_cb: () => void) => undefined as unknown as ReturnType<typeof setTimeout>) as typeof setTimeout,
+        clearTimeout: (() => {}) as typeof clearTimeout,
+      },
+    )
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        fetch: ((async () => {
+          calls.n++
+          if (calls.n === 1) {
+            return new Response('boom', { status: 500 })
+          }
+          return Response.json({ object: 'list', data: [] })
+        }) as unknown) as typeof fetch,
+      },
+    )
+
+    await client.getModels()
+    expect(calls.n).toBe(2)
+  })
+})

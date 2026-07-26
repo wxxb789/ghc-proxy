@@ -445,6 +445,42 @@ describe('messages routing', () => {
     expect(calls[0]?.payload.output_config).toEqual({ effort: 'low' })
   })
 
+  // Loosening the ingress schema only helps if the field survives the pipeline.
+  // sanitizeOutputConfig used to rebuild the object as `{ effort }`, which would
+  // turn a visible 400 into a silent drop — strictly worse for the caller.
+  test('/v1/messages native path forwards unrecognized output_config fields to upstream', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-5',
+        max_tokens: 64,
+        output_config: { effort: 'high', verbosity: 'low' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    const forwarded = calls[0]?.payload.output_config as Record<string, unknown> | undefined
+    expect(forwarded?.effort).toBe('high')
+    expect(forwarded?.verbosity).toBe('low')
+  })
+
   test('/v1/messages routes structured output_config format through Responses when available', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
@@ -510,7 +546,11 @@ describe('messages routing', () => {
         schema,
       },
     })
-    expect(calls[0]?.payload.reasoning?.effort).toBe('xhigh')
+    // buildModel sets no reasoning_effort, so there is no advertised list to
+    // clamp against and `max` is forwarded as sent. This used to assert
+    // 'xhigh' — the old blind fallback, which downgraded models that accept
+    // `max` and could still land on a level the model rejects.
+    expect(calls[0]?.payload.reasoning?.effort).toBe('max')
   })
 
   test('/v1/messages rejects structured output_config format when Responses is unavailable', async () => {
@@ -598,7 +638,7 @@ describe('messages routing', () => {
       },
     }, calls)
 
-    for (const effort of ['max', 'xhigh'] as const) {
+    for (const effort of ['xhigh', 'max'] as const) {
       const response = await app.handle(new Request('http://localhost/v1/messages', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -1429,5 +1469,71 @@ describe('native messages sampling params', () => {
 
     const payload = calls[0]!.payload as unknown as Record<string, unknown>
     expect(payload.top_k).toBe(40)
+  })
+})
+
+// Copilot's native /v1/messages enforces its output ceiling (probed 2026-07-26:
+// `max_tokens: 64001 > 64000` returns 400), unlike /responses where the
+// advertised value is advisory. The model record already carries the bound, so
+// forwarding an over-ceiling value leaks a 400 the proxy could have absorbed.
+describe('/v1/messages native path clamps max_tokens to the advertised ceiling', () => {
+  function cacheModelWithCeiling(ceiling: number) {
+    const model = buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })
+    model.capabilities.limits.max_output_tokens = ceiling
+    modelCache.cacheModels(buildModelsResponse(model))
+  }
+
+  async function sendMaxTokens(maxTokens: number, calls: Array<CapturedMessagesCall>) {
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+
+    return createApp().handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-5',
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    }))
+  }
+
+  test('lowers an over-ceiling max_tokens to the advertised limit', async () => {
+    cacheModelWithCeiling(64000)
+    const calls: Array<CapturedMessagesCall> = []
+
+    const response = await sendMaxTokens(64001, calls)
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.max_tokens).toBe(64000)
+  })
+
+  test('leaves a within-ceiling max_tokens untouched', async () => {
+    cacheModelWithCeiling(64000)
+    const calls: Array<CapturedMessagesCall> = []
+
+    await sendMaxTokens(1024, calls)
+
+    expect(calls[0]?.payload.max_tokens).toBe(1024)
+  })
+
+  test('does not clamp when the model advertises no ceiling', async () => {
+    const model = buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })
+    delete (model.capabilities.limits as { max_output_tokens?: number }).max_output_tokens
+    modelCache.cacheModels(buildModelsResponse(model))
+    const calls: Array<CapturedMessagesCall> = []
+
+    // An unknown bound is not a reason to guess one.
+    await sendMaxTokens(999999, calls)
+
+    expect(calls[0]?.payload.max_tokens).toBe(999999)
   })
 })

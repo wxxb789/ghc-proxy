@@ -15,6 +15,7 @@ import type {
   ToolChoiceFunction,
   ToolChoiceOptions,
 } from '~/types'
+import { clampEffortToAdvertised } from '~/transform'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { normalizeFunctionParametersSchemaForCopilot } from './function-schema'
 
@@ -43,11 +44,15 @@ export interface AnthropicToResponsesOptions {
   /**
    * The target model's advertised `reasoning_effort` levels.
    *
-   * Probing (2026-07-26) confirmed the advertised list matches upstream
-   * behavior exactly — gpt-5.6 accepts `max`, earlier gpt-5.x reject it with
-   * `Invalid value: 'max'` — so it is authoritative for clamping. Omit it and
-   * `max` degrades to `xhigh`, which is the safe choice for every model that
-   * existed before gpt-5.6.
+   * Probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`): a model rejects
+   * every level it does not advertise, so this list is authoritative for
+   * clamping. It is not an ordered ladder — `claude-opus-4.6` and
+   * `claude-sonnet-4.6` advertise `max` but not `xhigh` — so the clamp target
+   * is derived from the list rather than a fixed fallback.
+   *
+   * Omit it and the effort passes through untouched: with nothing to derive
+   * from, forwarding the caller's request is better than guessing at a level
+   * that may be both a downgrade and still unsupported.
    */
   supportedEfforts?: Array<string>
 }
@@ -303,7 +308,28 @@ function resolveResponsesTextConfig(
       }
   }
 }
+/**
+ * Resolve the Responses `reasoning.effort` for an Anthropic request.
+ *
+ * Every branch below produces a *candidate* the caller did not name directly —
+ * a hardcoded tier, a config default, or a mapped `output_config.effort` — so
+ * all of them are clamped at the single exit. Clamping only the
+ * `output_config.effort` branch left the others able to emit a level the model
+ * rejects: `adaptive` sent `medium` to a model advertising `[high, xhigh, max]`,
+ * and `enabled` sent the configured default with an `as` cast and no check.
+ */
 function resolveResponsesReasoningEffort(
+  payload: AnthropicMessagesPayload,
+  options?: AnthropicToResponsesOptions,
+): NonNullable<ResponsesPayload['reasoning']>['effort'] | undefined {
+  const candidate = resolveEffortCandidate(payload, options)
+  if (!candidate) {
+    return candidate
+  }
+  return clampResponsesEffort(candidate, options)
+}
+
+function resolveEffortCandidate(
   payload: AnthropicMessagesPayload,
   options?: AnthropicToResponsesOptions,
 ): NonNullable<ResponsesPayload['reasoning']>['effort'] | undefined {
@@ -312,7 +338,7 @@ function resolveResponsesReasoningEffort(
   }
 
   if (payload.output_config?.effort) {
-    return mapAnthropicEffortToResponses(payload.output_config.effort, options)
+    return payload.output_config.effort
   }
 
   if (payload.thinking?.type === 'adaptive') {
@@ -327,20 +353,26 @@ function resolveResponsesReasoningEffort(
 }
 
 /**
- * Map an Anthropic `output_config.effort` to a Responses `reasoning.effort`.
+ * Clamp a Responses effort to what the target model advertises.
  *
- * The two vocabularies agree except at the top: `max` is only valid upstream
- * for models that advertise it (gpt-5.6 and later). For anything else it is
- * clamped to `xhigh` — the highest level the earlier gpt-5.x family accepts.
+ * `none` and `minimal` belong to the Responses vocabulary but not to the
+ * Anthropic `output_config` ladder, so they are passed through rather than
+ * ranked: `none` means "do not reason", and clamping it *up* to the model's
+ * highest advertised level would invert the caller's intent. Every model
+ * observed on `/responses` advertises `none` (probed 2026-07-26).
+ *
+ * With no advertised list the effort passes through untouched — with nothing to
+ * derive from, forwarding the request beats guessing at a level that may be both
+ * a downgrade and still unsupported.
  */
-function mapAnthropicEffortToResponses(
-  effort: NonNullable<AnthropicMessagesPayload['output_config']>['effort'],
+function clampResponsesEffort(
+  effort: NonNullable<NonNullable<ResponsesPayload['reasoning']>['effort']>,
   options?: AnthropicToResponsesOptions,
 ): NonNullable<ResponsesPayload['reasoning']>['effort'] {
-  if (effort === 'max' && !options?.supportedEfforts?.includes('max')) {
-    return 'xhigh'
+  if (effort === 'none' || effort === 'minimal') {
+    return effort
   }
-  return effort
+  return clampEffortToAdvertised(effort, options?.supportedEfforts) ?? effort
 }
 
 function assertResponsesCompatibleRequest(

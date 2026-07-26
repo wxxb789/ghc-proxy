@@ -8,7 +8,8 @@ import {
   parseResponsesInputTokensPayload,
   parseResponsesPayload,
 } from '~/ingest/validation'
-import { HTTPError } from '~/lib/error'
+import { HTTPError, withTranslationErrors } from '~/lib/error'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { REASONING_EFFORT_VALUES } from '~/types'
 
 describe('OpenAI payload validation', () => {
@@ -201,7 +202,7 @@ describe('Anthropic payload validation', () => {
   })
 
   test('accepts output_config effort values', () => {
-    for (const effort of ['low', 'medium', 'high', 'max', 'xhigh'] as const) {
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
       const payload = parseAnthropicMessagesPayload({
         model: 'claude-haiku-4.5',
         max_tokens: 16,
@@ -249,15 +250,41 @@ describe('Anthropic payload validation', () => {
     })
   })
 
-  test('rejects unsupported output_config fields explicitly', () => {
+  // Behavior change: `output_config` was the only strict container on this
+  // boundary, so every field Anthropic added arrived as a local 400 before the
+  // request could reach a model that may well accept it. Unknown keys are now
+  // forwarded and left for upstream to judge.
+  test('forwards unrecognized output_config fields instead of rejecting them', () => {
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-opus-4-8',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Hello!' }],
+      output_config: {
+        effort: 'max',
+        unsupported: true,
+      },
+    })
+
+    expect(payload.output_config?.effort).toBe('max')
+    expect((payload.output_config as Record<string, unknown>).unsupported).toBe(true)
+  })
+
+  // `format` keeps its strict contract: it is the one field carrying a promise
+  // the caller relies on. Accepting an unrecognized key inside it could let a
+  // schema-constrained request come back unconstrained without the caller
+  // knowing — see docs/solutions/integration-issues/claude-code-messages-startup-payloads.md.
+  test('still rejects unrecognized fields inside output_config.format', () => {
     expect(() =>
       parseAnthropicMessagesPayload({
         model: 'claude-opus-4-8',
         max_tokens: 16,
         messages: [{ role: 'user', content: 'Hello!' }],
         output_config: {
-          effort: 'max',
-          unsupported: true,
+          format: {
+            type: 'json_schema',
+            schema: { type: 'object' },
+            unsupported_constraint: true,
+          },
         },
       }),
     ).toThrow('Invalid request payload')
@@ -820,5 +847,40 @@ describe('Responses payload validation', () => {
         },
       }),
     ).toThrow('Invalid request payload')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TranslationFailure -> HTTPError mapping
+// ---------------------------------------------------------------------------
+
+describe('withTranslationErrors', () => {
+  // The kind was dropped on both the wire and the log, so a translation-path
+  // 400 was indistinguishable from any other and left no trace at all —
+  // onError returns early for HTTPError, so nothing downstream reported it.
+  test('carries the TranslationFailure kind into the error body', () => {
+    const thrown = (() => {
+      try {
+        withTranslationErrors(() => {
+          throw new TranslationFailure('nope', { status: 400, kind: 'unsupported_service_tier' })
+        })
+      }
+      catch (error) {
+        return error
+      }
+    })()
+
+    expect(thrown).toBeInstanceOf(HTTPError)
+    const httpError = thrown as HTTPError
+    expect(httpError.status).toBe(400)
+    expect(httpError.body.error.type).toBe('translation_error')
+    expect(httpError.body.error.code).toBe('unsupported_service_tier')
+  })
+
+  test('passes non-TranslationFailure errors through untouched', () => {
+    const sentinel = new Error('unrelated')
+    expect(() => withTranslationErrors(() => {
+      throw sentinel
+    })).toThrow(sentinel)
   })
 })

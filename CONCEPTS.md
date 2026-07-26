@@ -13,9 +13,16 @@ The per-field decision about how a value crosses the proxy boundary: kept exactl
 A policy that rejects or strips a field asserts something about the upstream, and that assertion needs observed upstream behavior behind it — normally a probe, or an upstream error that names the constraint itself. The proxy's own payload types cannot supply it — they describe what the proxy sends, not what Copilot accepts.
 
 ### Upstream probe
-A script that sends real requests to Copilot to establish what it actually accepts, because the API is reverse-engineered and publishes no schema. A probe is how a translation policy earns the right to reject or strip a field — the exception being a constraint upstream states outright in its own error text, which is already direct evidence and needs no probe to confirm.
+A script that sends real requests to Copilot to establish what it actually accepts, because the API is reverse-engineered and publishes no schema. A probe is how a translation policy earns the right to reject or strip a field — the exception being a constraint upstream states outright in its own error text, which is already direct evidence and needs no probe to confirm. Where an [[Advertised capability]] covers the question, prefer it: it costs nothing and extends to models that did not exist when the probe ran.
 
 A probe result is a dated snapshot, not a permanent fact: the model set changes, and a policy correct when written can become a capability loss later. Constants that encode a probe result cite the probe and its date, so staleness stays visible. Probes cost real quota and share one rate-limited upstream, so they run sequentially. A probe must also control the state its requests land in — a cached prefix or a warm session makes the measurement describe the leftover state rather than the upstream.
+
+### Advertised capability
+What a model's own record says it supports, fetched from Copilot's model list at startup. Distinct from an [[Upstream probe]], which measures what the model actually does: an advertised list is free and available for every model including ones that did not exist when the last probe ran, but it is the model's claim rather than a measurement.
+
+The relationship is asymmetric, and the asymmetry is what makes it usable. A model rejects everything it does not advertise, so the list is trustworthy for *narrowing* a request — clamping to an advertised value never produces a rejected one. The converse fails: at least one model has been observed accepting a level absent from its own list. So an advertised list is a floor on capability, not a description of it, and code should derive from it rather than hardcode model names — a new model then works without a code change.
+
+An advertised set is also not an ordered ladder every model implements a prefix of. Two models may advertise overlapping-but-incomparable sets, so "supports the highest tier, therefore supports the one below" is not a valid inference.
 
 ## Messages Execution Strategies
 

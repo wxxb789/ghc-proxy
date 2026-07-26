@@ -33,7 +33,7 @@ The queue is below all public API protocol logic. This keeps Anthropic, OpenAI, 
 1. Requests acquire a global upstream queue slot before calling Copilot.
 2. The default queue concurrency is `10`, so up to 10 upstream requests can occupy queue slots at the same time.
 3. If upstream returns a non-transient response, the response is handed back to `CopilotClient`.
-4. If upstream returns a transient status (`408`, `429`, `500`, `502`, `503`, `504`, `529`) and retry budget remains:
+4. If upstream returns a status this request may replay (see Retry scope below) and retry budget remains:
    - The response body is discarded.
    - A retry delay is selected from `Retry-After` when present.
    - Otherwise exponential backoff is used.
@@ -43,15 +43,42 @@ The queue is below all public API protocol logic. This keeps Anthropic, OpenAI, 
 
 ### Retry scope vs. cooldown scope
 
-These are two different decisions and the queue treats them separately:
+These are two different decisions and the queue treats them separately.
 
-| Status | Retried | Global cooldown |
-|--------|---------|-----------------|
-| `429`, `529` | Yes | Yes — the limit is account- or service-wide |
-| `408`, `500`, `502`, `503`, `504` | Yes | No — request-scoped fault |
-| everything else | No | No |
+Which statuses may be replayed depends on what a duplicate would cost, declared
+per call site as `UpstreamRequestContext.retryable`:
+
+| Request | `retryable` | Replays |
+|---------|-------------|---------|
+| Completions (`/v1/messages`, `/chat/completions`, `/responses`) | `'capacity'` | `429`, `529` |
+| Effect-free reads and `/embeddings` | `true` | `408`, `429`, `500`, `502`, `503`, `504`, `529` |
+| `DELETE /responses/{id}` | omitted | none |
+
+A completion request bills a generation, and an upstream 5xx does **not** mean
+the request was refused — it may have been fully processed before failing. No
+HTTP status proves otherwise: a proxy stream-idle timeout surfaces as `408`, and
+Envoy maps upstream connection termination to `503`. Replaying one can therefore
+spend quota twice for a single client request, so completions replay only the
+two statuses where the upstream declined to serve rather than failed while
+serving. That is a lower prior on duplicated work, not a guarantee.
+
+Retrying a non-idempotent 5xx is a decision about whether a duplicate is
+acceptable, which the client owns — the Anthropic and OpenAI SDKs and Claude
+Code all retry 5xx at their own boundary.
+
+Cooldown scope is a separate axis and unchanged:
+
+| Status | Global cooldown |
+|--------|-----------------|
+| `429`, `529` | Yes — the limit is account- or service-wide |
+| `408`, `500`, `502`, `503`, `504` | No — request-scoped fault |
+| everything else | No |
 
 A request-scoped 5xx says one request failed, not that the account is out of capacity. Applying a queue-wide cooldown there would let a single bad gateway hop stall every other in-flight request.
+
+**Streaming is safe by construction.** `dispatch` returns the response only once
+no retry will follow (`upstream-queue.ts`, the single `return` inside the loop),
+so a replay can never happen after bytes have reached the client.
 
 Queue concurrency counts active upstream occupancy, not just the moment a request is started. For non-streaming responses, the slot is released after the response body is parsed. For streaming responses, the slot is released only when the returned upstream stream is consumed or closed. This prevents the proxy from starting another expensive upstream request while one stream is still active.
 
@@ -94,7 +121,7 @@ CLI flags override config file values for the current process.
 
 ## Error Handling
 
-The queue retries transient upstream statuses (`408`, `429`, `500`, `502`, `503`, `504`, `529`), classified by `isTransientUpstreamStatus()` in `src/lib/error.ts` — the same predicate the Copilot token refresh uses. Other statuses (`400`, `401`, `404`, ...) are returned immediately; retrying a request that can never succeed only multiplies it.
+The queue classifies transient upstream statuses with `isTransientUpstreamStatus()` in `src/lib/error.ts` — the same predicate the Copilot token refresh uses, where retrying is unconditionally safe — and narrows to `isCapacityLimitStatus()` for requests that bill a generation. Other statuses (`400`, `401`, `404`, ...) are returned immediately; retrying a request that can never succeed only multiplies it.
 
 The final exhausted response is still processed by `throwUpstreamError`, which:
 

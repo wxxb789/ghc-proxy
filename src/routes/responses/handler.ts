@@ -7,7 +7,7 @@ import { runPipeline } from '~/pipeline/runner'
 import { configStore, modelCache, RESPONSES_ENDPOINT } from '~/state'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
-import { applyResponsesParameterFilters, clampResponsesOutputTokens } from '~/transform/parameter-filter'
+import { applyResponsesParameterFilters, clampResponsesOutputTokens, clampResponsesReasoningEffort } from '~/transform/parameter-filter'
 import { stripPhaseFromInputMessages } from '~/transform/responses-input'
 import { normalizeFunctionParametersSchemaForCopilot } from '~/translator/responses/function-schema'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
@@ -74,6 +74,7 @@ export async function handleResponsesCore(
         // rejects, per the configured filter rules.
         applyResponsesParameterFilters(payload, selectedModel)
         clampResponsesOutputTokens(payload)
+        clampResponsesReasoningEffort(payload, selectedModel)
       },
       buildStrategyContext({ payload, meta, copilotClient, upstreamSignal }) {
         const { vision, initiator } = getResponsesRequestOptions(payload)

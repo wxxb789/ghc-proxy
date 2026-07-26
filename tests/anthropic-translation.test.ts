@@ -848,7 +848,12 @@ describe('reasoning effort max', () => {
     expect(translated.reasoning?.effort).toBe('xhigh')
   })
 
-  test('max falls back to xhigh when the model list is unknown', () => {
+  // Behavior change (was: clamped to xhigh). `xhigh` was the safe fallback
+  // before gpt-5.6 existed; it is now wrong in both directions — an unknown
+  // model may be a gpt-5.6 that accepts `max`, or an opus-4.6 that rejects
+  // `xhigh` outright. With no advertised list there is nothing to derive from,
+  // so forward what the caller asked for and let upstream answer.
+  test('max passes through unchanged when the model list is unknown', () => {
     const translated = translateAnthropicToResponsesPayload({
       model: 'gpt-5.4',
       max_tokens: 256,
@@ -856,6 +861,147 @@ describe('reasoning effort max', () => {
       messages: [{ role: 'user', content: 'hello' }],
     })
 
-    expect(translated.reasoning?.effort).toBe('xhigh')
+    expect(translated.reasoning?.effort).toBe('max')
+  })
+
+  // Regression: the old mapper only special-cased `max`, so `xhigh` reached a
+  // model that rejects it. Live opus-4.6 / sonnet-4.6 advertise max but NOT
+  // xhigh (probed 2026-07-26) — the exact shape that used to 400 upstream.
+  test('xhigh is clamped to max for a model that advertises max but not xhigh', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      model: 'claude-opus-4.6',
+      max_tokens: 256,
+      output_config: { effort: 'xhigh' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }, {
+      supportedEfforts: ['low', 'medium', 'high', 'max'],
+    })
+
+    expect(translated.reasoning?.effort).toBe('max')
+  })
+
+  // The three newest families accept every level they advertise, so a `max`
+  // request must reach them untouched — no downgrade at all.
+  for (const model of ['claude-opus-5', 'claude-sonnet-5', 'gpt-5.6-sol']) {
+    test(`max reaches ${model} without downgrade`, () => {
+      const translated = translateAnthropicToResponsesPayload({
+        model,
+        max_tokens: 256,
+        output_config: { effort: 'max' },
+        messages: [{ role: 'user', content: 'hello' }],
+      }, {
+        supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      })
+
+      expect(translated.reasoning?.effort).toBe('max')
+    })
+  }
+})
+
+// Regression: only the output_config.effort branch was clamped. The three
+// sibling branches each produced a candidate the caller never named — a
+// hardcoded tier or a config default — and forwarded it unchecked, so a model
+// that does not advertise that level returned 400.
+describe('reasoning effort clamping covers every branch', () => {
+  const base = {
+    model: 'claude-opus-4.6',
+    max_tokens: 256,
+    messages: [{ role: 'user' as const, content: 'hello' }],
+  }
+
+  test('thinking:adaptive clamps its hardcoded medium to an advertised level', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      ...base,
+      thinking: { type: 'adaptive' },
+    }, {
+      supportedEfforts: ['high', 'xhigh', 'max'],
+    })
+
+    // Was 'medium' — not advertised, an upstream 400.
+    expect(translated.reasoning?.effort).toBe('max')
+  })
+
+  test('thinking:enabled clamps the configured default', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      ...base,
+      thinking: { type: 'enabled', budget_tokens: 32000 },
+    }, {
+      reasoningEffortResolver: () => 'xhigh',
+      supportedEfforts: ['low', 'medium', 'high', 'max'],
+    })
+
+    // opus-4.6 shape: advertises max but not xhigh.
+    expect(translated.reasoning?.effort).toBe('max')
+  })
+
+  test('thinking:disabled keeps none rather than clamping it upward', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      ...base,
+      thinking: { type: 'disabled' },
+    }, {
+      supportedEfforts: ['low', 'medium', 'high', 'max'],
+    })
+
+    // `none` means "do not reason" — ranking it against the ladder would
+    // invert the caller's intent into maximum reasoning.
+    expect(translated.reasoning?.effort).toBe('none')
+  })
+})
+
+// Regression: output_config.effort was dropped entirely on the chat-completions
+// fallback — normalizeAnthropicRequest never read it, and no TranslationPolicy
+// issue was recorded either. Not a 400, a silent capability loss: the caller
+// asked for `max` and got whatever the budget heuristic produced ('high' at
+// most). Copilot does accept reasoning_effort here (probed 2026-07-26).
+describe('output_config.effort on the chat-completions fallback', () => {
+  test('an explicit effort wins over the budget heuristic', () => {
+    const translator = new AnthropicMessagesAdapter()
+    const payload = translator.toCapiPlan({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      thinking: { type: 'enabled', budget_tokens: 4000 },
+      output_config: { effort: 'max' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }).payload
+
+    // budget 4000 infers 'low'; the caller named 'max'.
+    expect(payload.reasoning_effort).toBe('max')
+  })
+
+  test('an explicit effort applies without any thinking config', () => {
+    const translator = new AnthropicMessagesAdapter()
+    const payload = translator.toCapiPlan({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      output_config: { effort: 'xhigh' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }).payload
+
+    expect(payload.reasoning_effort).toBe('xhigh')
+  })
+
+  test('the budget heuristic still applies when no effort is named', () => {
+    const translator = new AnthropicMessagesAdapter()
+    const payload = translator.toCapiPlan({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      thinking: { type: 'enabled', budget_tokens: 4000 },
+      messages: [{ role: 'user', content: 'hello' }],
+    }).payload
+
+    expect(payload.reasoning_effort).toBe('low')
+  })
+
+  test('thinking:disabled sends no effort even when one is named', () => {
+    const translator = new AnthropicMessagesAdapter()
+    const payload = translator.toCapiPlan({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      thinking: { type: 'disabled' },
+      output_config: { effort: 'max' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }).payload
+
+    expect(payload.reasoning_effort).toBeUndefined()
   })
 })

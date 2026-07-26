@@ -112,5 +112,10 @@ export interface ConversationRequest {
   tools?: Array<ConversationTool>
   toolChoice?: ConversationToolChoice
   thinking?: ConversationThinkingConfig
+  /**
+   * An effort level the caller named explicitly, independent of any thinking
+   * budget. Takes precedence over the level inferred from `thinking`.
+   */
+  outputEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   completionOptions?: CompletionOptions
 }

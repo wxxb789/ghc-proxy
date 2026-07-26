@@ -4,6 +4,7 @@ import consola from 'consola'
 
 import { configStore, modelCache } from '~/state'
 import { matchesGlob } from './model-rewrite'
+import { clampEffortToAdvertised } from './sanitize'
 
 /**
  * Parameters the default rule strips for reasoning models on the Responses
@@ -207,5 +208,77 @@ export function clampResponsesOutputTokens(payload: ResponsesPayload): void {
   payload.max_output_tokens = RESPONSES_MIN_OUTPUT_TOKENS
   consola.debug(
     `Raised max_output_tokens from ${requested} to the Copilot minimum of ${RESPONSES_MIN_OUTPUT_TOKENS}`,
+  )
+}
+
+/**
+ * Clamp `reasoning.effort` on the OpenAI-facing `/responses` route to a level
+ * the resolved model advertises.
+ *
+ * This route forwards the caller's own vocabulary, so leaving effort alone is
+ * defensible in isolation — but it is not a passthrough in practice. The same
+ * `afterTransform` already strips `temperature`/`top_p` for reasoning models and
+ * raises a below-minimum `max_output_tokens`, so effort was the one parameter
+ * where the proxy knew the request would 400 and forwarded it anyway.
+ *
+ * `none` and `minimal` pass through unranked, matching the Anthropic-to-Responses
+ * path: they are Responses-only levels rather than rungs on the effort ladder,
+ * and clamping `none` upward would invert the caller's intent.
+ */
+export function clampResponsesReasoningEffort(
+  payload: ResponsesPayload,
+  model: Model | undefined,
+): void {
+  const requested = payload.reasoning?.effort
+  if (!requested || requested === 'none' || requested === 'minimal') {
+    return
+  }
+
+  const clamped = clampEffortToAdvertised(
+    requested,
+    model?.capabilities.supports.reasoning_effort,
+  )
+  if (!clamped || clamped === requested) {
+    return
+  }
+
+  payload.reasoning = { ...payload.reasoning, effort: clamped }
+  consola.warn(
+    `Lowered reasoning.effort from ${requested} to ${clamped}, the highest level ${model?.id} advertises.`,
+  )
+}
+
+/**
+ * Lower a `max_tokens` above the model's advertised ceiling to that ceiling.
+ *
+ * Copilot's native `/v1/messages` enforces its ceiling, unlike `/responses`
+ * where the advertised value is advisory:
+ *
+ *   max_tokens: 64001 > 64000, which is the maximum allowed number of output
+ *   tokens for claude
+ *
+ * Probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`). The model record
+ * already carries the bound, so leaking a 400 for a value the proxy could have
+ * corrected is a worse outcome than serving a shorter completion.
+ *
+ * Unlike the `/responses` floor this is a real semantic change — the caller
+ * receives less output than they asked for — so it warns rather than logs at
+ * debug level. No advertised ceiling means no clamp: an unknown bound is not a
+ * reason to guess one.
+ */
+export function clampMessagesOutputTokens(
+  payload: { max_tokens?: number },
+  model: Model | undefined,
+): void {
+  const ceiling = model?.capabilities.limits.max_output_tokens
+  const requested = payload.max_tokens
+  if (ceiling == null || requested == null || requested <= ceiling) {
+    return
+  }
+
+  payload.max_tokens = ceiling
+  consola.warn(
+    `Lowered max_tokens from ${requested} to ${ceiling}, the ceiling ${model?.id} advertises. `
+    + `Copilot rejects a higher value outright on /v1/messages.`,
   )
 }
