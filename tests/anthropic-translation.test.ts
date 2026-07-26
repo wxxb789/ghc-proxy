@@ -848,7 +848,12 @@ describe('reasoning effort max', () => {
     expect(translated.reasoning?.effort).toBe('xhigh')
   })
 
-  test('max falls back to xhigh when the model list is unknown', () => {
+  // Behavior change (was: clamped to xhigh). `xhigh` was the safe fallback
+  // before gpt-5.6 existed; it is now wrong in both directions — an unknown
+  // model may be a gpt-5.6 that accepts `max`, or an opus-4.6 that rejects
+  // `xhigh` outright. With no advertised list there is nothing to derive from,
+  // so forward what the caller asked for and let upstream answer.
+  test('max passes through unchanged when the model list is unknown', () => {
     const translated = translateAnthropicToResponsesPayload({
       model: 'gpt-5.4',
       max_tokens: 256,
@@ -856,6 +861,39 @@ describe('reasoning effort max', () => {
       messages: [{ role: 'user', content: 'hello' }],
     })
 
-    expect(translated.reasoning?.effort).toBe('xhigh')
+    expect(translated.reasoning?.effort).toBe('max')
   })
+
+  // Regression: the old mapper only special-cased `max`, so `xhigh` reached a
+  // model that rejects it. Live opus-4.6 / sonnet-4.6 advertise max but NOT
+  // xhigh (probed 2026-07-26) — the exact shape that used to 400 upstream.
+  test('xhigh is clamped to max for a model that advertises max but not xhigh', () => {
+    const translated = translateAnthropicToResponsesPayload({
+      model: 'claude-opus-4.6',
+      max_tokens: 256,
+      output_config: { effort: 'xhigh' },
+      messages: [{ role: 'user', content: 'hello' }],
+    }, {
+      supportedEfforts: ['low', 'medium', 'high', 'max'],
+    })
+
+    expect(translated.reasoning?.effort).toBe('max')
+  })
+
+  // The three newest families accept every level they advertise, so a `max`
+  // request must reach them untouched — no downgrade at all.
+  for (const model of ['claude-opus-5', 'claude-sonnet-5', 'gpt-5.6-sol']) {
+    test(`max reaches ${model} without downgrade`, () => {
+      const translated = translateAnthropicToResponsesPayload({
+        model,
+        max_tokens: 256,
+        output_config: { effort: 'max' },
+        messages: [{ role: 'user', content: 'hello' }],
+      }, {
+        supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      })
+
+      expect(translated.reasoning?.effort).toBe('max')
+    })
+  }
 })

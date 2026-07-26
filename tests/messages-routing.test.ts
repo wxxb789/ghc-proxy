@@ -510,7 +510,11 @@ describe('messages routing', () => {
         schema,
       },
     })
-    expect(calls[0]?.payload.reasoning?.effort).toBe('xhigh')
+    // buildModel sets no reasoning_effort, so there is no advertised list to
+    // clamp against and `max` is forwarded as sent. This used to assert
+    // 'xhigh' — the old blind fallback, which downgraded models that accept
+    // `max` and could still land on a level the model rejects.
+    expect(calls[0]?.payload.reasoning?.effort).toBe('max')
   })
 
   test('/v1/messages rejects structured output_config format when Responses is unavailable', async () => {

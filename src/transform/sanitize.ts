@@ -46,8 +46,35 @@ export function normalizeOutputConfigEffort(
   effort: OutputConfigEffort,
   model: Model | undefined,
 ): OutputConfigEffort | undefined {
-  const supportedEfforts = model?.capabilities.supports.reasoning_effort
-    ?.filter(isOutputConfigEffort)
+  return clampEffortToAdvertised(
+    effort,
+    model?.capabilities.supports.reasoning_effort,
+  )
+}
+
+/**
+ * Clamp an effort to the highest level a model actually advertises.
+ *
+ * Probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`): a model rejects
+ * every level it does not advertise, and the levels are NOT an ordered ladder
+ * every model implements a prefix of — `claude-opus-4.6` and
+ * `claude-sonnet-4.6` advertise `max` but not `xhigh`, and reject `xhigh` while
+ * accepting `max`. So the target must be derived from the advertised list, not
+ * from a fixed fallback.
+ *
+ * Levels outside the Anthropic `output_config` vocabulary (`none`, `minimal`)
+ * are filtered out first: they are valid clamp *inputs* on the Responses
+ * boundary but never valid clamp *targets*, since silently landing on `none`
+ * would disable reasoning the caller asked for.
+ *
+ * Returns undefined when the model advertises nothing usable, which callers
+ * treat as "leave the request alone".
+ */
+export function clampEffortToAdvertised(
+  effort: OutputConfigEffort,
+  advertised: Array<string> | undefined,
+): OutputConfigEffort | undefined {
+  const supportedEfforts = advertised?.filter(isOutputConfigEffort)
   if (!supportedEfforts?.length) {
     return undefined
   }

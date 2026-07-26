@@ -15,6 +15,7 @@ import type {
   ToolChoiceFunction,
   ToolChoiceOptions,
 } from '~/types'
+import { clampEffortToAdvertised } from '~/transform'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { normalizeFunctionParametersSchemaForCopilot } from './function-schema'
 
@@ -43,11 +44,15 @@ export interface AnthropicToResponsesOptions {
   /**
    * The target model's advertised `reasoning_effort` levels.
    *
-   * Probing (2026-07-26) confirmed the advertised list matches upstream
-   * behavior exactly — gpt-5.6 accepts `max`, earlier gpt-5.x reject it with
-   * `Invalid value: 'max'` — so it is authoritative for clamping. Omit it and
-   * `max` degrades to `xhigh`, which is the safe choice for every model that
-   * existed before gpt-5.6.
+   * Probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`): a model rejects
+   * every level it does not advertise, so this list is authoritative for
+   * clamping. It is not an ordered ladder — `claude-opus-4.6` and
+   * `claude-sonnet-4.6` advertise `max` but not `xhigh` — so the clamp target
+   * is derived from the list rather than a fixed fallback.
+   *
+   * Omit it and the effort passes through untouched: with nothing to derive
+   * from, forwarding the caller's request is better than guessing at a level
+   * that may be both a downgrade and still unsupported.
    */
   supportedEfforts?: Array<string>
 }
@@ -329,18 +334,25 @@ function resolveResponsesReasoningEffort(
 /**
  * Map an Anthropic `output_config.effort` to a Responses `reasoning.effort`.
  *
- * The two vocabularies agree except at the top: `max` is only valid upstream
- * for models that advertise it (gpt-5.6 and later). For anything else it is
- * clamped to `xhigh` — the highest level the earlier gpt-5.x family accepts.
+ * The vocabularies agree, but which levels a given model accepts does not:
+ * probed 2026-07-26 (`scripts/probes/effort-and-tokens.ts`), gpt-5.6 accepts
+ * `max` while gpt-5.5 and earlier reject it, and `claude-opus-4.6` /
+ * `claude-sonnet-4.6` accept `max` yet reject `xhigh`. Clamping to a fixed
+ * fallback is therefore wrong in both directions — it downgrades models that
+ * would have accepted the request, and can still land on a level the model
+ * rejects. Derive the target from what the model advertises instead.
+ *
+ * With no advertised list the effort passes through unchanged, preserving the
+ * behavior of callers that do not supply `supportedEfforts`.
  */
 function mapAnthropicEffortToResponses(
   effort: NonNullable<AnthropicMessagesPayload['output_config']>['effort'],
   options?: AnthropicToResponsesOptions,
 ): NonNullable<ResponsesPayload['reasoning']>['effort'] {
-  if (effort === 'max' && !options?.supportedEfforts?.includes('max')) {
-    return 'xhigh'
+  if (!effort) {
+    return effort
   }
-  return effort
+  return clampEffortToAdvertised(effort, options?.supportedEfforts) ?? effort
 }
 
 function assertResponsesCompatibleRequest(
