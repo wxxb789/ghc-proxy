@@ -86,3 +86,9 @@ same code works whatever npm the CI runner or a contributor's machine ships.
 - **Never assume a CLI's `--json` output shape is stable across major versions.** Normalize array-vs-object at the boundary rather than casting to one shape.
 - **Beware `npm pack --json` stdout pollution from lifecycle scripts.** This repo's `prepack` runs `tsdown`, whose progress logs go to **stdout** and corrupt `--json` parsing; npm's own file listing goes to **stderr**. When you only need the packed file list (not a filename), read the stderr listing instead of `--json`. The release-npm CD "Verify tarball ships no source maps" guard relies on this: it greps `npm pack --dry-run 2>&1 >/dev/null` for `dist/*.map` rather than parsing `--json`.
 - **Distinguish a real script bug from an environmental blocker when a smoke fails.** Here two failures stacked: the JSON-parse bug (real, CI-relevant) and an `E401` from a private default registry (environmental, CI-irrelevant). Reproduce on a clean checkout to separate them before concluding "pre-existing / not my change."
+
+## Related
+
+- `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md` — the
+  same rule applied to an HTTP API rather than a CLI: an external contract we did
+  not verify is an assumption, whatever shape our own code assumes it has.
