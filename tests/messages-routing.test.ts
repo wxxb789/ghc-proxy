@@ -1596,7 +1596,7 @@ describe('/v1/messages serves structured output natively when the model supports
     expect(calls[0]?.payload.output_config?.format).toEqual({ type: 'json_schema', schema })
   })
 
-  test('strips name and description, which native rejects as extra inputs', async () => {
+  test('strips name, a pure label native rejects as an extra input', async () => {
     cacheModel('claude-opus-5', true)
     const calls: Array<CapturedMessagesCall> = []
     mockNative('claude-opus-5', calls)
@@ -1605,13 +1605,34 @@ describe('/v1/messages serves structured output natively when the model supports
       model: 'claude-opus-5',
       max_tokens: 256,
       output_config: {
-        format: { type: 'json_schema', schema, name: 'my_output', description: 'a label' },
+        format: { type: 'json_schema', schema, name: 'my_output' },
       },
       messages: [{ role: 'user', content: 'hi' }],
     })
 
-    // Labels, not guarantees — dropping them costs the caller nothing.
+    // Anthropic documents no effect on the reply, and the Responses translator
+    // has to invent one when the caller omits it — dropping it costs nothing.
     expect(calls[0]?.payload.output_config?.format).toEqual({ type: 'json_schema', schema })
+  })
+
+  test('leaves description requests off the native path rather than stripping them', async () => {
+    // Native rejects `description` as an extra input (probed 2026-07-26), but
+    // unlike `name` it steers the model's output — so reducing it silently
+    // would change the reply the caller gets.
+    cacheModel('claude-opus-5', true)
+
+    const response = await send({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      output_config: {
+        format: { type: 'json_schema', schema, description: 'Answer in one word.' },
+      },
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    const json = await response.json() as { error?: { code?: string } }
+    expect(response.status).toBe(400)
+    expect(json.error?.code).toBe('unsupported_output_config_format')
   })
 
   test('keeps output_config.format when no effort is set', async () => {

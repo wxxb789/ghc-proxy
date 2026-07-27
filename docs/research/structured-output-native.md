@@ -53,13 +53,19 @@ local 400 with `unsupported_output_config_format`.
 
 ## The accepted shape is narrower than Anthropic's
 
-Native accepts `type` and `schema` only. The optional Anthropic annotations are
-rejected:
+Native accepts `type` and `schema` only. All three optional Anthropic
+annotations are rejected, on every model whose baseline passed:
 
 ```
 output_config.format.name: Extra inputs are not permitted
+output_config.format.description: Extra inputs are not permitted
 output_config.format.strict: Extra inputs are not permitted
 ```
+
+`description` was added to the probe after review flagged that the first pass
+had never sent it — the claim that native rejects it had been *inferred* from
+`name` rather than measured. It happened to be right, which is not the same as
+having been established.
 
 This matters because the Responses translation does the opposite — Responses
 `text.format.json_schema` *requires* `name`, so the translator injects a default
@@ -73,10 +79,19 @@ one. The two paths need different payload shapes for the same caller request.
 | Caller sends | Path |
 | --- | --- |
 | `{ type, schema }`, model advertises `structured_outputs` | native, forwarded as-is |
-| `+ name` / `+ description` | native, labels stripped |
+| `+ name` | native, `name` stripped |
+| `+ description` | **not** native — it steers the reply, so reducing it changes the answer |
 | `+ strict` | **not** native — the guarantee cannot be dropped silently |
 | model does not advertise `structured_outputs` | Responses, else explicit 400 |
 | `claude-opus-4.7`, `claude-sonnet-4.6` | Responses, else explicit 400 — excluded by ID |
+
+Native rejects all three annotations identically
+(`output_config.format.<field>: Extra inputs are not permitted`), but only
+`name` is safe to drop: Anthropic documents no effect on the reply, and the
+Responses translator has to invent one when the caller omits it. `description`
+guides the model's output and `strict` promises the schema is enforced — both
+change what comes back, so those requests keep their existing routing rather
+than being served natively in reduced form.
 
 The last row is the one the advertised capability cannot express: both models
 advertise `structured_outputs: true` and are stopped only by the GCP policy, so

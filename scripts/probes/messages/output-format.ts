@@ -66,6 +66,18 @@ const probes = [
     }),
   },
   {
+    // `description` is not a label like `name` — it is guidance to the model
+    // about the intended output, and the Responses translator forwards it. If
+    // native accepts it, stripping it would change the reply.
+    label: 'format + description',
+    build: (id: string) => ({
+      ...baseBody(id),
+      output_config: {
+        format: { type: 'json_schema', description: 'Answer in one word.', schema: SCHEMA },
+      },
+    }),
+  },
+  {
     label: 'format + strict',
     build: (id: string) => ({
       ...baseBody(id),

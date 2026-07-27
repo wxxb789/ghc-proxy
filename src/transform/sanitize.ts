@@ -104,7 +104,7 @@ export function canReduceOutputFormatForNativeMessages(
   payload: AnthropicMessagesPayload | undefined,
 ): boolean {
   const format = payload?.output_config?.format
-  return !format || format.strict === undefined
+  return !format || (format.strict === undefined && format.description === undefined)
 }
 
 /**
@@ -113,29 +113,29 @@ export function canReduceOutputFormatForNativeMessages(
  *
  * Probed 2026-07-26 (`scripts/probes/messages/output-format.ts`): native
  * Messages serves a bare `{ type, schema }` on every model that advertises
- * `structured_outputs`, but rejects the optional Anthropic annotations —
+ * `structured_outputs`, but rejects every optional Anthropic annotation —
  * `output_config.format.name: Extra inputs are not permitted`, same for
- * `strict`. The Anthropic schema allows both, so a caller can legitimately send
- * them.
+ * `description` and `strict`. The Anthropic schema allows all three, so a
+ * caller can legitimately send them.
  *
- * `name` and `description` are labels; dropping them costs the caller nothing.
- * `strict` is not — it is a promise about the reply — so
- * {@link canReduceOutputFormatForNativeMessages} keeps those requests off this
- * path entirely rather than stripping the guarantee here.
+ * Only `name` is dropped here, and only because it is a pure label: Anthropic
+ * documents no effect on the reply, and the Responses translator has to invent
+ * one when the caller omits it. `description` and `strict` both influence the
+ * reply — one guides the model's output, the other promises the schema is
+ * enforced — so {@link canReduceOutputFormatForNativeMessages} keeps those
+ * requests off this path entirely rather than quietly reducing them here.
  */
 export function reduceOutputFormatForNativeMessages(
   payload: AnthropicMessagesPayload,
 ): void {
   const format = payload.output_config?.format
-  if (!format) {
+  if (!format || format.name === undefined) {
     return
   }
 
-  if (format.name !== undefined || format.description !== undefined) {
-    payload.output_config = {
-      ...payload.output_config,
-      format: { type: format.type, schema: format.schema },
-    }
+  payload.output_config = {
+    ...payload.output_config,
+    format: { type: format.type, schema: format.schema },
   }
 }
 
