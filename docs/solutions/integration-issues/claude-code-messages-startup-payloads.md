@@ -1,6 +1,7 @@
 ---
 title: Claude Code Messages startup payload compatibility
 date: 2026-06-02
+last_updated: 2026-07-27
 category: integration-issues
 module: Anthropic Messages routing
 problem_type: integration_issue
@@ -8,7 +9,7 @@ component: tooling
 symptoms:
   - "Initial /v1/messages?beta=true startup requests returned upstream 400 errors before later requests succeeded"
   - "Copilot native /v1/messages rejected anthropic-beta: mid-conversation-system-*"
-  - "Vertex rejected structured_outputs when output_config.format reached Copilot native Messages"
+  - "Vertex org policy rejected structured_outputs for claude-opus-4-7 when output_config.format reached Copilot native Messages"
   - "Structured output_config.format could be silently dropped while forwarding an unconstrained request"
 root_cause: missing_validation
 resolution_type: code_fix
@@ -26,6 +27,22 @@ tags:
 ---
 
 # Claude Code Messages startup payload compatibility
+
+> **Read this first (2026-07-27).** Two of this doc's conclusions were later
+> overturned, and both reversals are annotated inline below:
+>
+> - The **routing rule** — divert every `output_config.format` payload away from
+>   native Messages — was over-generalized from one model's Vertex organization
+>   policy. Native serves structured output on most models. See the superseded
+>   note in Solution, and
+>   `docs/solutions/conventions/policy-rejection-is-not-a-protocol-limit.md` for
+>   why the mistake happened.
+> - The **`output_config` container** was `.strict()`; it is now `.loose()`.
+>
+> Everything else here still holds, and the part this doc got most right — never
+> strip a caller's schema guarantee to fit an upstream shape — is what the
+> replacement routing preserves.
+
 
 ## Problem
 
@@ -164,14 +181,33 @@ The public Anthropic boundary and the Copilot upstream boundary have different c
 
 The final routing policy keeps the useful native path for ordinary Messages traffic, but diverts structured-output requests to the only current path that can preserve schema intent. When that path is unavailable, the local `400` is more correct than an upstream Vertex policy error or a successful unconstrained request.
 
+> **Superseded 2026-07-27.** "The only current path" was the error. Native
+> Messages had never been tested with `output_config.format` — the probe that
+> existed only ever sent `effort` — so "only" was an assumption, not a finding.
+> The reasoning that survives is the ranking: a local 400 beats a silently
+> unconstrained response. What changed is that most models need neither, because
+> native serves the schema directly.
+
 The generated Responses schema name is also intentional. Anthropic's raw `output_config.format` example only requires `type: json_schema` and `schema`, while Responses `text.format.json_schema` requires `name`. Supplying a stable default name lets valid Anthropic structured-output requests map to valid Responses payloads without asking the caller for a Responses-specific field.
 
 ## Prevention
 
 - Treat every newly accepted Anthropic field as a translation-policy decision: preserve it exactly, translate it losslessly, mark it lossy, or reject it explicitly.
+  - *This rule was later violated by its own author.* It was applied to
+    `output_config.format` here and missed for `output_config.effort` — the
+    other field on the same object, at the same fallback — which was dropped
+    with no issue recorded until 2026-07-27. Applying a rule to the field an
+    incident named is not the same as applying it to the rule's own scope. See
+    `docs/solutions/conventions/duplicated-semantic-rules-diverge-silently.md`.
 - Do not solve upstream incompatibility by deleting caller-visible semantic fields unless the field is documented as intentionally lossy.
 - Make strategy selection depend on payload semantics when endpoint support alone is not enough to preserve the request contract.
+  - *Necessary but not sufficient.* A payload-shaped predicate has no natural
+    bound over models, so it silently enrolls every model that ships later. Pair
+    it with a capability check or a dated, explicit model list.
 - Keep tests for both halves of a fallback decision: one test proving a supported strategy preserves the field, and one test proving unsupported strategies return local `400` before upstream dispatch.
+  - *Those tests passed throughout.* They proved the proxy implemented the rule
+    faithfully, which it did. No test can tell you the rule described someone's
+    GCP project rather than the protocol — only re-probing upstream can.
 - Keep beta-header filters narrow. Strip only known Copilot-incompatible beta values so unrelated beta behavior can continue to work.
 
 ## Related Issues
@@ -180,6 +216,14 @@ The generated Responses schema name is also intentional. Anthropic's raw `output
 
 ## Related
 
+- `docs/solutions/conventions/policy-rejection-is-not-a-protocol-limit.md` — the
+  learning extracted from this doc's own mistake. The Vertex rejection recorded
+  here was real and correctly observed; it was attributed to the wrong layer and
+  then generalized. That doc is the rule for reading which layer an upstream
+  error names before turning it into architecture.
+- `docs/solutions/conventions/duplicated-semantic-rules-diverge-silently.md` —
+  why this doc's first prevention rule was later violated for a sibling field on
+  the same object.
 - `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md` — the
   same failure surface from the other direction. Here an inbound Anthropic field
   was under-modelled and nearly dropped silently; there an outbound field was
