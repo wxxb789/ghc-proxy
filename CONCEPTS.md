@@ -24,6 +24,8 @@ The relationship is asymmetric, and the asymmetry is what makes it usable. A mod
 
 An advertised set is also not an ordered ladder every model implements a prefix of. Two models may advertise overlapping-but-incomparable sets, so "supports the highest tier, therefore supports the one below" is not a valid inference.
 
+The record describes the model, not the deployment serving it. An advertised capability can still be refused by an account-scoped policy on the infrastructure a model happens to run on — so an advertisement is a claim about what the model can do, never a guarantee that this subscriber may do it. A refusal of that kind needs its own bounded, dated exclusion; folding it into the capability check would state it as a property of the model, which it is not.
+
 ## Messages Execution Strategies
 
 The registry selects one strategy per request for `POST /v1/messages`, based on the resolved model's supported endpoints and the payload's semantics.

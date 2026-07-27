@@ -18,6 +18,27 @@ const MODELS_REJECTING_OUTPUT_CONFIG = new Set([
   'claude-haiku-4.5',
 ])
 
+/**
+ * Models that advertise `structured_outputs` but cannot serve it on native
+ * `/v1/messages`, because a Google Cloud organization policy blocks the feature
+ * for the Vertex-served deployment:
+ *
+ *   Organization Policy constraint constraints/vertexai.allowedPartnerModelFeatures
+ *   violated for `projects/<id>` attempting to use a disallowed feature
+ *   structured_outputs for Partner model claude-opus-4-7
+ *
+ * Probed 2026-07-26 (`scripts/probes/messages/output-format.ts`). This is an
+ * account-scoped policy rather than a protocol limit — it names a specific GCP
+ * project, so another Copilot subscriber may see different results, and the
+ * policy can be changed without notice. It is therefore an explicit ID list
+ * bounded in time, not a rule derived from the payload shape: re-run the probe
+ * when models change, and delete entries that start passing.
+ */
+const MODELS_BLOCKING_NATIVE_STRUCTURED_OUTPUT = new Set([
+  'claude-opus-4.7',
+  'claude-sonnet-4.6',
+])
+
 export class ModelCache {
   private models?: ModelsResponse
   private vsCodeVersion?: string
@@ -78,6 +99,13 @@ export class ModelCache {
     if (!model)
       return true
     return !MODELS_REJECTING_OUTPUT_CONFIG.has(model.id)
+  }
+
+  supportsStructuredOutputs(model: Model | undefined): boolean {
+    if (!model || MODELS_BLOCKING_NATIVE_STRUCTURED_OUTPUT.has(model.id)) {
+      return false
+    }
+    return model.capabilities.supports.structured_outputs ?? false
   }
 }
 

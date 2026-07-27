@@ -15,7 +15,7 @@ import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters, clampMessagesOutputTokens, clampResponsesOutputTokens } from '~/transform/parameter-filter'
 import { stripPhaseFromInputMessages } from '~/transform/responses-input'
-import { convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, sanitizeCacheControl, sanitizeExclusiveSamplingParams, sanitizeOutputConfig } from '~/transform/sanitize'
+import { canReduceOutputFormatForNativeMessages, convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, reduceOutputFormatForNativeMessages, sanitizeCacheControl, sanitizeExclusiveSamplingParams, sanitizeOutputConfig } from '~/transform/sanitize'
 
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
 import { createAnthropicAdapter } from './shared'
@@ -36,12 +36,22 @@ export interface StrategyContext {
 
 const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
   name: 'native-messages',
+  // Structured output is served natively when the model advertises
+  // `structured_outputs` and the format carries nothing native drops — probed
+  // 2026-07-26 (`scripts/probes/messages/output-format.ts`): 6 of 8 Messages
+  // models return 200 for a bare `{ type, schema }`. The two that fail
+  // (claude-opus-4.7, claude-sonnet-4.6) fail on a Vertex organization policy
+  // rather than a protocol limit — they advertise the capability, so
+  // `supportsStructuredOutputs` excludes them by ID rather than by flag.
   canHandle: (model, ctx) => modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
-    && !hasOutputConfigFormat(ctx?.anthropicPayload),
+    && (!hasOutputConfigFormat(ctx?.anthropicPayload)
+      || (modelCache.supportsStructuredOutputs(model)
+        && canReduceOutputFormatForNativeMessages(ctx?.anthropicPayload))),
   async execute(ctx) {
     convertEnabledThinkingToAdaptive(ctx.anthropicPayload, ctx.selectedModel)
     filterThinkingBlocksForNativeMessages(ctx.anthropicPayload)
     sanitizeOutputConfig(ctx.anthropicPayload, ctx.selectedModel)
+    reduceOutputFormatForNativeMessages(ctx.anthropicPayload)
     sanitizeExclusiveSamplingParams(ctx.anthropicPayload)
     sanitizeCacheControl(ctx.anthropicPayload)
     clampMessagesOutputTokens(ctx.anthropicPayload, ctx.selectedModel)

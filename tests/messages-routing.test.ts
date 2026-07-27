@@ -1537,3 +1537,178 @@ describe('/v1/messages native path clamps max_tokens to the advertised ceiling',
     expect(calls[0]?.payload.max_tokens).toBe(999999)
   })
 })
+
+// Regression for a reported 400 on claude-opus-5: any Messages request carrying
+// output_config.format was routed away from the native path, and opus-5 has no
+// /responses endpoint, so it fell through to the chat-completions guard and was
+// rejected locally. The routing rule generalized one 2026-06-02 observation
+// (Vertex refusing structured_outputs for claude-opus-4-7) into a permanent rule
+// for every model. Probed 2026-07-26: 6 of 8 Messages models serve a bare
+// { type, schema } natively (scripts/probes/messages/output-format.ts).
+describe('/v1/messages serves structured output natively when the model supports it', () => {
+  const schema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+  }
+
+  function cacheModel(id: string, structuredOutputs: boolean) {
+    const model = buildModel(id, { supported_endpoints: ['/v1/messages'] })
+    model.capabilities.supports.structured_outputs = structuredOutputs
+    modelCache.cacheModels(buildModelsResponse(model))
+    return model
+  }
+
+  function mockNative(id: string, calls: Array<CapturedMessagesCall>) {
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: '{"answer":"ok"}' }],
+      model: id,
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+  }
+
+  async function send(body: Record<string, unknown>) {
+    return createApp().handle(new Request('http://localhost/v1/messages?beta=true', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }))
+  }
+
+  test('forwards a bare format to native rather than rejecting it', async () => {
+    cacheModel('claude-opus-5', true)
+    const calls: Array<CapturedMessagesCall> = []
+    mockNative('claude-opus-5', calls)
+
+    const response = await send({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      output_config: { format: { type: 'json_schema', schema } },
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.output_config?.format).toEqual({ type: 'json_schema', schema })
+  })
+
+  test('strips name, a pure label native rejects as an extra input', async () => {
+    cacheModel('claude-opus-5', true)
+    const calls: Array<CapturedMessagesCall> = []
+    mockNative('claude-opus-5', calls)
+
+    await send({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      output_config: {
+        format: { type: 'json_schema', schema, name: 'my_output' },
+      },
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    // Anthropic documents no effect on the reply, and the Responses translator
+    // has to invent one when the caller omits it — dropping it costs nothing.
+    expect(calls[0]?.payload.output_config?.format).toEqual({ type: 'json_schema', schema })
+  })
+
+  test('leaves description requests off the native path rather than stripping them', async () => {
+    // Native rejects `description` as an extra input (probed 2026-07-26), but
+    // unlike `name` it steers the model's output — so reducing it silently
+    // would change the reply the caller gets.
+    cacheModel('claude-opus-5', true)
+
+    const response = await send({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      output_config: {
+        format: { type: 'json_schema', schema, description: 'Answer in one word.' },
+      },
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    const json = await response.json() as { error?: { code?: string } }
+    expect(response.status).toBe(400)
+    expect(json.error?.code).toBe('unsupported_output_config_format')
+  })
+
+  test('keeps output_config.format when no effort is set', async () => {
+    // sanitizeOutputConfig deletes the container on a null effort. A structured
+    // output request usually sends no effort at all, so that path would have
+    // dropped the schema silently.
+    cacheModel('claude-opus-5', true)
+    const calls: Array<CapturedMessagesCall> = []
+    mockNative('claude-opus-5', calls)
+
+    await send({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      output_config: { effort: null, format: { type: 'json_schema', schema } },
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    expect(calls[0]?.payload.output_config?.format).toEqual({ type: 'json_schema', schema })
+    expect(calls[0]?.payload.output_config?.effort).toBeUndefined()
+  })
+
+  test('leaves strict requests off the native path', async () => {
+    // `strict` is a promise about the reply, and native rejects the key. Serving
+    // it natively would mean silently dropping the guarantee, so the request
+    // stays for a path that can carry it — here none, so the explicit 400 holds.
+    cacheModel('claude-opus-5', true)
+
+    const response = await send({
+      model: 'claude-opus-5',
+      max_tokens: 256,
+      output_config: { format: { type: 'json_schema', schema, strict: true } },
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    const json = await response.json() as { error?: { code?: string } }
+    expect(response.status).toBe(400)
+    expect(json.error?.code).toBe('unsupported_output_config_format')
+  })
+
+  test('does not use native for a model that does not advertise structured_outputs', async () => {
+    cacheModel('claude-legacy', false)
+
+    const response = await send({
+      model: 'claude-legacy',
+      max_tokens: 256,
+      output_config: { format: { type: 'json_schema', schema } },
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    expect(response.status).toBe(400)
+  })
+})
+
+describe('supportsStructuredOutputs excludes Vertex-blocked models', () => {
+  // claude-opus-4.7 and claude-sonnet-4.6 advertise structured_outputs: true,
+  // but a GCP organization policy blocks the feature for their Vertex-served
+  // deployment (probed 2026-07-26). The advertised flag alone would route them
+  // onto a path that 400s upstream.
+  test('returns false for a model blocked by the Vertex org policy', () => {
+    const blocked = buildModel('claude-opus-4.7', { supported_endpoints: ['/v1/messages'] })
+    blocked.capabilities.supports.structured_outputs = true
+
+    expect(modelCache.supportsStructuredOutputs(blocked)).toBe(false)
+  })
+
+  test('returns true for a model that advertises it and is not blocked', () => {
+    const allowed = buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })
+    allowed.capabilities.supports.structured_outputs = true
+
+    expect(modelCache.supportsStructuredOutputs(allowed)).toBe(true)
+  })
+
+  test('returns false when the model does not advertise it', () => {
+    const plain = buildModel('claude-legacy', { supported_endpoints: ['/v1/messages'] })
+    plain.capabilities.supports.structured_outputs = false
+
+    expect(modelCache.supportsStructuredOutputs(plain)).toBe(false)
+  })
+})
