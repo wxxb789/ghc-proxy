@@ -240,6 +240,18 @@ not enforce it.
   `chatCompletionsUseMaxCompletionTokens`.
 - `max_output_tokens` below 16 is raised to 16 rather than leaking a 400. The
   client-facing schema still accepts 0..15, since those are valid OpenAI input.
+- `max_tokens` above the model's advertised ceiling is lowered to that ceiling
+  on native `/v1/messages` (`clampMessagesOutputTokens`). Two choices worth
+  keeping: it **warns** rather than logging at debug level, because unlike
+  raising a below-minimum floor this is a real semantic change — the caller
+  receives less output than they asked for; and a model advertising no ceiling
+  is left alone, since an unknown bound is not a reason to guess one.
+- `reasoning.effort` is clamped on the OpenAI-facing `/responses` route too.
+  That route looks like a passthrough — the caller names model and level in the
+  upstream's own vocabulary — but it is not one: the same `afterTransform`
+  already strips `temperature`/`top_p` for reasoning models and raises a
+  below-minimum `max_output_tokens`. Effort was the one parameter where the
+  proxy knew a request would 400 and forwarded it anyway.
 
 ### Not covered
 
