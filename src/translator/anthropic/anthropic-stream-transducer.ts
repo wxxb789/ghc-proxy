@@ -9,6 +9,7 @@ import type {
 import type { CapiChatCompletionChunk } from '~/core/capi'
 import type { ConversationDelta } from '~/core/conversation'
 
+import { isTimeoutLikeError } from '~/lib/timeout-error'
 import { mapOpenAIStopReasonToAnthropic, mapOpenAIUsageToAnthropic } from './shared'
 
 class TextBlockWriter {
@@ -326,20 +327,10 @@ export class AnthropicStreamTranslator {
   }
 
   private getErrorMessage(error: unknown): string {
-    if (this.isTimeoutError(error)) {
+    if (isTimeoutLikeError(error)) {
       return 'Upstream streaming request timed out. Please retry.'
     }
     return 'An unexpected error occurred during streaming.'
-  }
-
-  private isTimeoutError(error: unknown): boolean {
-    if (error instanceof DOMException) {
-      return error.name === 'TimeoutError'
-    }
-    if (error instanceof Error) {
-      return error.name === 'TimeoutError'
-    }
-    return false
   }
 
   private toConversationDeltas(

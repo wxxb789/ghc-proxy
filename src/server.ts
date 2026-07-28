@@ -4,6 +4,7 @@ import { Elysia } from 'elysia'
 
 import { HTTPError } from './lib/error'
 import { formatElapsed, getRequestModelMapping, logRequest, setRequestModelMapping } from './lib/request-logger'
+import { isTimeoutLikeError } from './lib/timeout-error'
 import { createCompletionRoutes } from './routes/chat-completions/route'
 import { createEmbeddingRoutes } from './routes/embeddings/route'
 import { createMessageRoutes } from './routes/messages/route'
@@ -18,6 +19,49 @@ const isBun = typeof globalThis.Bun !== 'undefined'
 
 export interface ServerOptions {
   idleTimeout?: number
+}
+
+/**
+ * Maps a thrown error to a client response.
+ *
+ * `set.status` is written on every branch because `onError` returns a fresh
+ * `Response` instead of falling through Elysia's normal path — `set.status`
+ * would otherwise still hold whatever it was before the throw, and the access
+ * log in `onAfterResponse` reads it. Without the write-back, a 504 is logged
+ * as a 500.
+ *
+ * Exported so tests exercise this mapping rather than a copy of it.
+ */
+export function handleRouteError(
+  { code, error, set }: {
+    code: string | number
+    error: unknown
+    set: { status?: number | string }
+  },
+): Response | undefined {
+  // HTTPError is auto-handled via toResponse() — just let it through
+  if (code === 'HTTP')
+    return
+
+  if (isTimeoutLikeError(error)) {
+    set.status = 504
+    return Response.json(
+      {
+        error: {
+          message: 'Upstream request timed out before a response was received.',
+          type: 'timeout_error',
+        },
+      },
+      { status: 504 },
+    )
+  }
+
+  const message = error instanceof Error ? error.message : String(error)
+  set.status = 500
+  return Response.json(
+    { error: { message, type: 'error' } },
+    { status: 500 },
+  )
 }
 
 export function createServer(options?: ServerOptions) {
@@ -49,24 +93,7 @@ export function createServer(options?: ServerOptions) {
       const status = typeof set.status === 'number' ? set.status : 200
       logRequest(request.method, request.url, status, elapsed, getRequestModelMapping(request), requestId)
     })
-    .onError(({ code, error }) => {
-      // HTTPError is auto-handled via toResponse() — just let it through
-      if (code === 'HTTP')
-        return
-
-      if (error instanceof Error && error.name === 'AbortError') {
-        return Response.json(
-          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
-          { status: 504 },
-        )
-      }
-
-      const message = error instanceof Error ? error.message : String(error)
-      return Response.json(
-        { error: { message, type: 'error' } },
-        { status: 500 },
-      )
-    })
+    .onError(({ code, error, set }) => handleRouteError({ code, error, set }))
     .get('/', () => 'Server running')
     .get('/health', () => ({
       status: 'ok',

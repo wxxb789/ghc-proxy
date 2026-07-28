@@ -180,3 +180,18 @@ Configurable via `--upstream-timeout` CLI flag:
 - Applied per-request to the upstream fetch
 - On timeout: AbortSignal fires, stream terminates
 - Client receives appropriate error (504 for non-streaming, error event for streaming)
+
+Two distinct errors reach the proxy on a timeout, and both must be handled:
+
+| Error `name` | Source |
+|---|---|
+| `AbortError` | Our own `AbortController` — the client disconnected, or `createUpstreamSignal`'s timer fired |
+| `TimeoutError` | The runtime's own deadline. Bun's `fetch` enforces a ~300s ceiling (measured on Bun 1.3.14) that a longer `AbortSignal` does **not** raise, so on Bun this fires first for any `--upstream-timeout` above ~300s |
+
+`isTimeoutLikeError` (`src/lib/timeout-error.ts`) is the single classifier for
+both names. It is called on both sides of the stream boundary — `handleRouteError`
+in `src/server.ts` maps a pre-first-byte timeout to a `504`, and the Anthropic
+stream transducer maps a mid-stream one to an SSE `error` frame. Keeping one
+implementation is deliberate: when the rule lived in two places, each recognized
+only one of the two names, and a Bun `fetch` ceiling surfaced to clients as a
+generic `500`.

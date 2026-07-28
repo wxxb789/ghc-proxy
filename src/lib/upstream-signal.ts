@@ -26,6 +26,12 @@ export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEF
 
 /**
  * Convenience wrapper that reads the upstream timeout from runtime config.
+ *
+ * Note: on Bun, `fetch` enforces its own ~300s ceiling (measured on Bun 1.3.14)
+ * and rejects with a `TimeoutError` — passing a longer `AbortSignal` does not
+ * raise it. Any configured timeout above that never fires on Bun; the runtime
+ * aborts first. `isTimeoutLikeError` treats both names as timeouts so either
+ * path maps to a 504.
  */
 export function createUpstreamSignalFromConfig(clientSignal: AbortSignal) {
   return createUpstreamSignal(

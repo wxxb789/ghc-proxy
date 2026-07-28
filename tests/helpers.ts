@@ -26,6 +26,7 @@ import { createEmbeddingRoutes } from '~/routes/embeddings/route'
 import { createMessageRoutes } from '~/routes/messages/route'
 import { createModelRoutes } from '~/routes/models/route'
 import { createResponsesRoutes } from '~/routes/responses/route'
+import { handleRouteError } from '~/server'
 import { authStore, modelCache, rateLimiter, responsesEmulatorState, runtimeStore } from '~/state'
 
 const SSE_BLOCK_SEPARATOR_RE = /\r?\n\r?\n/
@@ -203,21 +204,9 @@ export function createApp(
 ) {
   const app = new Elysia()
     .error({ HTTP: HTTPError })
-    .onError(({ code, error }) => {
-      if (code === 'HTTP')
-        return
-      if (error instanceof Error && error.name === 'AbortError') {
-        return Response.json(
-          { error: { message: 'Upstream request was aborted', type: 'timeout_error' } },
-          { status: 504 },
-        )
-      }
-      const message = error instanceof Error ? error.message : String(error)
-      return Response.json(
-        { error: { message, type: 'error' } },
-        { status: 500 },
-      )
-    })
+    // Call the real handler rather than restating it — a copy here is how a
+    // test suite stays green while production error mapping drifts.
+    .onError(({ code, error, set }) => handleRouteError({ code, error, set }))
 
   if (routes === 'all') {
     return app.group('/v1', a => a

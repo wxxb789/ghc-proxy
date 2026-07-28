@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
 import { HTTPError } from '~/lib/error'
+import { createServer } from '~/server'
 import { createApp } from './helpers'
 
 // ── retryWithBackoff: mock the sleep module before importing retry so backoff
@@ -58,6 +59,18 @@ function createAbortErrorAsError(): Error {
   return error
 }
 
+/**
+ * Bun's `fetch` enforces a built-in ~300s ceiling that fires before the
+ * configured upstream timeout can, and rejects with a `DOMException` named
+ * `TimeoutError` — not `AbortError`.
+ */
+function createBunFetchTimeoutError(): DOMException {
+  const DOMExceptionCtor = DOMException as unknown as {
+    new (message?: string, name?: string): DOMException
+  }
+  return new DOMExceptionCtor('The operation timed out.', 'TimeoutError')
+}
+
 describe('Error classification in onError handler', () => {
   useCreateChatCompletionsSnapshot()
 
@@ -71,11 +84,32 @@ describe('Error classification in onError handler', () => {
     const json = await response.json()
     expect(json).toEqual({
       error: {
-        message: 'Upstream request was aborted',
+        message: 'Upstream request timed out before a response was received.',
         type: 'timeout_error',
       },
     })
   })
+
+  // Regression: Bun's fetch ceiling rejects with `TimeoutError`, which the
+  // classifier used to miss — the request surfaced as a generic 500 carrying
+  // the raw DOMException message.
+  for (const stream of [false, true]) {
+    test(`Bun fetch TimeoutError returns 504 (stream=${stream})`, async () => {
+      CopilotClient.prototype.createChatCompletions = () =>
+        Promise.reject(createBunFetchTimeoutError())
+
+      const response = await makeRequest({ stream })
+
+      expect(response.status).toBe(504)
+      const json = await response.json()
+      expect(json).toEqual({
+        error: {
+          message: 'Upstream request timed out before a response was received.',
+          type: 'timeout_error',
+        },
+      })
+    })
+  }
 
   test('Generic Error returns 500', async () => {
     const genericError = new Error('Something went wrong')
@@ -118,20 +152,25 @@ describe('Error classification in onError handler', () => {
 describe('Streaming error handling', () => {
   useCreateChatCompletionsSnapshot()
 
-  function createTimeoutError(): DOMException {
-    const DOMExceptionCtor = DOMException as unknown as {
-      new (message?: string, name?: string): DOMException
-    }
-    return new DOMExceptionCtor('The operation timed out.', 'TimeoutError')
-  }
-
   async function* createTimeoutStream(): AsyncGenerator<
     ServerSentEventMessage,
     void,
     unknown
   > {
     await Promise.resolve()
-    throw createTimeoutError()
+    throw createBunFetchTimeoutError()
+    yield { data: '' }
+  }
+
+  // The transducer's timeout classifier used to recognize only TimeoutError,
+  // so a proxy-side abort produced the generic "unexpected error" frame.
+  async function* createAbortErrorStream(): AsyncGenerator<
+    ServerSentEventMessage,
+    void,
+    unknown
+  > {
+    await Promise.resolve()
+    throw createAbortErrorAsError()
     yield { data: '' }
   }
 
@@ -147,6 +186,93 @@ describe('Streaming error handling', () => {
     expect(body).toContain(
       'Upstream streaming request timed out. Please retry.',
     )
+  })
+
+  test('converts AbortError to the same timeout SSE error event', async () => {
+    CopilotClient.prototype.createChatCompletions = (_payload, _options) =>
+      Promise.resolve(createAbortErrorStream())
+
+    const response = await makeRequest({ stream: true })
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('event: error')
+    expect(body).toContain(
+      'Upstream streaming request timed out. Please retry.',
+    )
+  })
+})
+
+// ── Access-log status code ──
+//
+// `onAfterResponse` reads `set.status`, but `onError` returns a fresh Response
+// instead of falling through Elysia's normal path. Without an explicit
+// write-back, every error routed through `onError` was logged as 500 —
+// including the ones the client received as 504. These tests need the real
+// `createServer()`; `createApp()` omits the logging hook.
+
+// Built from a char code so the source carries no literal control character.
+const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, 'g')
+
+async function captureAccessLogLine(
+  reject: () => Promise<never>,
+): Promise<string> {
+  const lines: Array<string> = []
+  // eslint-disable-next-line no-console
+  const originalLog = console.log
+  // eslint-disable-next-line no-console
+  console.log = ((...args: Array<unknown>) => {
+    lines.push(args.map(String).join(' '))
+  }) as typeof console.log
+
+  try {
+    CopilotClient.prototype.createChatCompletions = reject as never
+    await createServer().handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4.5',
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'Hello!' }],
+      }),
+    }))
+    // onAfterResponse runs after handle() resolves.
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  finally {
+    // eslint-disable-next-line no-console
+    console.log = originalLog
+  }
+
+  expect(lines).toHaveLength(1)
+  return lines[0]!.replace(ANSI_RE, '')
+}
+
+describe('Access-log status code matches the client response', () => {
+  useCreateChatCompletionsSnapshot()
+
+  test('logs 504 for a timeout, not 500', async () => {
+    const line = await captureAccessLogLine(() =>
+      Promise.reject(createBunFetchTimeoutError()))
+
+    expect(line).toContain('504')
+    expect(line).not.toContain('500')
+  })
+
+  test('logs 500 for a generic error', async () => {
+    const line = await captureAccessLogLine(() =>
+      Promise.reject(new Error('Something went wrong')))
+
+    expect(line).toContain('500')
+  })
+
+  test('logs the upstream status for an HTTPError', async () => {
+    const line = await captureAccessLogLine(() => Promise.reject(
+      new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
+    ))
+
+    expect(line).toContain('429')
+    expect(line).not.toContain('500')
   })
 })
 
