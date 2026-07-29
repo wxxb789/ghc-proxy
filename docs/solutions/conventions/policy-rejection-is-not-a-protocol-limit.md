@@ -1,6 +1,7 @@
 ---
 title: "An upstream rejection names a layer — read it before you generalize"
 date: 2026-07-27
+last_updated: 2026-07-29
 category: conventions
 module: upstream capability modeling
 problem_type: convention
@@ -44,6 +45,10 @@ not cover it:
 - **This one:** the observation was real, reproducible, and correctly recorded.
   It was **attributed to the wrong layer** — an operational policy read as a
   protocol limit — and then generalized to every model and every future model.
+- `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md` — added
+  later, a fourth mode. The belief was verified, correctly attributed, and
+  implemented exactly once — and tested against one of the two runtimes the code
+  ships on.
 
 The distinction matters because the usual defence does not fire. "Did you
 verify it?" gets a yes. There *was* a probe, of a sort: a live upstream request

@@ -1,6 +1,7 @@
 ---
 title: "A regression test that never failed is not a regression test"
 date: 2026-07-25
+last_updated: 2026-07-29
 category: testing
 module: tests
 problem_type: convention
@@ -21,6 +22,7 @@ tags:
   - "tautological-test"
   - "git-stash"
   - "test-verification"
+  - "mutation-testing"
 ---
 
 # A regression test that never failed is not a regression test
@@ -119,6 +121,22 @@ across the exact operation under test is not.
   <source files>` → test → `git stash pop`. If it does not go red, the test is
   not testing the fix. This is the executable form of the `tests/AGENTS.md`
   rule.
+  - *Necessary but not sufficient — it is per-fix, not per-branch.* Stashing
+    removes every new branch at once, so one covered branch turns the suite red
+    and masks all its uncovered siblings. In PR #69 (`09ef208`) the stash check
+    passed, and deleting any single one of the fix's new branches individually —
+    the `.errors` walk, the `ETIMEDOUT` code, the whole `TIMEOUT_ERROR_CODES`
+    set, or lowering `MAX_CAUSE_DEPTH` to 1 — still left the suite green. When a
+    fix adds more than one branch, delete each one on its own and re-run.
+  - *Watch for fixtures that carry redundant signals.* The classifier checks
+    `name` before `code` (`src/lib/timeout-error.ts:60-63`) and both Node
+    fixtures set **both**, so the `name` check short-circuited and the `code`
+    branch never ran. A fixture exercises only the first signal the
+    implementation reads; over-specifying it hides every branch behind that one.
+  - *Pair surviving mutants with a negative control.* Replacing the whole
+    predicate with `=> false` must fail loudly. Without that control, "the mutant
+    survived" is ambiguous between an untested branch and a harness that never
+    ran the test at all.
 - **Distrust assertions over accumulated state.** Timer lists, call counters,
   log buffers, and emitted-event arrays are written by many code paths. Prefer a
   delta measured across the operation, or an observable only the fixed behavior
@@ -135,6 +153,13 @@ across the exact operation under test is not.
 
 - `tests/AGENTS.md` — "Bug fixes get a regression test that fails before the
   fix." This doc is how to verify that rule was actually met.
+- `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md` — the
+  other reason a green suite proves less than it looks. This doc's check asks
+  whether the test discriminates fixed from unfixed code; that one asks whether
+  the suite runs on the runtime the bug lives on. The stash check passes in both
+  failure modes.
 - `docs/design/upstream-request-queue.md` — the cooldown semantics the PR #50
   tests cover.
 - PR #50 (`feb86d4`) — the fixes and the rewritten tests.
+- PR #69 (`09ef208`) — where the stash check passed and five of the fix's six
+  branches were still unverified.

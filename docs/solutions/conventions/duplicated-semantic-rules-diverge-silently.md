@@ -1,6 +1,7 @@
 ---
 title: "A semantic rule implemented twice diverges silently"
 date: 2026-07-27
+last_updated: 2026-07-29
 category: conventions
 module: reasoning effort across ingest/transform/translator
 problem_type: convention
@@ -138,6 +139,12 @@ When a bug report names one path, run the grep before writing the fix. If more
 than one call site *implements* the rule rather than *calling* it, the reported
 path is a sample, not the scope.
 
+*A clean grep closes this question and no other.* In PR #69 the timeout rule had
+exactly one implementation after consolidation and was still wrong on Node,
+because the grep bounds how many places implement the rule and says nothing about
+how many input shapes the one place must accept. See
+`docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md`.
+
 ## Why This Matters
 
 **The tests do not catch it.** This is what makes a duplicated semantic rule
@@ -263,3 +270,8 @@ inferred value in both CAPI profiles.
 - `docs/solutions/testing/regression-test-must-fail-first.md` — why the green
   suite was not evidence. A regression test for this class asserts the same input
   through every execution strategy, not through the one that broke.
+- `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md` — where
+  this doc's diagnostic runs out. There the rule had one implementation, the grep
+  was clean, and the rule was still wrong because Bun and Node hand the same
+  predicate different error shapes and CI only runs Bun. Implementation count is
+  this doc's axis; input-space count is that one's.
