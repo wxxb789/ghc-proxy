@@ -90,7 +90,7 @@ If the route translates between protocols, add an entry to `docs/anthropic-trans
 - **CLI:** `start` must remain an explicit subcommand. No default command.
 - **Complexity:** Favor direct implementation over unnecessary abstractions. Three similar lines is better than a premature helper.
 - **Scope discipline:** Fix only the issue the change targets. Don't refactor pre-existing duplication or "while you're there" — small, focused diffs review better and revert cleaner.
-- **Runtime APIs:** Bun-native APIs (`Bun.file`, `Bun.serve`, `Bun.sleep`, etc.) are fine in `scripts/` and `tests/`. **Route code under `src/` must work on both Bun and Node** — use Web/Node standard APIs (`fetch`, `Response`, `crypto.subtle`, etc.). The CI smoke test packs the published tarball and runs `ghc-proxy selfcheck` against the bundled CLI under both `bun` and `node`, so Node-only regressions in `dist/main.mjs` are caught at publish time.
+- **Runtime APIs:** Bun-native APIs (`Bun.file`, `Bun.serve`, `Bun.sleep`, etc.) are fine in `scripts/` and `tests/`. **Route code under `src/` must work on both Bun and Node** — use Web/Node standard APIs (`fetch`, `Response`, `crypto.subtle`, etc.). The CI smoke test packs the published tarball and runs `ghc-proxy selfcheck` against the bundled CLI under both `bun` and `node`, so Node-only *module-loading* regressions in `dist/main.mjs` are caught at publish time. That gate is `selfcheck`'s tokenizer probes and nothing more — it never constructs a `fetch`, an error, a stream, or a `Response`, and the test suite itself runs only under Bun. When a change's risk is Node-shaped, add a hand-rolled fixture for the Node shape to the Bun suite; see `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md`.
 
 ## Testing
 

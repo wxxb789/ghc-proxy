@@ -1,6 +1,7 @@
 ---
 title: "npm pack --json output shape differs across npm major versions"
 date: 2026-07-25
+last_updated: 2026-07-29
 category: integration-issues
 module: scripts/smoke/packaged-cli
 problem_type: test_failure
@@ -92,3 +93,7 @@ same code works whatever npm the CI runner or a contributor's machine ships.
 - `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md` — the
   same rule applied to an HTTP API rather than a CLI: an external contract we did
   not verify is an assumption, whatever shape our own code assumes it has.
+- `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md` — the
+  same defect where the second implementation is a runtime rather than a CLI
+  major. This one failed loudly: npm 12's object shape crashed the parser on
+  first contact. A wrong branch in a classifier stays green until production.

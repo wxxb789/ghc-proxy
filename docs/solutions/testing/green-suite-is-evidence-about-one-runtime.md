@@ -79,13 +79,14 @@ where the actual fix landed. Both were squashed into `09ef208`, so the
 pre-squash SHAs no longer exist on any checkout — read the PR for the two-step
 sequence.
 
-**Reading the Node lane of CI as coverage.** `AGENTS.md:93` also claims
-"Node-only regressions in `dist/main.mjs` are caught at publish time." The gate
-behind that sentence is `runSelfcheck('node', ...)` at
+**Reading the Node lane of CI as coverage.** `AGENTS.md:93` used to claim
+"Node-only regressions in `dist/main.mjs` are caught at publish time," with no
+qualifier. The gate behind that sentence is `runSelfcheck('node', ...)` at
 `scripts/smoke/packaged-cli.ts:118`, which runs `src/selfcheck.ts` — five
 gpt-tokenizer encoding probes (`PROBE_ENCODINGS`, `src/selfcheck.ts:19-25`). It
 proves the bundle loads and resolves under Node. It never constructs a `fetch`,
-an error, a stream, or a `Response`.
+an error, a stream, or a `Response`. That sentence now says *module-loading*
+regressions, which is what it actually gates.
 
 ## Solution
 
@@ -97,7 +98,7 @@ The two shapes for a `fetch` timeout, measured rather than reasoned about:
 | Runtime | Rejection |
 | --- | --- |
 | Bun 1.3.14 | flat `DOMException`, `name: 'TimeoutError'`, `code: 23` (a **number**), no `.cause` |
-| Node 24.18 / undici 7.28.0 | `TypeError('fetch failed')`, real error on `.cause`: `HeadersTimeoutError` / `UND_ERR_HEADERS_TIMEOUT` |
+| Node 24.18 | `TypeError('fetch failed')`, real error on `.cause`: `HeadersTimeoutError` / `UND_ERR_HEADERS_TIMEOUT` |
 | Node, mid-stream | `TypeError('terminated')`, `.cause`: `BodyTimeoutError` / `UND_ERR_BODY_TIMEOUT` |
 
 The Node top-level error carries no timeout signal at all, and
@@ -117,7 +118,7 @@ node 24.18 : { ctor: "HeadersTimeoutError", name: "HeadersTimeoutError", code: "
 
 Bun resolves `undici` to its own shim. A fixture built from it carries neither
 `name` nor `code`, so it passes against a classifier that checks neither.
-`tests/reliability.test.ts:80-96` hand-rolls the shapes instead, and says why in
+`tests/reliability.test.ts:76-97` hand-rolls the shapes instead, and says why in
 the doc comment.
 
 ## Why This Works
@@ -131,36 +132,59 @@ exactly one copy, a green suite is evidence that the one copy matches the one
 runtime the suite executes on.
 
 The same measurement corrected a second belief that had already reached the
-docs. Both runtimes enforce a ~300s ceiling by default (undici's is
-`headersTimeout`/`bodyTimeout`, `node_modules/undici/lib/dispatcher/client.js:256-257`),
-and the first commit's prose called it a total-duration cap, concluding that a
-larger `--upstream-timeout` "never fires." It is an **idle** timer on both. Node
-with `bodyTimeout=1500` and one byte every 500ms survived 6121ms — four times
-past the timeout — while the control that went silent after three chunks died
-~1500ms after the last one. Bun, two probes in one process: a stream emitting a
-byte every 20s survived to 340s; a stalled control died at 301s. For a proxy
-whose whole workload is long streams, "total cap" and "idle timer" are opposite
-predictions, and only the second survives contact.
+docs — the ~300s ceiling is an **idle** timer on both runtimes, not a
+total-duration cap. `docs/design/streaming.md` carries that fact and the
+per-runtime shape table; it is not repeated here.
 
 **Your own failures being invisible in your own logs is what lets this
-accumulate**, and this is the third time it has been the enabler. PR #69's other
-defect: `onError` returns a fresh `Response` instead of falling through Elysia's
-normal path, so `set.status` still held its pre-throw value when
-`onAfterResponse` read it — every error routed through `onError` logged as 500,
-including the ones the client received as 504. Fixed by writing `set.status` on
-every branch (`src/server.ts:27-30`, `:47`, `:60`, read back at `:93`). The same
-thread runs through `duplicated-semantic-rules` ("local rejections were
-invisible in logs, which is what let this accumulate") and
+accumulate**, and this is the third time it has been the enabler. The shape is
+the same each time: **an error path that returns early bypasses the
+instrumentation the normal path carries.** Here `onError` returned a fresh
+`Response` instead of falling through Elysia's normal path, so `set.status`
+still held its pre-throw value when `onAfterResponse` read it — every error
+logged as 500, including the ones the client received as 504 (`src/server.ts:27-30`,
+`:47`, `:60`, read back at `:93`). The same thread runs through
+`duplicated-semantic-rules` ("local rejections were invisible in logs") and
 `policy-rejection-is-not-a-protocol-limit` ("a local 400 produces no upstream
 signal to investigate"). A wrong status in the access log is not cosmetic; it is
 the removal of the one signal that would have shortened the search.
 
+## When to Apply
+
+Applies when a predicate, parser, or branch in `src/` reads a shape produced by
+something on the other side of a boundary the repo does not control — a second
+runtime, a second major of a library, a second upstream provider, a second OS.
+
+It does **not** apply where a spec pins the shape. Measured on Bun 1.3.14 and
+Node 24.18, a bare `controller.abort()` rejects as `DOMException` /
+`AbortError` / code 20 on both, and `AbortSignal.timeout(n)` as `DOMException` /
+`TimeoutError` / code 23 on both — byte-identical, because WHATWG specifies
+both. `src/lib/upstream-signal.ts` aborts without a reason for exactly this
+reason and needs no cross-runtime probe. The divergence is confined to shapes no
+spec covers: undici's `headersTimeout` / `bodyTimeout`, Bun's undocumented
+~300s ceiling, and the `.cause` chain each runtime builds under them.
+
+**The test:** is the shape written down in a spec both implementations follow?
+If yes, one runtime is evidence. If it is an implementation detail — an internal
+timeout, a `.cause` chain, an aggregate's `code`, a `--json` envelope — probe
+both.
+
 ## Prevention
 
 - **Before writing a predicate over an error, stream, `crypto.subtle`, or
-  `fetch` shape in `src/`, obtain one real instance from each runtime.** Two
-  throwaway scripts and a stalling local server take ten minutes; the shapes are
-  not derivable from the spec, and neither runtime documents the other's.
+  `fetch` shape in `src/`, obtain one real instance from each runtime.** The
+  shapes are not derivable from the spec, and neither runtime documents the
+  other's. Write the probe so it runs unchanged on both and diff the output:
+
+  ```bash
+  bun  scripts/probe.mjs > /tmp/bun.json
+  node scripts/probe.mjs > /tmp/node.json
+  diff /tmp/bun.json /tmp/node.json   # non-empty = a shape your predicate must accept
+  ```
+
+  Include a spec-pinned case (a bare `controller.abort()`) alongside the case
+  you care about. It agrees on both runtimes, which is what makes the
+  disagreement in the other case legible rather than just "runtimes differ."
 - **Hand-roll cross-runtime fixtures. Never import the other runtime's library
   under this one.** Bun's `undici` shim reports `name: 'Error'` and no `code`,
   which produces a fixture that passes against a broken classifier — a test that
@@ -169,20 +193,25 @@ the removal of the one signal that would have shortened the search.
   the rule. It says nothing about the input space, and the runtime axis lives
   entirely in the input space.
 - **Know what the Node lane actually runs.** Today it is `selfcheck`'s five
-  tokenizer probes and nothing else. When a change's risk is Node-shaped, that
-  gate does not cover it — add a hand-rolled fixture to the Bun suite for the
-  Node shape, which is what `tests/reliability.test.ts` now does.
-- **When a runtime-dependent belief reaches a doc comment, cite the measurement
-  and the version.** `src/lib/timeout-error.ts:1-23` names both runtimes' shapes
-  and where the signal sits, so the next reader does not re-derive it from the
-  one runtime they happen to be on.
+  tokenizer probes and nothing else. The suite cannot simply be pointed at Node
+  — `rtk grep -rl "bun:test" tests/ | wc -l` returns 22, so every test file
+  imports Bun's runner and closing the gap that way is a test-runner migration,
+  not a CI flag. When a change's risk is Node-shaped, add a hand-rolled fixture
+  for the Node shape to the Bun suite, which is what `tests/reliability.test.ts`
+  now does.
+- **When a runtime-dependent belief reaches a doc comment, record the semantics,
+  not the magnitude.** "~300s ceiling" is true and useless: idle-resetting and
+  total-duration are opposite predictions for a proxy whose workload is long
+  streams, and the number alone does not distinguish them. Cite what was
+  measured and on which versions — `src/lib/timeout-error.ts:1-26` names both
+  runtimes' shapes and where the signal sits.
 
 ## Related
 
 - `docs/solutions/conventions/duplicated-semantic-rules-diverge-silently.md` —
   the rule this one sits directly behind. Its diagnostic is a grep for multiple
   implementations, and here the grep was clean: `isTimeoutLikeError`
-  (`src/lib/timeout-error.ts:75`) has exactly one implementation, called from
+  (`src/lib/timeout-error.ts:78`) has exactly one implementation, called from
   `src/server.ts:46` and
   `src/translator/anthropic/anthropic-stream-transducer.ts:330`. That doc's
   lesson is quoted almost verbatim in the module's own header comment. It was

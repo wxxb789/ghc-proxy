@@ -60,9 +60,10 @@ function createAbortErrorAsError(): Error {
 }
 
 /**
- * Bun's `fetch` enforces a built-in ~300s ceiling that fires before the
- * configured upstream timeout can, and rejects with a `DOMException` named
- * `TimeoutError` — not `AbortError`.
+ * Bun's `fetch` enforces a built-in ~300s **idle** ceiling — it resets on every
+ * byte received, so it fires on a stalled stream long before the configured
+ * upstream timeout can, but never on one that keeps trickling. It rejects with
+ * a `DOMException` named `TimeoutError` — not `AbortError`.
  */
 function createBunFetchTimeoutError(): DOMException {
   const DOMExceptionCtor = DOMException as unknown as {
@@ -120,9 +121,12 @@ function withCode<T extends Error>(error: T, code: string): T {
  * chain carries a timeout *name* — the leaves are plain `Error`. Only the code
  * set plus the `.errors` walk can classify this.
  *
- * Captured live on Node 24.18 against `http://localhost:<closed port>` with the
- * default dispatcher: `autoSelectFamily` is on by default and
- * `autoSelectFamilyAttemptTimeout` is 250ms, so the `::1` leg times out.
+ * Hand-rolled from undici's documented dual-stack behavior, not captured live:
+ * `autoSelectFamily` is on by default with a 250ms
+ * `autoSelectFamilyAttemptTimeout`, so a slow leg can time out while its
+ * sibling is refused. A closed *local* port does not reproduce it — both legs
+ * are refused immediately and the cause is a plain `Error` with no `.errors`.
+ * Reaching it live needs a host whose one address family blackholes.
  */
 function createNodeDualStackTimeoutFirstError(): TypeError {
   const timedOut = withCode(new Error('connect ETIMEDOUT ::1:443'), 'ETIMEDOUT')
