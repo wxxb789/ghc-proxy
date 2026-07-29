@@ -73,11 +73,14 @@ PR #69's first commit did the documented thing: one function,
 return error.name === 'AbortError' || error.name === 'TimeoutError'
 ```
 
-Both of those are Bun shapes. Neither is a Node shape. The consolidation was
-correct, the grep was clean, and the 500 was still live. The second commit is
-where the actual fix landed. Both were squashed into `09ef208`, so the
-pre-squash SHAs no longer exist on any checkout — read the PR for the two-step
-sequence.
+Both of those names are real on Node — a bare `controller.abort()` gives
+`AbortError` and `AbortSignal.timeout()` gives `TimeoutError` on both runtimes,
+because WHATWG pins them. What that body missed is the *other* Node source: when
+undici's own connect/header/body ceiling fires, nothing named reaches the top
+level at all. The consolidation was correct, the grep was clean, and the 500 was
+still live. The second commit is where the actual fix landed. Both were squashed
+into `09ef208`, so the pre-squash SHAs no longer exist on any checkout — read
+the PR for the two-step sequence.
 
 **Reading the Node lane of CI as coverage.** `AGENTS.md:93` used to claim
 "Node-only regressions in `dist/main.mjs` are caught at publish time," with no
@@ -93,7 +96,8 @@ regressions, which is what it actually gates.
 **Get the shape from both runtimes before writing the predicate, and hand-roll
 the other runtime's fixtures.**
 
-The two shapes for a `fetch` timeout, measured rather than reasoned about:
+The two shapes for a `fetch` timeout the *runtime itself* raises — not one we
+abort — measured rather than reasoned about:
 
 | Runtime | Rejection |
 | --- | --- |
@@ -108,7 +112,7 @@ classifier at `src/lib/timeout-error.ts` walks `.cause` and matches on `code` as
 well as `name`.
 
 **Do not import the other runtime's library to build the fixture.** Verified
-here, and it is the trap that would have silently undone the fix:
+here:
 
 ```
 // new errors.HeadersTimeoutError() from the bare `undici` specifier
@@ -117,7 +121,13 @@ node 24.18 : { ctor: "HeadersTimeoutError", name: "HeadersTimeoutError", code: "
 ```
 
 Bun resolves `undici` to its own shim. A fixture built from it carries neither
-`name` nor `code`, so it passes against a classifier that checks neither.
+`name` nor `code`, so `isTimeoutLikeError` returns false for it and the
+504-expecting test fails under `bun test` — against the *fixed* classifier.
+The failure is loud, which is the good case; what it costs is the fixture's
+meaning. It cannot distinguish a classifier that handles Node shapes from one
+that does not, because it never carries a Node shape in the first place. The
+plausible response to a red test is to weaken the assertion or drop the case,
+and the Node branch ends up unpinned either way.
 `tests/reliability.test.ts:76-97` hand-rolls the shapes instead, and says why in
 the doc comment.
 
@@ -187,8 +197,9 @@ both.
   disagreement in the other case legible rather than just "runtimes differ."
 - **Hand-roll cross-runtime fixtures. Never import the other runtime's library
   under this one.** Bun's `undici` shim reports `name: 'Error'` and no `code`,
-  which produces a fixture that passes against a broken classifier — a test that
-  is green for the same reason the bug is.
+  so the fixture carries no Node shape at all — it fails against the correct
+  classifier and proves nothing about the broken one. A fixture that cannot tell
+  the two apart is not a regression test whichever way it goes.
 - **A clean grep is not coverage evidence.** It bounds how many places implement
   the rule. It says nothing about the input space, and the runtime axis lives
   entirely in the input space.

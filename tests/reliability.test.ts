@@ -79,7 +79,8 @@ function createBunFetchTimeoutError(): DOMException {
  *
  * Hand-rolled rather than imported from `undici`: Bun resolves the bare
  * `undici` specifier to its own shim, whose error classes have no `name` and
- * no `code`, which would make this fixture pass against a broken classifier.
+ * no `code` — so the fixture would carry no Node shape at all and could not
+ * tell a classifier that handles Node from one that does not.
  */
 function createNodeHeadersTimeoutError(): TypeError {
   const cause = new Error('Headers Timeout Error')
