@@ -119,7 +119,7 @@ bunx ghc-proxy@latest selfcheck      # Probe the packaged bundle (loads every to
 | `--dump-failed-payloads` | `-D` | `false` | Dump failed `/responses` payloads on upstream 400 errors for debugging. Can also be enabled with `DUMP_FAILED_PAYLOADS=1`. |
 | `--proxy-env` | -- | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from env (Node.js only; Bun reads proxy env natively) |
 | `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds (`0` disables; Bun max is `255`; streaming routes disable idle timeout automatically) |
-| `--upstream-timeout` | -- | `1800` | Upstream request timeout in seconds (0 to disable) |
+| `--upstream-timeout` | -- | `1800` | Upstream request timeout in seconds (`0` disables). Enforced as a total-duration `AbortSignal`. Note both runtimes also apply their own ~300s **idle** timeout to `fetch` (Bun's built-in limit; Node's undici `headersTimeout`/`bodyTimeout`), which fires when no byte arrives for that long — a steadily streaming response is not capped by it, but a stalled one is rejected at ~300s and returned as a `504`. |
 | `--upstream-queue-concurrency` | -- | `10` | Maximum concurrent Copilot upstream requests |
 | `--upstream-queue-retries` | -- | `5` | Maximum retries for transient upstream responses. Completion requests (`/v1/messages`, `/chat/completions`, `/responses`) retry only `429`/`529`; effect-free requests also retry `408`, `500`, `502`, `503`, `504` |
 | `--upstream-queue-base-delay` | -- | `2` | Base delay in seconds for upstream retry backoff when `Retry-After` is absent |
