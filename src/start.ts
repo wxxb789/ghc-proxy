@@ -275,7 +275,7 @@ export const start = defineCommand({
     'upstream-timeout': {
       type: 'string',
       default: '1800',
-      description: 'Upstream request timeout in seconds (0 to disable). Note: on Bun, fetch enforces its own ~300s ceiling, so larger values have no effect there.',
+      description: 'Upstream request timeout in seconds (0 to disable). Enforced as a total-duration limit; both runtimes additionally apply their own ~300s idle timeout to fetch, which a steadily streaming response does not trip.',
     },
     'upstream-queue-concurrency': {
       type: 'string',

@@ -181,17 +181,34 @@ Configurable via `--upstream-timeout` CLI flag:
 - On timeout: AbortSignal fires, stream terminates
 - Client receives appropriate error (504 for non-streaming, error event for streaming)
 
-Two distinct errors reach the proxy on a timeout, and both must be handled:
+Timeouts reach the proxy in several different shapes depending on the runtime, and all of them must be handled:
 
-| Error `name` | Source |
-|---|---|
-| `AbortError` | Our own `AbortController` — the client disconnected, or `createUpstreamSignal`'s timer fired |
-| `TimeoutError` | The runtime's own deadline. Bun's `fetch` enforces a ~300s ceiling (measured on Bun 1.3.14) that a longer `AbortSignal` does **not** raise, so on Bun this fires first for any `--upstream-timeout` above ~300s |
+| Runtime | Shape | Source |
+|---|---|---|
+| Both | `DOMException` named `AbortError` | Our own `AbortController` — the client disconnected, or `createUpstreamSignal`'s timer fired |
+| Bun | `DOMException` named `TimeoutError` | Bun's built-in ~300s `fetch` idle timeout (measured on Bun 1.3.14) |
+| Node | `TypeError('fetch failed')` with `HeadersTimeoutError` / `ConnectTimeoutError` on `.cause` | undici's `headersTimeout` (~300s) / `connectTimeout` (10s) — the pre-first-byte ceilings |
+| Node | `TypeError('terminated')` with `BodyTimeoutError` on `.cause` | undici's `bodyTimeout` (~300s) — the mid-stream ceiling |
+| Node | `TypeError('fetch failed')` with an `AggregateError` on `.cause` whose `.errors` hold an `ETIMEDOUT` leaf | Dual-stack connect: `autoSelectFamily` races IPv6 and IPv4, and a leg that times out is collected alongside one that was refused |
 
-`isTimeoutLikeError` (`src/lib/timeout-error.ts`) is the single classifier for
-both names. It is called on both sides of the stream boundary — `handleRouteError`
-in `src/server.ts` maps a pre-first-byte timeout to a `504`, and the Anthropic
-stream transducer maps a mid-stream one to an SSE `error` frame. Keeping one
-implementation is deliberate: when the rule lived in two places, each recognized
-only one of the two names, and a Bun `fetch` ceiling surfaced to clients as a
+The ~300s figure is **not** Bun-specific — Node's undici defaults both
+`headersTimeout` and `bodyTimeout` to `300e3` — but on both runtimes it is an
+**idle** timeout, not a total-duration cap. `bodyTimeout` resets on every chunk
+received, so a steadily streaming response runs well past 300s and is bounded
+only by `--upstream-timeout`'s own `AbortSignal`; a *stalled* stream is what the
+runtime rejects at ~300s.
+
+`isTimeoutLikeError` (`src/lib/timeout-error.ts`) is the single classifier. On
+Node the top-level error is useless as a discriminator — `TypeError('fetch failed')`
+is also what `ECONNREFUSED` and DNS failures look like, and `TypeError('terminated')`
+is also a clean peer hangup — so the classifier walks `.cause` and
+`AggregateError.errors` to a bounded depth and matches on the inner error's `name`
+or `code`. The `.errors` walk is load-bearing rather than defensive: on a dual-stack
+connect Node's `NodeAggregateError` takes its `code` from `errors[0]`, so when the
+refused leg loses the race first, the `ETIMEDOUT` leaf is the *only* evidence of a
+timeout and it sits two levels down. It is called on both sides of the stream
+boundary: `handleRouteError` in `src/server.ts` maps a pre-first-byte timeout to a
+`504`, and the Anthropic stream transducer maps a mid-stream one to an SSE `error`
+frame. Keeping one implementation is deliberate: when the rule lived in two places,
+each recognized only one name, and a `fetch` ceiling surfaced to clients as a
 generic `500`.
