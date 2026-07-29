@@ -1,6 +1,7 @@
 ---
 title: "An upstream rejection names a layer — read it before you generalize"
 date: 2026-07-27
+last_updated: 2026-07-29
 category: conventions
 module: upstream capability modeling
 problem_type: convention
@@ -32,8 +33,8 @@ tags:
 ## Context
 
 ghc-proxy already has two learnings about beliefs that turn out to be wrong.
-This is a third mode, and it is worth naming precisely because the first two do
-not cover it:
+This is a third mode among four, and it is worth naming precisely because the
+others do not cover it:
 
 - `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md` — the
   belief was **never verified**. `top_k` was declared unsupported because it was
@@ -41,6 +42,10 @@ not cover it:
 - `docs/solutions/conventions/duplicated-semantic-rules-diverge-silently.md` —
   the belief was **implemented twice** and the copies drifted. The rule was
   right; two of its three implementations were stale.
+- `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md` — the
+  belief was **tested on one of two runtimes**. It was verified, correctly
+  attributed, and implemented exactly once; the suite that confirmed it runs
+  only on Bun, and the code ships on Node too.
 - **This one:** the observation was real, reproducible, and correctly recorded.
   It was **attributed to the wrong layer** — an operational policy read as a
   protocol limit — and then generalized to every model and every future model.

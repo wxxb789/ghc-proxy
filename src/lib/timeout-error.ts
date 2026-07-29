@@ -12,8 +12,11 @@
  *   look like. The discriminator is the cause's `name`/`code`.
  *
  * Both runtimes enforce a ~300s upstream ceiling by default (Node's is
- * undici's `headersTimeout`/`bodyTimeout` default of `300e3`), which fires
- * long before the configured `--upstream-timeout` of 1800s.
+ * undici's `headersTimeout`/`bodyTimeout` default of `300e3`). It is an
+ * **idle** timer on both, not a total-duration cap: it resets on every byte, so
+ * it fires on a stalled stream well before the configured `--upstream-timeout`
+ * of 1800s, and never on one that keeps streaming. See
+ * `docs/design/streaming.md`.
  *
  * Kept in one place because the rule is checked on both sides of the stream
  * boundary: `src/server.ts` maps it to a 504 before the first byte, and the
