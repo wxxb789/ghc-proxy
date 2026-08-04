@@ -674,13 +674,13 @@ describe('responses and routing', () => {
     ])
   })
 
-  test('/v1/responses rejects unsupported builtin tools explicitly', async () => {
+  test('/v1/responses forwards builtin web_search tools upstream', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
 
     CopilotClient.prototype.createResponses = mockResponses({
-      id: 'resp_unused',
+      id: 'resp_web_search',
       object: 'response',
       created_at: 1,
       model: 'gpt-4.1',
@@ -706,27 +706,27 @@ describe('responses and routing', () => {
         model: 'gpt-4.1',
         input: [{ type: 'message', role: 'user', content: 'hello' }],
         tools: [
-          { type: 'web_search', name: 'web_search_preview' },
+          { type: 'web_search' },
+          { type: 'web_search_preview' },
         ],
       }),
     }))
 
-    const json = await response.json() as {
-      error?: { code?: string, param?: string }
-    }
-    expect(response.status).toBe(400)
-    expect(json.error?.code).toBe('unsupported_tool_web_search')
-    expect(json.error?.param).toBe('tools')
-    expect(calls).toHaveLength(0)
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.payload.tools).toEqual([
+      { type: 'web_search' },
+      { type: 'web_search_preview' },
+    ])
   })
 
-  test('/v1/responses rejects unsupported web_search tool_choice explicitly', async () => {
+  test('/v1/responses forwards a web_search tool_choice upstream', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
 
     CopilotClient.prototype.createResponses = mockResponses({
-      id: 'resp_unused',
+      id: 'resp_web_search_choice',
       object: 'response',
       created_at: 1,
       model: 'gpt-4.1',
@@ -751,17 +751,14 @@ describe('responses and routing', () => {
       body: JSON.stringify({
         model: 'gpt-4.1',
         input: [{ type: 'message', role: 'user', content: 'hello' }],
-        tool_choice: { type: 'web_search_preview' },
+        tools: [{ type: 'web_search' }],
+        tool_choice: { type: 'web_search' },
       }),
     }))
 
-    const json = await response.json() as {
-      error?: { code?: string, param?: string }
-    }
-    expect(response.status).toBe(400)
-    expect(json.error?.code).toBe('unsupported_tool_web_search')
-    expect(json.error?.param).toBe('tool_choice')
-    expect(calls).toHaveLength(0)
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.payload.tool_choice).toEqual({ type: 'web_search' })
   })
 
   test('/v1/responses rejects external image URLs explicitly', async () => {

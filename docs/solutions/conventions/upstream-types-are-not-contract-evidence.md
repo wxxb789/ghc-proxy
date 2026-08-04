@@ -269,6 +269,10 @@ it looked similar to the one that was measured.
 - `docs/research/prompt-caching.md` — the cold-prefix methodology note.
 - `scripts/probes/` — the probe suite. `sampling-params.ts` is the current
   template for a multi-boundary probe.
+- `docs/solutions/conventions/capability-verdicts-are-scoped-to-one-boundary.md`
+  — the next step after "probe it": probe the *boundary you enforce on*. A
+  `/v1/messages` web-search rejection was enforced in the `/responses` handler,
+  where it had never been measured and was false.
 - `docs/solutions/integration-issues/claude-code-messages-startup-payloads.md` —
   the same failure surface from the opposite direction: an under-modelled
   *inbound* field rather than an outbound one.

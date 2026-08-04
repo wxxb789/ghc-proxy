@@ -218,6 +218,8 @@ const responsesToolChoiceSchema = z.union([
   z.object({
     type: z.enum([
       'file_search',
+      'web_search',
+      'web_search_2025_08_26',
       'web_search_preview',
       'web_search_preview_2025_03_11',
       'computer_use_preview',

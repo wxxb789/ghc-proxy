@@ -118,7 +118,6 @@ export async function handleResponsesCore(
 function applyResponsesToolTransforms(payload: ResponsesPayload): void {
   applyFunctionApplyPatch(payload)
   applyFunctionToolCompatibilityDefaults(payload)
-  rejectUnsupportedBuiltinTools(payload)
 }
 
 function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): void {
@@ -174,36 +173,6 @@ function applyFunctionApplyPatch(payload: ResponsesPayload): void {
 
     return tool
   })
-}
-
-function rejectUnsupportedBuiltinTools(payload: ResponsesPayload): void {
-  if (
-    payload.tool_choice
-    && typeof payload.tool_choice === 'object'
-    && 'type' in payload.tool_choice
-    && (payload.tool_choice.type === 'web_search_preview'
-      || payload.tool_choice.type === 'web_search_preview_2025_03_11')
-  ) {
-    throwInvalidRequestError(
-      'The selected Copilot endpoint does not support the Responses web_search tool.',
-      'tool_choice',
-      'unsupported_tool_web_search',
-    )
-  }
-
-  if (!Array.isArray(payload.tools)) {
-    return
-  }
-
-  for (const tool of payload.tools) {
-    if (tool.type === 'web_search') {
-      throwInvalidRequestError(
-        'The selected Copilot endpoint does not support the Responses web_search tool.',
-        'tools',
-        'unsupported_tool_web_search',
-      )
-    }
-  }
 }
 
 function applyResponsesInputPolicies(payload: ResponsesPayload): void {

@@ -151,6 +151,8 @@ const responsesToolCases: ToolCase[] = [
       parameters: { type: 'object', properties: { value: { type: 'string' } } },
     }],
   },
+  { name: 'web_search', tools: [{ type: 'web_search' }] },
+  { name: 'web_search_2025_08_26', tools: [{ type: 'web_search_2025_08_26' }] },
   { name: 'web_search_preview', tools: [{ type: 'web_search_preview' }] },
   { name: 'web_search_preview_2025_03_11', tools: [{ type: 'web_search_preview_2025_03_11' }] },
   { name: 'file_search', tools: [{ type: 'file_search' }] },

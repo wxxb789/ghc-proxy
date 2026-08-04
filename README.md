@@ -427,7 +427,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 - automatic trimming of Responses `input` to the latest `compaction` item is disabled by default and only applies when `responsesApiAutoCompactInput` is `true`
 - reasoning defaults for Anthropic -> Responses translation can be tuned with `modelReasoningEfforts`
 - request parameters that a model rejects (e.g. `temperature`/`top_p` on reasoning models) are stripped on the Responses boundary rather than leaked upstream as a `400`; see [Responses Parameter Filters](#responses-parameter-filters)
-- known unsupported builtin tools, such as `web_search`, fail explicitly with `400` instead of being silently removed
+- built-in web search (`web_search`, `web_search_preview`, and their dated variants) is forwarded to Copilot rather than blocked; every `/responses` model probed accepts it and runs a real search, see [docs/research/responses-web-search.md](docs/research/responses-web-search.md)
 - external image URLs on the Responses path fail explicitly with `400`; use `file_id` or data URL image input instead
 - official `input_file` and `item_reference` input items are modeled explicitly and validated before forwarding
 

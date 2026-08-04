@@ -65,7 +65,7 @@ interface ToolChoiceAllowedTools {
 }
 
 interface ToolChoiceBuiltin {
-  type: 'file_search' | 'web_search_preview' | 'web_search_preview_2025_03_11' | 'computer_use_preview' | 'code_interpreter' | 'image_generation'
+  type: 'file_search' | 'web_search' | 'web_search_2025_08_26' | 'web_search_preview' | 'web_search_preview_2025_03_11' | 'computer_use_preview' | 'code_interpreter' | 'image_generation'
 }
 
 interface ToolChoiceMcp {

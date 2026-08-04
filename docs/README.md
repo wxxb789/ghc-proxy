@@ -22,6 +22,7 @@ Investigation notes and findings from upstream API behavior analysis.
 | Document | Description |
 |----------|-------------|
 | [Copilot Token Usage](research/copilot-token-usage.md) | How Copilot returns token usage across all API paths |
+| [Responses Web Search](research/responses-web-search.md) | Whether `/responses` supports built-in web search, and whether it actually searches |
 | [Competitive Analysis: LiteLLM](research/competitive-analysis-litellm.md) | LiteLLM proxy comparison and feature gap analysis |
 | [Environment Variables](research/environment-variables.md) | Environment variable reference and configuration |
 

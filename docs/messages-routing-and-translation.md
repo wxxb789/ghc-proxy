@@ -78,7 +78,7 @@ They are rejected because the current Responses execution path cannot preserve t
 - `custom` `apply_patch` can be rewritten into a function tool when enabled.
 - Automatic `context_management` injection is disabled by default and only applies when explicitly enabled in config.
 - Automatic prompt slicing to the latest `compaction` item is disabled by default and only applies when explicitly enabled in config.
-- Known unsupported builtin tools, such as `web_search`, fail explicitly with `400`.
+- Built-in web-search tools (`web_search`, `web_search_preview`, and their dated variants) are forwarded, not blocked. Every `/responses` model probed accepts them and actually runs the search. See [research/responses-web-search.md](research/responses-web-search.md).
 - External `input_image.image_url` values that point at remote HTTP(S) URLs fail explicitly with `400`.
 - `max_output_tokens` below Copilot's enforced minimum of 16 is raised to 16 rather than leaking a `400`. The client-facing schema still accepts `0..15` because those are valid OpenAI input; the floor is a Copilot quirk the proxy absorbs. See [research/sampling-parameters.md](research/sampling-parameters.md).
 - Explicit prompt-caching controls (`prompt_cache_options`, and `prompt_cache_breakpoint` on content blocks) are modeled and forwarded. `ttl` is constrained to the single value upstream accepts (`30m`) and an unknown `mode` is rejected locally, turning a wasted round-trip into an immediate `400`. Only gpt-5.6 and later accept these — earlier models return `400 ... is not supported on this model` — so the proxy forwards rather than injects them. See [research/prompt-caching.md](research/prompt-caching.md).
@@ -135,6 +135,20 @@ All Opus 4.7 variants (`claude-opus-4.7`, `claude-opus-4.7-high`, `claude-opus-4
 **2026-07-25 update (`claude-opus-5`, `claude-sonnet-5`):** both re-probed with an identical surface — 12 supported / 9 rejected. Supported: standard function, `bash_20250124`, `text_editor_20250728`, `memory_20250818`, `custom`, `tool_search_tool_bm25`(+`_20251119`), `tool_search_tool_regex`(+`_20251119`), `code_execution_20250522`/`20250825`/`20260120`. Rejected: older `text_editor` dates, `web_search_*`, `web_fetch_*`, `mcp_*`, `computer_*`. Two shifts from the April-30 baseline: `code_execution` is no longer Opus-4.7-only (both v5 models accept all three versions), and `claude-sonnet-5` accepts `tool_search_tool_bm25` — unlike Bedrock-served `claude-sonnet-4.6`, which rejects bm25 — indicating v5 Sonnet runs on Anthropic-native infra.
 
 On the `/responses` endpoint (GPT models including `gpt-5.5`), `web_search_preview` and custom tools (`apply_patch`, `shell`) are accepted. `file_search`, `code_interpreter`, `computer_use_preview`, `image_generation`, and `mcp` are rejected. `gpt-5.5` has identical tool support to `gpt-5.4`.
+
+**2026-08-04 update (web search on `/responses`):** the Codex/ChatGPT built-in
+`web_search` type was probed for the first time and is accepted by **every**
+`/responses` model — `gpt-5-mini`, `gpt-5.3-codex`, `gpt-5.4`(`-mini`),
+`gpt-5.5`, all three `gpt-5.6-*`, `grok-4.5`, `mai-code-1-flash-picker` — as is
+`web_search_preview`. Acceptance is not the whole finding: `gpt-5.6-sol` and
+`gpt-5.6-terra` emit real `web_search_call` items with `url_citation`
+annotations, so the tool executes rather than being tolerated. `tool_choice` is
+narrower than `tools` — the dated spellings
+(`web_search_preview_2025_03_11`, `web_search_2025_08_26`) work inside `tools`
+but return `400 Missing required parameter: 'tool_choice.tools'` when forced
+via `tool_choice`. The `/v1/messages` boundary is unaffected and still returns
+`The use of the web search tool is not supported.` for `claude-opus-5` and
+`claude-sonnet-5`. Full results and method: [research/responses-web-search.md](research/responses-web-search.md).
 
 ### Prompt caching
 
