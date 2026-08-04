@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
+import type { Socket } from 'node:net'
+import type { Dispatcher } from 'undici'
+
+import { createServer } from 'node:http'
 import process from 'node:process'
 import { defineCommand } from 'citty'
+import { Agent } from 'undici'
 
 import { UpstreamRequestQueue } from './clients/upstream-queue'
 import { HTTPError, isRetryableConnectionEstablishmentError } from './lib/error'
@@ -122,30 +127,66 @@ function probeConnectionErrorClassification(): void {
 
 async function probeResponseBodyCancellation(): Promise<void> {
   const queue = createRuntimeProbeQueue({ maxRetries: 1 })
-  let attempts = 0
-  let cancelled = false
-
-  const result = await queue.dispatch(async () => {
-    attempts++
-    if (attempts === 1) {
-      return new Response(new ReadableStream({
-        cancel() {
-          cancelled = true
-        },
-      }), {
-        status: 529,
-        headers: { 'retry-after': '0' },
+  const dispatcher = process.versions.bun ? undefined : new Agent({ connections: 1 })
+  const sockets = new Set<Socket>()
+  let requests = 0
+  let firstResponseClosed = false
+  const server = createServer((_request, response) => {
+    requests++
+    if (requests === 1) {
+      response.once('close', () => {
+        firstResponseClosed = true
       })
+      response.writeHead(529, { 'retry-after': '0' })
+      response.write('retryable response remains open')
+      return
     }
-    return new Response('ok')
-  }, {
-    url: 'https://example.invalid/v1/messages',
-    retryable: 'capacity',
+    response.end('ok')
+  })
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
   })
 
-  result.release()
-  assertProbe(attempts === 2, `expected one retry, observed ${attempts - 1}`)
-  assertProbe(cancelled, 'retryable response body was not cancelled')
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      resolve()
+    })
+  })
+
+  try {
+    const address = server.address()
+    assertProbe(address !== null && typeof address === 'object', 'loopback server has no address')
+    const url = `http://127.0.0.1:${address.port}/retry`
+    const result = await queue.dispatch(
+      signal => fetch(url, {
+        signal,
+        ...(dispatcher ? { dispatcher } : {}),
+      } as RequestInit & { dispatcher?: Dispatcher }),
+      { url, retryable: 'capacity' },
+    )
+
+    try {
+      assertProbe(result.response.status === 200, `expected retry status 200, received ${result.response.status}`)
+      assertProbe(await result.response.text() === 'ok', 'retry response body changed')
+    }
+    finally {
+      result.release()
+    }
+
+    assertProbe(requests === 2, `expected one retry, observed ${requests - 1}`)
+    if (!process.versions.bun) {
+      assertProbe(firstResponseClosed, 'retryable response did not release its transport')
+    }
+  }
+  finally {
+    for (const socket of sockets)
+      socket.destroy()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await dispatcher?.close()
+  }
 }
 
 async function probeResponseCommitBoundary(): Promise<void> {

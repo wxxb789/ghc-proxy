@@ -4,6 +4,8 @@ import path from 'node:path'
 import process from 'node:process'
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 
+import { resolveCapacityCooldownScope } from '~/lib/error'
+
 import {
   DEFAULT_UPSTREAM_QUEUE_MAX_RETRIES,
   DEFAULT_UPSTREAM_RECOVERY_BUDGET_SECONDS,
@@ -11,7 +13,6 @@ import {
   readConfig,
   writeConfigField,
 } from '../src/lib/config'
-import { resolveCapacityCooldownScope } from '../src/lib/error'
 import { parseBoundedIntArg, resolveDumpFailedPayloadsOption } from '../src/start'
 import { authStore, modelCache } from '../src/state'
 import { configStore } from '../src/state/config-store'
@@ -132,7 +133,7 @@ describe('config module', () => {
     expect(await readConfig()).toEqual({ githubToken: 'still-valid' })
   })
 
-  test('readConfig() drops blank and self fallback entries but keeps reciprocal one-hop mappings', async () => {
+  test('readConfig() drops blank, self, and reciprocal fallback entries but keeps unrelated mappings', async () => {
     await fs.writeFile(tempConfigPath, JSON.stringify({
       overloadFallbacks: {
         '': 'target',
@@ -145,8 +146,6 @@ describe('config module', () => {
     }))
 
     expect((await readConfig()).overloadFallbacks).toEqual({
-      modelA: 'modelB',
-      modelB: 'modelA',
       modelC: 'modelD',
     })
   })

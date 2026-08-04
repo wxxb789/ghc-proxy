@@ -81,6 +81,10 @@ export class ConfigStore {
   getOverloadFallback(sourceModel: string): string | undefined {
     return getCachedConfig().overloadFallbacks?.[sourceModel]
   }
+
+  hasOverloadFallbacks(): boolean {
+    return Object.keys(getCachedConfig().overloadFallbacks ?? {}).length > 0
+  }
 }
 
 export const configStore = new ConfigStore()

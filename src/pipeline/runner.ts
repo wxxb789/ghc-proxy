@@ -18,8 +18,11 @@ import {
   getEffectiveModel,
   logRecoveryEvent,
 } from '~/lib/request-logger'
-import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
-import { configStore, modelCache, RESPONSES_ENDPOINT } from '~/state'
+import {
+  createUpstreamDeadlineFromConfig,
+  createUpstreamSignalFromConfig,
+} from '~/lib/upstream-signal'
+import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
 import { resolveRequestModel } from '~/transform/resolve-model'
 
 export interface PipelineParams {
@@ -88,6 +91,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   params: PipelineParams,
   config: PipelineConfig<TPayload, TStrategyCtx>,
 ): Promise<PipelineResult> {
+  const upstreamDeadlineMonotonicMs = createUpstreamDeadlineFromConfig()
   const recovery = createRecoveryRecord(params)
   const ingested = protocolRegistry.ingest<TPayload>(
     config.protocol,
@@ -99,19 +103,24 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   const payload = config.afterIngest
     ? config.afterIngest({ payload: ingested.payload, meta, headers: params.headers })
     : ingested.payload
-  const pristinePayload = payload
+  const baseSourceModel = resolveBaseModel(payload, meta, config)
+  const fallbackPossible = shouldPreservePristinePayload(
+    config.protocol,
+    baseSourceModel,
+  )
+  const pristinePayload = fallbackPossible
+    ? structuredClone(payload)
+    : payload
   const sourceAttempt = await prepareAttempt(
-    pristinePayload,
+    payload,
     meta,
     params,
     config,
     recovery,
+    upstreamDeadlineMonotonicMs,
     {
-      offerLocalModelCooldown: sourceModel => validateFallback(
-        config.protocol,
-        pristinePayload,
-        sourceModel,
-      ).ok,
+      offerLocalModelCooldown: sourceModel => fallbackPossible
+        && validateFallback(config.protocol, pristinePayload, sourceModel).ok,
     },
   )
 
@@ -129,7 +138,9 @@ export async function runPipeline<TPayload, TStrategyCtx>(
       throw error
     }
 
-    const candidate = validateFallback(config.protocol, pristinePayload, sourceModel)
+    const candidate = fallbackPossible
+      ? validateFallback(config.protocol, pristinePayload, sourceModel)
+      : { ok: false, reason: 'not-configured' } as const
     if (!candidate.ok) {
       emitFallbackEvent(error.recovery, sourceModel, candidate.reason, 529)
       throw error
@@ -161,11 +172,12 @@ export async function runPipeline<TPayload, TStrategyCtx>(
     let fallbackAttempt: PreparedAttempt
     try {
       fallbackAttempt = await prepareAttempt(
-        pristinePayload,
+        structuredClone(pristinePayload),
         meta,
         params,
         config,
         error.recovery,
+        upstreamDeadlineMonotonicMs,
         {
           target: candidate.target,
           modelMapping: fallbackMapping,
@@ -228,14 +240,14 @@ interface AttemptOptions {
 }
 
 async function prepareAttempt<TPayload, TStrategyCtx>(
-  pristinePayload: TPayload,
+  payload: TPayload,
   meta: RequestMeta,
   params: PipelineParams,
   config: PipelineConfig<TPayload, TStrategyCtx>,
   recovery: UpstreamRecoveryRecord,
+  upstreamDeadlineMonotonicMs: number | null,
   options: AttemptOptions = {},
 ): Promise<PreparedAttempt> {
-  const payload = structuredClone(pristinePayload)
   const resolved = resolveRequestModel({
     payload: payload as { model: string },
     betaHeaders: meta.betaHeaders,
@@ -252,7 +264,10 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
     await config.afterTransform({ payload, meta, headers: params.headers, selectedModel })
 
   params.signal.throwIfAborted()
-  const upstreamSignal = createUpstreamSignalFromConfig(params.signal)
+  const upstreamSignal = createUpstreamSignalFromConfig(
+    params.signal,
+    upstreamDeadlineMonotonicMs,
+  )
   const copilotClient = createCopilotClient(recovery, {
     offerLocalModelCooldown: options.offerLocalModelCooldown,
     fallbackAttempt: options.fallbackAttempt,
@@ -272,9 +287,15 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
     return {
       baseModel,
       modelMapping,
-      execute: () => {
-        params.signal.throwIfAborted()
-        return entry.execute(ctx)
+      execute: async () => {
+        try {
+          params.signal.throwIfAborted()
+          return await entry.execute(ctx)
+        }
+        catch (error) {
+          upstreamSignal.cleanup()
+          throw error
+        }
       },
     }
   }
@@ -289,12 +310,29 @@ function resolveBaseModel<TPayload, TStrategyCtx>(
   meta: RequestMeta,
   config: PipelineConfig<TPayload, TStrategyCtx>,
 ): string {
-  const payload = structuredClone(pristinePayload) as { model: string }
+  const payload = { ...pristinePayload as { model: string } }
   return resolveRequestModel({
     payload,
     betaHeaders: meta.betaHeaders,
     applyPolicy: config.applyModelPolicy,
   }).model
+}
+
+function shouldPreservePristinePayload(
+  protocol: ProtocolId,
+  baseSourceModel: string,
+): boolean {
+  if (configStore.getOverloadFallback(baseSourceModel)?.trim())
+    return true
+  if (protocol !== 'anthropic-messages' || !configStore.hasOverloadFallbacks())
+    return false
+
+  const model = modelCache.findById(baseSourceModel)
+  return !model
+    || (
+      !modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
+      && !modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT)
+    )
 }
 
 type FallbackValidation
@@ -413,13 +451,11 @@ function requestsStructuredOutput(protocol: ProtocolId, payload: unknown): boole
 }
 
 function supportsStructuredOutput(protocol: ProtocolId, model: Model): boolean {
-  const advertised = model.capabilities.supports.structured_outputs ?? false
-  if (!advertised)
-    return false
-  if (protocol !== 'anthropic-messages')
-    return true
-  return modelCache.supportsStructuredOutputs(model)
-    || modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT)
+  if (protocol === 'anthropic-messages') {
+    return modelCache.supportsStructuredOutputs(model)
+      || modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT)
+  }
+  return model.capabilities.supports.structured_outputs ?? false
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -493,11 +529,13 @@ function emitFallbackEvent(
   const now = performance.now()
   logRecoveryEvent({
     requestId: recovery.requestId,
+    callerRequestId: recovery.callerRequestId,
     event: 'fallback',
     retryCount: recovery.retryCount,
     effectiveModel,
     status,
     connectionClass,
+    ...recovery.queueMetrics,
     ...(recovery.startedAtMonotonicMs !== undefined
       ? { elapsedMs: Math.max(0, now - recovery.startedAtMonotonicMs) }
       : {}),
@@ -509,11 +547,12 @@ function emitFallbackEvent(
 }
 
 export function createRecoveryRecord(
-  request: Pick<PipelineParams, 'requestId' | 'callerRequestId'>,
+  request: Pick<PipelineParams, 'requestId' | 'callerRequestId' | 'signal'>,
 ): UpstreamRecoveryRecord {
   return {
     requestId: request.requestId,
     ...(request.callerRequestId ? { callerRequestId: request.callerRequestId } : {}),
+    callerSignal: request.signal,
     retryCount: 0,
   }
 }

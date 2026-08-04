@@ -374,8 +374,9 @@ describe('UpstreamRequestQueue capacity cooldown scope', () => {
 })
 
 describe('UpstreamRequestQueue abort during backoff', () => {
-  test('rejects and releases the lease when aborted mid-backoff', async () => {
-    let sleepResolve: (() => void) | undefined
+  test('clears backoff timers and releases the lease when aborted', async () => {
+    const timers: Array<{ callback: () => void, cleared: boolean }> = []
+    const events: Array<Record<string, unknown>> = []
     const queue = new UpstreamRequestQueue(
       {
         concurrency: 1,
@@ -384,8 +385,18 @@ describe('UpstreamRequestQueue abort during backoff', () => {
         maxDelayMs: 60_000,
       },
       {
-        sleep: () => new Promise<void>((resolve) => { sleepResolve = resolve }),
-        logger: { warn: () => {} },
+        logger: {
+          warn: () => {},
+          info: (_message, fields) => events.push(fields as unknown as Record<string, unknown>),
+        },
+        setTimeout: ((callback: () => void) => {
+          const timer = { callback, cleared: false }
+          timers.push(timer)
+          return timer as unknown as ReturnType<typeof setTimeout>
+        }) as typeof setTimeout,
+        clearTimeout: ((timer: ReturnType<typeof setTimeout>) => {
+          (timer as unknown as { cleared: boolean }).cleared = true
+        }) as typeof clearTimeout,
       },
     )
 
@@ -398,11 +409,15 @@ describe('UpstreamRequestQueue abort during backoff', () => {
       controller.signal,
     )
 
-    await new Promise(resolve => setTimeout(resolve, 10))
-    expect(sleepResolve).toBeDefined()
+    for (let index = 0; index < 20 && timers.length < 2; index++)
+      await Promise.resolve()
+    expect(timers).toHaveLength(2)
 
     controller.abort('client gone')
     await expect(dispatched).rejects.toBe('client gone')
+    expect(timers.every(timer => timer.cleared)).toBe(true)
+    expect(events.filter(event => event.decision === 'cancelled')).toHaveLength(1)
+    expect(events.filter(event => event.decision === 'deadline-exceeded')).toHaveLength(0)
 
     // The lease must be back in the pool: with concurrency 1 a leaked lease
     // would leave this dispatch waiting forever.
@@ -413,15 +428,56 @@ describe('UpstreamRequestQueue abort during backoff', () => {
     expect(await next.response.text()).toBe('ok')
     next.release()
   })
+
+  test('classifies a proxy timeout separately from caller cancellation', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const queue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 0 },
+      {
+        logger: {
+          warn: () => {},
+          info: (_message, fields) => events.push(fields as unknown as Record<string, unknown>),
+        },
+      },
+    )
+    const caller = new AbortController()
+    const proxyTimeout = new AbortController()
+    const upstreamSignal = AbortSignal.any([caller.signal, proxyTimeout.signal])
+    const timeoutReason = new DOMException('Upstream timeout', 'TimeoutError')
+    const dispatched = queue.dispatch(
+      signal => new Promise<Response>((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+      }),
+      {
+        ...context,
+        recovery: {
+          requestId: 'proxy-timeout',
+          callerSignal: caller.signal,
+          retryCount: 0,
+        },
+      },
+      upstreamSignal,
+    )
+
+    await Promise.resolve()
+    proxyTimeout.abort(timeoutReason)
+
+    await expect(dispatched).rejects.toBe(timeoutReason)
+    expect(caller.signal.aborted).toBe(false)
+    expect(events.filter(event => event.decision === 'cancelled')).toHaveLength(0)
+    expect(events.filter(event => event.decision === 'deadline-exceeded')).toEqual([
+      expect.objectContaining({ event: 'budget', status: 504 }),
+    ])
+  })
 })
 
 describe('UpstreamRequestQueue scoped cooldown scheduling', () => {
-  function createScopedHarness(maxQueueDepth = 10) {
+  function createScopedHarness(maxQueueDepth = 10, concurrency = 1) {
     let now = 1_000
     const timers: Array<{ callback: () => void, delay: number }> = []
     const queue = new UpstreamRequestQueue(
       {
-        concurrency: 1,
+        concurrency,
         maxRetries: 0,
         baseDelayMs: 100,
         maxDelayMs: 100,
@@ -479,6 +535,41 @@ describe('UpstreamRequestQueue scoped cooldown scheduling', () => {
 
     expect(order).toEqual(['b'])
     modelB.release()
+  })
+
+  test('wakes only the free slots in FIFO order when a model cooldown expires', async () => {
+    const { queue, advance } = createScopedHarness(10, 2)
+    const source = await queue.dispatch(
+      () => Promise.resolve(new Response('overloaded', {
+        status: 529,
+        headers: { 'retry-after': '10' },
+      })),
+      { ...context, retryable: false, effectiveModel: 'model-a' },
+    )
+    source.release()
+
+    const order: string[] = []
+    const pending = ['first', 'second', 'third'].map(name => queue.dispatch(
+      () => {
+        order.push(name)
+        return Promise.resolve(new Response(name))
+      },
+      { ...context, retryable: false, effectiveModel: 'model-a' },
+    ))
+
+    advance(10_000)
+    for (let index = 0; index < 5; index++)
+      await Promise.resolve()
+    expect(order).toEqual(['first', 'second'])
+
+    const first = await pending[0]!
+    const second = await pending[1]!
+    first.release()
+    const third = await pending[2]!
+    expect(order).toEqual(['first', 'second', 'third'])
+
+    second.release()
+    third.release()
   })
 
   test('model-less 529 remains request-scoped', async () => {
@@ -551,6 +642,66 @@ describe('UpstreamRequestQueue scoped cooldown scheduling', () => {
 
     expect(timers.at(-1)?.delay).toBe(2_147_483_647)
   })
+
+  test('keeps oversized Retry-After telemetry from leaking a queue slot', async () => {
+    const { queue } = createScopedHarness()
+    const source = await queue.dispatch(
+      () => Promise.resolve(new Response('overloaded', {
+        status: 529,
+        headers: { 'retry-after': '9999999999999999' },
+      })),
+      { ...context, retryable: false, effectiveModel: 'model-a' },
+    )
+    expect(source.response.status).toBe(529)
+    source.release()
+
+    const unrelated = await queue.dispatch(
+      () => Promise.resolve(new Response('ok')),
+      { ...context, retryable: false, effectiveModel: 'model-b' },
+    )
+    expect(await unrelated.response.text()).toBe('ok')
+    unrelated.release()
+  })
+
+  test('updates a shared cooldown wake incrementally at maximum pending depth', async () => {
+    const { queue } = createScopedHarness(1_000)
+    const source = await queue.dispatch(
+      () => Promise.resolve(new Response('overloaded', {
+        status: 529,
+        headers: { 'retry-after': '10' },
+      })),
+      { ...context, retryable: false, effectiveModel: 'model-a' },
+    )
+    source.release()
+
+    const internals = queue as unknown as {
+      getActiveCooldown: (effectiveModel?: string) => unknown
+    }
+    const getActiveCooldown = internals.getActiveCooldown.bind(queue)
+    let cooldownChecks = 0
+    internals.getActiveCooldown = (effectiveModel) => {
+      cooldownChecks++
+      return getActiveCooldown(effectiveModel)
+    }
+
+    const controllers: AbortController[] = []
+    for (let index = 0; index < 1_000; index++)
+      controllers.push(new AbortController())
+    const pending = controllers.map(controller => queue.dispatch(
+      () => Promise.resolve(new Response('too early')),
+      { ...context, retryable: false, effectiveModel: 'model-a' },
+      controller.signal,
+    ))
+    for (const promise of pending)
+      void promise.catch(() => {})
+
+    const enqueueChecks = cooldownChecks
+    expect(enqueueChecks).toBeLessThan(5_000)
+    for (const controller of controllers)
+      controller.abort('cancelled')
+    await Promise.allSettled(pending)
+    expect(cooldownChecks - enqueueChecks).toBeLessThan(1_000)
+  })
 })
 
 describe('UpstreamRequestQueue bounded recovery', () => {
@@ -562,6 +713,7 @@ describe('UpstreamRequestQueue bounded recovery', () => {
     let now = 1_000
     const sleeps: number[] = []
     const timers: Array<{ callback: () => void, delay: number }> = []
+    const events: Array<Record<string, unknown>> = []
     const queue = new UpstreamRequestQueue(
       {
         concurrency: 1,
@@ -579,7 +731,10 @@ describe('UpstreamRequestQueue bounded recovery', () => {
           now += ms
           return Promise.resolve()
         },
-        logger: { warn: () => {} },
+        logger: {
+          warn: () => {},
+          info: (_message, fields) => events.push(fields as unknown as Record<string, unknown>),
+        },
         setTimeout: ((callback: () => void, delay: number) => {
           timers.push({ callback, delay })
           return timers.length as unknown as ReturnType<typeof setTimeout>
@@ -587,7 +742,7 @@ describe('UpstreamRequestQueue bounded recovery', () => {
         clearTimeout: (() => {}) as typeof clearTimeout,
       },
     )
-    return { queue, sleeps, timers }
+    return { queue, sleeps, timers, events }
   }
 
   test('defaults to one retry and caps configured retries at two', async () => {
@@ -606,6 +761,140 @@ describe('UpstreamRequestQueue bounded recovery', () => {
       expect(result.response.status).toBe(529)
       result.release()
     }
+  })
+
+  test('emits one terminal decision after a recovered retry', async () => {
+    const { queue, events } = createRecoveryHarness({ maxRetries: 1, random: () => 0 })
+    let calls = 0
+    const result = await queue.dispatch(
+      () => {
+        calls++
+        return Promise.resolve(calls === 1
+          ? new Response('overloaded', { status: 529 })
+          : new Response('ok'))
+      },
+      { ...context, retryable: 'capacity', effectiveModel: 'model-a' },
+    )
+
+    expect(events.filter(event => event.decision === 'recovered')).toHaveLength(1)
+    result.release()
+  })
+
+  test('emits one terminal decision when connection retries are exhausted', async () => {
+    const { queue, events } = createRecoveryHarness({ maxRetries: 0 })
+    const connectionError = Object.assign(new Error('dns unavailable'), { code: 'ENOTFOUND' })
+
+    await expect(queue.dispatch(
+      () => Promise.reject(connectionError),
+      { ...context, retryable: 'capacity' },
+    )).rejects.toBe(connectionError)
+
+    expect(events.filter(event => event.decision === 'retry-exhausted')).toHaveLength(1)
+  })
+
+  test('emits one terminal decision when capacity retries are exhausted', async () => {
+    const { queue, events } = createRecoveryHarness({ maxRetries: 0 })
+    const result = await queue.dispatch(
+      () => Promise.resolve(new Response('overloaded', { status: 529 })),
+      { ...context, retryable: 'capacity', effectiveModel: 'model-a' },
+    )
+
+    expect(events.filter(event => event.decision === 'retry-limit')).toHaveLength(1)
+    result.release()
+  })
+
+  test('deduplicates terminal decisions across dispatches sharing one recovery', async () => {
+    const { queue, events } = createRecoveryHarness({ maxRetries: 0 })
+    const recovery = { requestId: 'shared-recovery', retryCount: 0 }
+    const source = await queue.dispatch(
+      () => Promise.resolve(new Response('overloaded', { status: 529 })),
+      {
+        ...context,
+        retryable: 'capacity',
+        effectiveModel: 'model-a',
+        recovery,
+      },
+    )
+    source.release()
+
+    const fallback = await queue.dispatch(
+      () => Promise.resolve(new Response('ok')),
+      {
+        ...context,
+        retryable: false,
+        effectiveModel: 'model-b',
+        recovery,
+        fallbackAttempt: true,
+      },
+    )
+    fallback.release()
+
+    const terminalDecisions = events.filter(event =>
+      event.decision === 'retry-limit' || event.decision === 'recovered',
+    )
+    expect(terminalDecisions).toHaveLength(1)
+    expect(terminalDecisions[0]?.decision).toBe('retry-limit')
+  })
+
+  test('surfaces a fallback fetch deadline as 504 without source retry metadata', async () => {
+    let now = 1_000
+    const timers: Array<{ callback: () => void, cleared: boolean }> = []
+    const events: Array<Record<string, unknown>> = []
+    const queue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 0, recoveryBudgetMs: 1_000 },
+      {
+        now: () => now,
+        logger: {
+          warn: () => {},
+          info: (_message, fields) => events.push(fields as unknown as Record<string, unknown>),
+        },
+        setTimeout: ((callback: () => void) => {
+          const timer = { callback, cleared: false }
+          timers.push(timer)
+          return timer as unknown as ReturnType<typeof setTimeout>
+        }) as typeof setTimeout,
+        clearTimeout: ((timer: ReturnType<typeof setTimeout>) => {
+          (timer as unknown as { cleared: boolean }).cleared = true
+        }) as typeof clearTimeout,
+      },
+    )
+    const recovery = {
+      requestId: 'fallback-timeout',
+      retryCount: 1,
+      retryLimit: 1,
+      startedAtMonotonicMs: now,
+      deadlineMonotonicMs: now + 1_000,
+      sourceModel: 'source',
+      publicError: { status: 529, retryAfter: '9' },
+    }
+    const dispatched = queue.dispatch(
+      signal => new Promise<Response>((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+      }),
+      {
+        ...context,
+        retryable: 'capacity',
+        effectiveModel: 'target',
+        recovery,
+        fallbackAttempt: true,
+      },
+    )
+
+    for (let index = 0; index < 20 && timers.length === 0; index++)
+      await Promise.resolve()
+    now = 2_000
+    timers[0]!.callback()
+
+    let error: unknown
+    try {
+      await dispatched
+    }
+    catch (caught) {
+      error = caught
+    }
+    expect(error).toMatchObject({ status: 504 })
+    expect((error as { headers: Headers }).headers.get('retry-after')).toBeNull()
+    expect(events.filter(event => event.decision === 'deadline-exceeded')).toHaveLength(1)
   })
 
   test('does not shorten a server minimum that exceeds the recovery budget', async () => {

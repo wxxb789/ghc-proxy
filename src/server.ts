@@ -88,10 +88,10 @@ export function createServer(options?: ServerOptions) {
         setRequestModelMapping(request, { originalModel: model, steps: [] })
       }
     })
-    .onAfterResponse(({ request, requestStart, requestId, set }) => {
+    .onAfterResponse(({ callerRequestId, request, requestStart, requestId, set }) => {
       const elapsed = formatElapsed(requestStart)
       const status = typeof set.status === 'number' ? set.status : 200
-      logRequest(request.method, request.url, status, elapsed, getRequestModelMapping(request), requestId)
+      logRequest(request.method, request.url, status, elapsed, getRequestModelMapping(request), requestId, callerRequestId)
     })
     .onError(({ code, error, set }) => handleRouteError({ code, error, set }))
     .get('/', () => 'Server running')

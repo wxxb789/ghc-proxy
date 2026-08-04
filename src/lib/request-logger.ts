@@ -65,6 +65,7 @@ export type RecoveryEventName
 
 export interface RecoveryEvent {
   requestId: string
+  callerRequestId?: string
   event: RecoveryEventName
   retryCount?: number
   status?: number
@@ -86,6 +87,15 @@ export interface RecoveryEvent {
 
 interface RecoveryEventLogger {
   info: (message: string, fields: RecoveryEvent) => void
+}
+
+const MAX_LOGGED_CALLER_REQUEST_ID_LENGTH = 128
+const UNSAFE_CALLER_REQUEST_ID_CHARACTERS = /[^\w.:@/-]/g
+
+function sanitizeCallerRequestId(value: string | undefined): string | undefined {
+  return value
+    ? value.replace(UNSAFE_CALLER_REQUEST_ID_CHARACTERS, '_').slice(0, MAX_LOGGED_CALLER_REQUEST_ID_LENGTH)
+    : undefined
 }
 
 const RECOVERY_EVENT_OPTIONAL_FIELDS = [
@@ -111,8 +121,10 @@ export function logRecoveryEvent(
   input: RecoveryEvent,
   logger: RecoveryEventLogger = consola,
 ): void {
+  const callerRequestId = sanitizeCallerRequestId(input.callerRequestId)
   const fields: RecoveryEvent = {
     requestId: input.requestId,
+    ...(callerRequestId ? { callerRequestId } : {}),
     event: input.event,
   }
   for (const key of RECOVERY_EVENT_OPTIONAL_FIELDS) {
@@ -221,6 +233,7 @@ export function logRequest(
   elapsed: string,
   modelInfo?: ModelMappingInfo,
   requestId?: string,
+  callerRequestId?: string,
 ): void {
   const path = formatPath(url)
   const line = [
@@ -232,7 +245,11 @@ export function logRequest(
   ].join(' ')
 
   const rid = requestId ? ` ${colorize('dim', `rid=${requestId.slice(0, 8)}`)}` : ''
+  const safeCallerRequestId = sanitizeCallerRequestId(callerRequestId)
+  const callerRid = safeCallerRequestId
+    ? ` ${colorize('dim', `callerRid=${safeCallerRequestId}`)}`
+    : ''
 
   // eslint-disable-next-line no-console
-  console.log(`${line}${formatModelMapping(modelInfo)}${rid}`)
+  console.log(`${line}${formatModelMapping(modelInfo)}${rid}${callerRid}`)
 }

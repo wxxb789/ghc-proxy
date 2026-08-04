@@ -5,7 +5,7 @@ import type { ResponseStreamEvent } from '~/types'
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
-import { TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
+import { LocalModelCooldownError, TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
 import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
 import { sanitizeNativeMessagesPayloadForCopilot } from '~/routes/messages/strategies/native-messages'
@@ -65,6 +65,52 @@ afterEach(() => {
 })
 
 describe('messages routing', () => {
+  test('/v1/messages keeps Anthropic error shape for a rejected local-cooldown fallback', async () => {
+    const app = createApp()
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('source', { supported_endpoints: ['/v1/messages'] }),
+      buildModel('target', { supported_endpoints: ['/v1/messages'] }),
+    ))
+    const config = getCachedConfig() as Record<string, unknown>
+    config.overloadFallbacks = { source: 'target' }
+
+    let calls = 0
+    CopilotClient.prototype.createMessages = (async () => {
+      calls++
+      if (calls === 1) {
+        throw new LocalModelCooldownError({
+          requestId: 'messages-local-cooldown',
+          retryCount: 0,
+          sourceModel: 'source',
+        }, '3')
+      }
+      throw new HTTPError(400, {
+        error: { message: 'target preflight failed', type: 'invalid_request_error' },
+      })
+    }) as typeof CopilotClient.prototype.createMessages
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'source',
+        max_tokens: 32,
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }))
+
+    expect(response.status).toBe(529)
+    expect(response.headers.get('retry-after')).toBe('3')
+    expect(await response.json()).toEqual({
+      type: 'error',
+      error: {
+        message: 'The selected upstream model is temporarily overloaded.',
+        type: 'overloaded_error',
+      },
+    })
+    expect(calls).toBe(2)
+  })
+
   test('/v1/messages uses responses translation path for responses-only models', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
@@ -927,6 +973,130 @@ describe('messages routing', () => {
     expect(response.status).toBe(200)
     expect(calls.map(call => call.payload.model)).toEqual(['gpt-4.1-mini', 'gpt-5-target'])
     expect(body.model).toBe('gpt-5-target')
+  })
+
+  test('late CAPI source resolution retains the pristine payload for fallback', async () => {
+    const app = createApp()
+    const calls: Array<CapturedChatCall> = []
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('late-source'),
+      buildModel('target'),
+    ))
+    const config = getCachedConfig() as Record<string, unknown>
+    config.modelFallback = { claudeOpus: 'late-source' }
+    config.overloadFallbacks = { 'late-source': 'target' }
+
+    CopilotClient.prototype.createChatCompletions = (async (payload, options) => {
+      calls.push({ payload, options })
+      if (calls.length === 1) {
+        throw new TerminalUpstreamRecoveryError(
+          new HTTPError(529, {
+            error: { message: 'late source overloaded', type: 'overloaded_error' },
+          }),
+          {
+            requestId: 'late-capi-fallback',
+            retryCount: 1,
+            sourceModel: 'late-source',
+          },
+        )
+      }
+      return {
+        id: 'chat_late_fallback',
+        object: 'chat.completion',
+        created: 1,
+        model: 'late-source',
+        choices: [{
+          index: 0,
+          finish_reason: 'stop',
+          logprobs: null,
+          message: { role: 'assistant', content: 'ok' },
+        }],
+      }
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-unadvertised',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }))
+    const body = await response.json() as AnthropicResponse
+
+    expect(response.status).toBe(200)
+    expect(calls.map(call => call.payload.model)).toEqual(['late-source', 'target'])
+    expect(body.model).toBe('target')
+  })
+
+  test('structured output fallback uses a Responses target without a structured_outputs flag', async () => {
+    const app = createApp()
+    const responsesCalls: Array<CapturedResponsesCall> = []
+    const source = buildModel('claude-opus-5', {
+      supported_endpoints: ['/v1/messages'],
+    })
+    source.capabilities.supports.structured_outputs = true
+    const target = buildModel('responses-target', {
+      supported_endpoints: ['/responses'],
+    })
+    modelCache.cacheModels(buildModelsResponse(source, target))
+    const config = getCachedConfig() as Record<string, unknown>
+    config.overloadFallbacks = { 'claude-opus-5': 'responses-target' }
+
+    let sourceCalls = 0
+    CopilotClient.prototype.createMessages = (async () => {
+      sourceCalls++
+      throw new TerminalUpstreamRecoveryError(
+        new HTTPError(529, {
+          error: { message: 'source overloaded', type: 'overloaded_error' },
+        }),
+        {
+          requestId: 'structured-output-fallback',
+          retryCount: 1,
+          sourceModel: 'claude-opus-5',
+        },
+      )
+    }) as typeof CopilotClient.prototype.createMessages
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      model: 'responses-target',
+      status: 'completed',
+      output: [{
+        id: 'msg_fallback',
+        type: 'message',
+        role: 'assistant',
+        status: 'completed',
+        content: [{ type: 'output_text', text: '{"answer":"ok"}', annotations: [] }],
+      }],
+      output_text: '{"answer":"ok"}',
+    }), responsesCalls)
+
+    const schema = {
+      type: 'object',
+      properties: { answer: { type: 'string' } },
+      required: ['answer'],
+    }
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-5',
+        max_tokens: 256,
+        output_config: {
+          format: { type: 'json_schema', schema },
+        },
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(sourceCalls).toBe(1)
+    expect(responsesCalls).toHaveLength(1)
+    expect(responsesCalls[0]?.payload.model).toBe('responses-target')
+    expect(responsesCalls[0]?.payload.text?.format).toMatchObject({
+      type: 'json_schema',
+      schema,
+    })
   })
 
   test('small-model routing preserves vision capability requirements', async () => {

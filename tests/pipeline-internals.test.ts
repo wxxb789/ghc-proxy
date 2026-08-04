@@ -1,17 +1,25 @@
 import type { StateSnapshot } from './helpers'
 import type { StrategyEntry } from '~/dispatch'
 import type { ExecutionResult } from '~/lib/execution-strategy'
+import type { RecoveryEvent } from '~/lib/request-logger'
 import type { IngestContext, PipelineConfig, TransformContext } from '~/pipeline/runner'
 
 import type { ChatCompletionsPayload, Model } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { LocalModelCooldownError, TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
+import consola from 'consola'
+import {
+  FallbackCooldownError,
+  LocalModelCooldownError,
+  TerminalUpstreamRecoveryError,
+  UpstreamRequestQueue,
+} from '~/clients/upstream-queue'
 import { StrategyRegistry } from '~/dispatch'
 import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
+import { runStrategy } from '~/lib/execution-strategy'
 import { runPipeline } from '~/pipeline/runner'
-import { modelCache } from '~/state'
+import { authStore, modelCache } from '~/state'
 
 import {
   buildModel,
@@ -350,6 +358,112 @@ describe('runPipeline', () => {
     expect(executedPayloads[0]?.messages[0]?.content).toBe('original')
   })
 
+  test('keeps the source payload in place when overload fallback is disabled', async () => {
+    let ingestedPayload: SimplePayload | undefined
+    let executedPayload: SimplePayload | undefined
+    const registry = new StrategyRegistry<{ payload: SimplePayload }>()
+    registry.register({
+      name: 'identity-test',
+      canHandle: () => true,
+      execute: async ({ payload }) => {
+        executedPayload = payload
+        return { kind: 'json', data: { ok: true } }
+      },
+    })
+
+    await runPipeline(
+      makeParams({ model: 'source', messages: [{ role: 'user', content: 'large' }] }),
+      makeConfig({
+        strategyRegistry: registry,
+        afterIngest({ payload }) {
+          ingestedPayload = payload
+          return payload
+        },
+      }),
+    )
+
+    expect(executedPayload).toBe(ingestedPayload)
+  })
+
+  test('does not clone for an unrelated mapping on advertised Messages or Responses models', async () => {
+    interface MessagesPayload {
+      model: string
+      max_tokens: number
+      messages: Array<{ role: 'user', content: string }>
+    }
+    const originalStructuredClone = globalThis.structuredClone
+    let cloneCalls = 0
+    globalThis.structuredClone = ((value: unknown) => {
+      cloneCalls++
+      return originalStructuredClone(value)
+    }) as typeof globalThis.structuredClone
+
+    try {
+      for (const endpoint of ['/v1/messages', '/responses'] as const) {
+        cloneCalls = 0
+        const sourceId = `source-${endpoint}`
+        modelCache.cacheModels(buildModelsResponse(
+          buildModel(sourceId, { supported_endpoints: [endpoint] }),
+          buildModel('unrelated'),
+          buildModel('target'),
+        ))
+        const config_ = getCachedConfig() as Record<string, unknown>
+        config_.overloadFallbacks = { unrelated: 'target' }
+
+        let ingestedPayload: MessagesPayload | undefined
+        let executedPayload: MessagesPayload | undefined
+        const registry = new StrategyRegistry<{
+          payload: MessagesPayload
+          cleanup: () => void
+        }>()
+        registry.register({
+          name: 'clone-count',
+          canHandle: () => true,
+          execute: async ({ payload, cleanup }) => {
+            executedPayload = payload
+            cleanup()
+            return { kind: 'json', data: { ok: true } }
+          },
+        })
+        const body: MessagesPayload = {
+          model: sourceId,
+          max_tokens: 32,
+          messages: [{ role: 'user', content: 'hi' }],
+        }
+
+        await runPipeline<MessagesPayload, {
+          payload: MessagesPayload
+          cleanup: () => void
+        }>(
+          {
+            body,
+            signal: new AbortController().signal,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            requestId: `unrelated-${endpoint}`,
+          },
+          {
+            protocol: 'anthropic-messages',
+            strategyRegistry: registry,
+            afterIngest({ payload }) {
+              ingestedPayload = payload
+              return payload
+            },
+            buildStrategyContext: ({ payload, upstreamSignal }) => ({
+              payload,
+              cleanup: upstreamSignal.cleanup,
+            }),
+          },
+        )
+
+        expect(cloneCalls).toBe(0)
+        expect(executedPayload).toBe(ingestedPayload)
+      }
+    }
+    finally {
+      globalThis.structuredClone = originalStructuredClone
+    }
+  })
+
   test('afterTransform hook observes the resolved model', async () => {
     const captured: TransformContext<SimplePayload>[] = []
     const params = makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'test' }] })
@@ -461,6 +575,7 @@ describe('runPipeline', () => {
     expect(capturedCtx!.modelMapping).toBeDefined()
     expect(capturedCtx!.recovery).toEqual({
       requestId: 'internal-request-id',
+      callerSignal: params.signal,
       retryCount: 0,
     })
     expect(capturedCtx!.recovery).not.toHaveProperty('deadlineMonotonicMs')
@@ -485,6 +600,7 @@ describe('runPipeline', () => {
     expect(capturedCtx!.recovery).toEqual({
       requestId: 'internal-unique-id',
       callerRequestId: 'caller-reused-id',
+      callerSignal: params.signal,
       retryCount: 0,
     })
   })
@@ -547,6 +663,134 @@ describe('runPipeline', () => {
       to: 'target',
     })
     expect(result).toEqual({ kind: 'json', data: { model: 'target', ok: true } })
+  })
+
+  test('shares one absolute upstream timeout across source and fallback attempts', async () => {
+    authStore.upstreamTimeoutSeconds = 60
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.overloadFallbacks = { source: 'target' }
+    modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
+
+    interface Context {
+      model: string
+      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+      upstreamSignal: Parameters<typeof runStrategy>[1] & { deadlineMonotonicMs: number | null }
+    }
+    const deadlines: Array<number | null> = []
+    let attempts = 0
+    const registry = new StrategyRegistry<Context>()
+    registry.register({
+      name: 'shared-timeout-test',
+      canHandle: () => true,
+      execute: async ({ model, recovery, upstreamSignal }) => {
+        deadlines.push(upstreamSignal.deadlineMonotonicMs)
+        attempts++
+        return runStrategy({
+          execute: async () => {
+            if (attempts === 1) {
+              recovery.sourceModel = 'source'
+              throw new TerminalUpstreamRecoveryError(
+                new HTTPError(529, {
+                  error: { message: 'source overloaded', type: 'overloaded_error' },
+                }),
+                recovery,
+              )
+            }
+            return { model }
+          },
+          isStream: (_result): _result is { model: string } & AsyncIterable<never> => false,
+          translateResult: result => result,
+          translateStreamChunk: () => null,
+        }, upstreamSignal)
+      },
+    })
+
+    const result = await runPipeline<SimplePayload, Context>(
+      makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
+      {
+        protocol: 'openai-chat',
+        strategyRegistry: registry,
+        buildStrategyContext: ({ payload, recovery, upstreamSignal }) => ({
+          model: payload.model,
+          recovery,
+          upstreamSignal,
+        }),
+      },
+    )
+
+    expect(deadlines).toHaveLength(2)
+    expect(deadlines[0]).toBe(deadlines[1])
+    expect(result.result).toEqual({ kind: 'json', data: { model: 'target' } })
+  })
+
+  test('does not fetch the fallback target after the shared upstream deadline expires', async () => {
+    authStore.upstreamTimeoutSeconds = 0.001
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.overloadFallbacks = { source: 'target' }
+    modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
+
+    interface Context {
+      model: string
+      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+      upstreamSignal: Parameters<typeof runStrategy>[1]
+    }
+    const queue = new UpstreamRequestQueue({ concurrency: 1, maxRetries: 0 })
+    let sourceError: TerminalUpstreamRecoveryError | undefined
+    let fallbackAttempts = 0
+    let targetFetches = 0
+    const registry = new StrategyRegistry<Context>()
+    registry.register({
+      name: 'expired-fallback-deadline',
+      canHandle: () => true,
+      execute: async ({ model, recovery, upstreamSignal }) => {
+        if (model === 'source') {
+          await Bun.sleep(10)
+          recovery.sourceModel = 'source'
+          sourceError = new TerminalUpstreamRecoveryError(
+            new HTTPError(529, {
+              error: { message: 'source overloaded', type: 'overloaded_error' },
+            }),
+            recovery,
+          )
+          throw sourceError
+        }
+
+        fallbackAttempts++
+        await queue.dispatch(
+          () => {
+            targetFetches++
+            return Promise.resolve(Response.json({ ok: true }))
+          },
+          {
+            url: 'https://api.githubcopilot.com/chat/completions',
+            effectiveModel: 'target',
+            fallbackAttempt: true,
+            recovery,
+          },
+          upstreamSignal.signal,
+        )
+        throw new Error('unreachable')
+      },
+    })
+
+    const thrown = await runPipeline<SimplePayload, Context>(
+      makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
+      {
+        protocol: 'openai-chat',
+        strategyRegistry: registry,
+        buildStrategyContext: ({ payload, recovery, upstreamSignal }) => ({
+          model: payload.model,
+          recovery,
+          upstreamSignal,
+        }),
+      },
+    ).then(() => undefined, error => error)
+
+    expect(thrown).toBe(sourceError)
+    expect(fallbackAttempts).toBe(1)
+    expect(targetFetches).toBe(0)
+    expect(sourceError?.status).toBe(529)
+    expect(sourceError?.recovery.fallbackFetchStarted).toBeFalse()
   })
 
   test('does not fallback for an unconfigured or non-529 terminal outcome', async () => {
@@ -641,6 +885,8 @@ describe('runPipeline', () => {
     const targetError = new HTTPError(429, {
       error: { message: 'target limited', type: 'rate_limit_error' },
     })
+    const queue = new UpstreamRequestQueue({ concurrency: 1, maxRetries: 0 })
+    let targetFetches = 0
     let attempts = 0
     const registry = new StrategyRegistry<{
       payload: SimplePayload
@@ -660,8 +906,19 @@ describe('runPipeline', () => {
             recovery,
           )
         }
-        recovery.fallbackFetchStarted = true
-        throw targetError
+        await queue.dispatch(
+          async () => {
+            targetFetches++
+            throw targetError
+          },
+          {
+            url: 'https://api.githubcopilot.com/chat/completions',
+            effectiveModel: 'target',
+            fallbackAttempt: true,
+            recovery,
+          },
+        )
+        throw new Error('unreachable')
       },
     })
 
@@ -677,6 +934,7 @@ describe('runPipeline', () => {
       },
     )).rejects.toBe(targetError)
     expect(attempts).toBe(2)
+    expect(targetFetches).toBe(1)
   })
 
   test('preserves the source error when target execution fails before fetch', async () => {
@@ -719,55 +977,205 @@ describe('runPipeline', () => {
       },
     )).rejects.toBe(sourceError)
     expect(attempts).toBe(2)
+    expect(sourceError.recovery.fallbackFetchStarted).toBeFalse()
   })
 
-  test('does not execute fallback after caller aborts during target preparation', async () => {
+  test('cleans the fallback upstream signal when target preflight rejects', async () => {
     const config_ = getCachedConfig() as Record<string, unknown>
     config_.overloadFallbacks = { source: 'target' }
     modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
-    const controller = new AbortController()
-    const params = {
-      ...makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
-      signal: controller.signal,
+
+    const listeners = new Set<unknown>()
+    const clientSignal = {
+      aborted: false,
+      addEventListener(_type: string, listener: unknown) {
+        listeners.add(listener)
+      },
+      removeEventListener(_type: string, listener: unknown) {
+        listeners.delete(listener)
+      },
+      throwIfAborted() {},
+    } as unknown as AbortSignal
+    const sourceError = new TerminalUpstreamRecoveryError(
+      new HTTPError(529, {
+        error: { message: 'source overloaded', type: 'overloaded_error' },
+      }),
+      { requestId: 'preflight-cleanup', retryCount: 1, sourceModel: 'source' },
+    )
+
+    interface Context {
+      model: string
+      upstreamSignal: Parameters<typeof runStrategy>[1]
     }
-    let attempts = 0
-    let transforms = 0
-    const registry = new StrategyRegistry<{
-      payload: SimplePayload
-      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-    }>()
+    const registry = new StrategyRegistry<Context>()
     registry.register({
-      name: 'abort-during-prepare-test',
+      name: 'source',
+      canHandle: model => model?.id === 'source',
+      execute: ({ upstreamSignal }) => runStrategy({
+        execute: async () => {
+          throw sourceError
+        },
+        isStream: (_result): _result is never => false,
+        translateResult: result => result,
+        translateStreamChunk: () => null,
+      }, upstreamSignal),
+    })
+    registry.register({
+      name: 'target-preflight',
       canHandle: () => true,
-      execute: async ({ recovery }) => {
-        attempts++
-        recovery.sourceModel = 'source'
-        throw new TerminalUpstreamRecoveryError(
-          new HTTPError(529, {
-            error: { message: 'source overloaded', type: 'overloaded_error' },
-          }),
-          recovery,
-        )
+      execute: async () => {
+        throw new HTTPError(400, {
+          error: { message: 'target translation rejected', type: 'translation_error' },
+        })
       },
     })
 
-    await expect(runPipeline<SimplePayload, {
-      payload: SimplePayload
-      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-    }>(
-      params,
+    await expect(runPipeline<SimplePayload, Context>(
+      {
+        ...makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
+        signal: clientSignal,
+      },
       {
         protocol: 'openai-chat',
         strategyRegistry: registry,
-        afterTransform() {
-          transforms++
-          if (transforms === 2)
-            controller.abort('caller gone')
-        },
-        buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
+        buildStrategyContext: ({ payload, upstreamSignal }) => ({
+          model: payload.model,
+          upstreamSignal,
+        }),
       },
-    )).rejects.toBe('caller gone')
-    expect(attempts).toBe(1)
+    )).rejects.toBe(sourceError)
+    expect(listeners.size).toBe(0)
+  })
+
+  test('fallback events retain production queue metrics for every decision', async () => {
+    const originalInfo = consola.info
+    const events: RecoveryEvent[] = []
+    consola.info = ((message: unknown, fields: unknown) => {
+      if (message === 'Upstream recovery')
+        events.push(fields as RecoveryEvent)
+    }) as typeof consola.info
+
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.overloadFallbacks = { source: 'target' }
+    modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
+    const outcomes = [
+      'succeeded',
+      'pre-fetch-failed',
+      'target-cooldown',
+      'target-failed',
+    ] as const
+
+    try {
+      for (const outcome of outcomes) {
+        events.length = 0
+        const queue = new UpstreamRequestQueue({
+          concurrency: 2,
+          maxRetries: 0,
+        })
+        let sourceError: TerminalUpstreamRecoveryError | undefined
+        const targetError = new HTTPError(429, {
+          error: { message: 'target limited', type: 'rate_limit_error' },
+        })
+
+        interface Context {
+          model: string
+          recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+          upstreamSignal: Parameters<typeof runStrategy>[1]
+        }
+        const registry = new StrategyRegistry<Context>()
+        registry.register({
+          name: `fallback-log-${outcome}`,
+          canHandle: () => true,
+          execute: async ({ model, recovery, upstreamSignal }) => {
+            if (model === 'source') {
+              const queued = await queue.dispatch(
+                () => Promise.resolve(new Response('overloaded', { status: 529 })),
+                {
+                  url: 'https://api.githubcopilot.com/chat/completions',
+                  effectiveModel: 'source',
+                  retryable: 'capacity',
+                  recovery,
+                },
+                upstreamSignal.signal,
+              )
+              queued.release()
+              sourceError = new TerminalUpstreamRecoveryError(
+                new HTTPError(529, {
+                  error: { message: 'source overloaded', type: 'overloaded_error' },
+                }),
+                recovery,
+              )
+              throw sourceError
+            }
+
+            if (outcome === 'succeeded') {
+              upstreamSignal.cleanup()
+              return { kind: 'json', data: { model: 'target' } }
+            }
+            if (outcome === 'pre-fetch-failed') {
+              throw new HTTPError(400, {
+                error: { message: 'target rejected', type: 'translation_error' },
+              })
+            }
+            if (outcome === 'target-cooldown') {
+              throw new FallbackCooldownError({
+                scope: 'model',
+                effectiveModel: 'target',
+                notBeforeMonotonicMs: performance.now() + 1_000,
+              })
+            }
+
+            await queue.dispatch(
+              async () => {
+                throw targetError
+              },
+              {
+                url: 'https://api.githubcopilot.com/chat/completions',
+                effectiveModel: 'target',
+                fallbackAttempt: true,
+                recovery,
+              },
+              upstreamSignal.signal,
+            )
+            throw new Error('unreachable')
+          },
+        })
+
+        const thrown = await runPipeline<SimplePayload, Context>(
+          makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
+          {
+            protocol: 'openai-chat',
+            strategyRegistry: registry,
+            buildStrategyContext: ({ payload, recovery, upstreamSignal }) => ({
+              model: payload.model,
+              recovery,
+              upstreamSignal,
+            }),
+          },
+        ).then(() => undefined, error => error)
+
+        if (outcome === 'succeeded')
+          expect(thrown).toBeUndefined()
+        else if (outcome === 'target-failed')
+          expect(thrown).toBe(targetError)
+        else
+          expect(thrown).toBe(sourceError)
+
+        const fallbackEvents = events.filter(event => event.event === 'fallback')
+        expect(fallbackEvents.map(event => event.decision)).toEqual(['selected', outcome])
+        for (const event of fallbackEvents) {
+          expect(event).toMatchObject({
+            activeSlots: expect.any(Number),
+            maxSlots: 2,
+            pendingDepth: expect.any(Number),
+            maxPendingDepth: 1_000,
+          })
+        }
+      }
+    }
+    finally {
+      consola.info = originalInfo
+    }
   })
 
   test('rejects fallback targets missing an explicitly requested capability', async () => {
@@ -985,6 +1393,55 @@ describe('runPipeline', () => {
         buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
       },
     )).rejects.toMatchObject({ status: 529 })
+    expect(attempts).toBe(1)
+  })
+
+  test('does not execute fallback after caller aborts during target preparation', async () => {
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.overloadFallbacks = { source: 'target' }
+    modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
+    const controller = new AbortController()
+    const params = {
+      ...makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
+      signal: controller.signal,
+    }
+    let attempts = 0
+    let transforms = 0
+    const registry = new StrategyRegistry<{
+      payload: SimplePayload
+      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+    }>()
+    registry.register({
+      name: 'abort-during-prepare-test',
+      canHandle: () => true,
+      execute: async ({ recovery }) => {
+        attempts++
+        recovery.sourceModel = 'source'
+        throw new TerminalUpstreamRecoveryError(
+          new HTTPError(529, {
+            error: { message: 'source overloaded', type: 'overloaded_error' },
+          }),
+          recovery,
+        )
+      },
+    })
+
+    await expect(runPipeline<SimplePayload, {
+      payload: SimplePayload
+      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+    }>(
+      params,
+      {
+        protocol: 'openai-chat',
+        strategyRegistry: registry,
+        afterTransform() {
+          transforms++
+          if (transforms === 2)
+            controller.abort('caller gone')
+        },
+        buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
+      },
+    )).rejects.toBe('caller gone')
     expect(attempts).toBe(1)
   })
 })

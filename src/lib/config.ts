@@ -146,7 +146,7 @@ function sanitizeConfig(config: ConfigFile): ConfigFile {
     return config
   }
 
-  const overloadFallbacks: Record<string, string> = {}
+  const normalizedFallbacks: Record<string, string> = {}
   const invalidSources: string[] = []
   for (const [source, target] of Object.entries(config.overloadFallbacks)) {
     const normalizedSource = source.trim()
@@ -155,7 +155,16 @@ function sanitizeConfig(config: ConfigFile): ConfigFile {
       invalidSources.push(source || '<blank>')
       continue
     }
-    overloadFallbacks[normalizedSource] = normalizedTarget
+    normalizedFallbacks[normalizedSource] = normalizedTarget
+  }
+
+  const overloadFallbacks: Record<string, string> = {}
+  for (const [source, target] of Object.entries(normalizedFallbacks)) {
+    if (normalizedFallbacks[target] === source) {
+      invalidSources.push(source)
+      continue
+    }
+    overloadFallbacks[source] = target
   }
 
   if (invalidSources.length > 0) {

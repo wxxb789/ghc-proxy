@@ -19,7 +19,6 @@ import {
 } from '~/lib/error'
 import { logRecoveryEvent } from '~/lib/request-logger'
 import { formatDurationMs } from '~/util/duration'
-import { sleep as defaultSleep } from '~/util/sleep'
 
 export interface UpstreamRequestQueueOptions {
   concurrency: number
@@ -41,9 +40,17 @@ export interface RecoveryPublicError {
   retryAfter?: string
 }
 
+export interface RecoveryQueueMetrics {
+  activeSlots: number
+  maxSlots: number
+  pendingDepth: number
+  maxPendingDepth: number
+}
+
 export interface UpstreamRecoveryRecord {
   requestId: string
   callerRequestId?: string
+  callerSignal?: AbortSignal
   retryCount: number
   retryLimit?: number
   startedAtMonotonicMs?: number
@@ -52,6 +59,7 @@ export interface UpstreamRecoveryRecord {
   cooldown?: RecoveryCooldownState
   publicError?: RecoveryPublicError
   fallbackFetchStarted?: boolean
+  queueMetrics?: RecoveryQueueMetrics
 }
 
 export interface UpstreamRequestContext {
@@ -103,6 +111,7 @@ interface QueueWaiter {
   reject: (reason: unknown) => void
   signal?: AbortSignal
   onAbort?: () => void
+  wakeAt?: number
 }
 
 interface RetryDelay {
@@ -170,7 +179,7 @@ export class FallbackCooldownError extends Error {
 }
 
 export class UpstreamRequestQueue {
-  private readonly sleep: (ms: number) => Promise<void>
+  private readonly sleep: ((ms: number) => Promise<void>) | undefined
   private readonly now: () => number
   private readonly wallNow: () => number
   private readonly random: () => number
@@ -184,13 +193,14 @@ export class UpstreamRequestQueue {
   private drainTimer: ReturnType<typeof globalThis.setTimeout> | undefined
   private drainTimerAt: number | undefined
   private readonly waiters: QueueWaiter[] = []
+  private readonly terminalRecoveries = new WeakSet<UpstreamRecoveryRecord>()
 
   constructor(
     options: Partial<UpstreamRequestQueueOptions> = {},
     deps: UpstreamRequestQueueDeps = {},
   ) {
     this.options = normalizeOptions(options)
-    this.sleep = deps.sleep ?? defaultSleep
+    this.sleep = deps.sleep
     this.now = deps.now ?? (() => performance.now())
     this.wallNow = deps.wallNow ?? Date.now
     this.random = deps.random ?? Math.random
@@ -211,6 +221,7 @@ export class UpstreamRequestQueue {
   ): Promise<QueuedUpstreamResponse> {
     const recovery = inputContext.recovery ?? {
       requestId: crypto.randomUUID(),
+      ...(signal ? { callerSignal: signal } : {}),
       retryCount: 0,
     }
     const context = { ...inputContext, recovery }
@@ -235,11 +246,72 @@ export class UpstreamRequestQueue {
       this.setRecoveryCooldown(recovery, localCooldown)
       const retryAfter = formatRetryAfter(localCooldown.notBeforeMonotonicMs - this.now())
       recovery.publicError = { status: 529, retryAfter }
+      this.emitTerminal('retry', context, {
+        retryCount: recovery.retryCount,
+        status: 529,
+        scope: 'model',
+        decision: 'local-cooldown',
+      })
       throw new LocalModelCooldownError(
         recovery,
         retryAfter,
       )
     }
+
+    try {
+      return await this.runDispatch(fetcher, context, signal)
+    }
+    catch (error) {
+      const connectionClass = isRetryableConnectionEstablishmentError(error)
+      if (recovery.callerSignal?.aborted) {
+        this.emitTerminal(
+          recovery.startedAtMonotonicMs === undefined ? 'admission' : 'retry',
+          context,
+          { retryCount: recovery.retryCount, decision: 'cancelled' },
+        )
+      }
+      else if (signal?.aborted) {
+        this.emitTerminal('budget', context, {
+          retryCount: recovery.retryCount,
+          status: 504,
+          decision: 'deadline-exceeded',
+        })
+      }
+      else if (
+        (error instanceof HTTPError && error.status === 504)
+        || this.remainingBudget(recovery) === 0
+      ) {
+        this.emitTerminal('budget', context, {
+          retryCount: recovery.retryCount,
+          status: error instanceof HTTPError ? error.status : undefined,
+          decision: 'deadline-exceeded',
+        })
+      }
+      else if (connectionClass && !this.canRetry(recovery)) {
+        this.emitTerminal('retry', context, {
+          retryCount: recovery.retryCount,
+          connectionClass,
+          decision: 'retry-exhausted',
+        })
+      }
+      else if (recovery.startedAtMonotonicMs !== undefined) {
+        this.emitTerminal('retry', context, {
+          retryCount: recovery.retryCount,
+          status: error instanceof HTTPError ? error.status : undefined,
+          connectionClass,
+          decision: 'failed',
+        })
+      }
+      throw error
+    }
+  }
+
+  private async runDispatch(
+    fetcher: (signal?: AbortSignal) => Promise<Response>,
+    context: UpstreamRequestContext & { recovery: UpstreamRecoveryRecord },
+    signal?: AbortSignal,
+  ): Promise<QueuedUpstreamResponse> {
+    const { recovery } = context
 
     let lastConnectionError: unknown
 
@@ -285,69 +357,91 @@ export class UpstreamRequestQueue {
         continue
       }
 
-      const status = response.status
-      const scope = resolveCapacityCooldownScope(status, context.effectiveModel)
-      const capacity = scope !== undefined
-      const mayReplay = context.retryable === 'capacity'
-        ? capacity
-        : context.retryable === true && isTransientUpstreamStatus(status)
+      try {
+        const status = response.status
+        const scope = resolveCapacityCooldownScope(status, context.effectiveModel)
+        const capacity = scope !== undefined
+        const mayReplay = context.retryable === 'capacity'
+          ? capacity
+          : context.retryable === true && isTransientUpstreamStatus(status)
 
-      let retryDelay: RetryDelay | undefined
-      if (capacity) {
-        this.startRecovery(recovery)
-        retryDelay = this.getRetryDelay(response, recovery.retryCount, recovery)
-        this.installCooldown(scope, context.effectiveModel, retryDelay.delayMs, context)
-        recovery.publicError = {
-          status,
-          retryAfter: retryDelay.retryAfter ?? formatRetryAfter(retryDelay.delayMs),
+        let retryDelay: RetryDelay | undefined
+        if (capacity) {
+          this.startRecovery(recovery)
+          retryDelay = this.getRetryDelay(response, recovery.retryCount, recovery)
+          this.installCooldown(scope, context.effectiveModel, retryDelay.delayMs, context)
+          recovery.publicError = {
+            status,
+            retryAfter: retryDelay.retryAfter ?? formatRetryAfter(retryDelay.delayMs),
+          }
         }
-      }
 
-      if (!mayReplay) {
-        return this.committed(response, lease, recovery, capacity ? retryDelay : undefined)
-      }
+        if (!mayReplay) {
+          return this.committed(
+            response,
+            lease,
+            context,
+            capacity ? retryDelay : undefined,
+            capacity ? 'capacity-terminal' : 'upstream-terminal',
+          )
+        }
 
-      this.startRecovery(recovery)
-      if (!capacity)
-        recovery.publicError = { status }
-      retryDelay ??= this.getRetryDelay(response, recovery.retryCount, recovery)
-      const remaining = this.remainingBudget(recovery)
-      const serverMinimumDoesNotFit = retryDelay.source === 'retry-after'
-        && retryDelay.delayMs >= remaining
+        this.startRecovery(recovery)
+        if (!capacity)
+          recovery.publicError = { status }
+        retryDelay ??= this.getRetryDelay(response, recovery.retryCount, recovery)
+        const remaining = this.remainingBudget(recovery)
+        const serverMinimumDoesNotFit = retryDelay.source === 'retry-after'
+          && retryDelay.delayMs >= remaining
 
-      if (!this.canRetry(recovery) || serverMinimumDoesNotFit) {
-        this.emit('budget', context, {
+        if (!this.canRetry(recovery) || serverMinimumDoesNotFit) {
+          const decision = serverMinimumDoesNotFit
+            ? 'server-delay-exceeds-budget'
+            : 'retry-limit'
+          this.emitTerminal('budget', context, {
+            retryCount: recovery.retryCount,
+            status,
+            scope,
+            delaySource: retryDelay.source,
+            delayMs: retryDelay.delayMs,
+            remainingBudgetMs: remaining,
+            decision,
+          })
+          return this.committed(
+            response,
+            lease,
+            context,
+            capacity ? retryDelay : undefined,
+            decision,
+          )
+        }
+
+        discardResponse(response)
+        lease.release()
+        recovery.retryCount++
+        this.logger.warn(
+          [
+            `Upstream ${status};`,
+            `retrying ${formatRequestContext(context)}`,
+            `in ${formatDurationMs(retryDelay.delayMs)}`,
+            `(attempt ${recovery.retryCount}/${recovery.retryLimit})`,
+          ].join(' '),
+        )
+        this.emit('retry', context, {
           retryCount: recovery.retryCount,
           status,
           scope,
           delaySource: retryDelay.source,
           delayMs: retryDelay.delayMs,
-          remainingBudgetMs: remaining,
-          decision: serverMinimumDoesNotFit ? 'server-delay-exceeds-budget' : 'retry-limit',
+          decision: 'retry',
         })
-        return this.committed(response, lease, recovery, capacity ? retryDelay : undefined)
+        await this.waitForRecovery(retryDelay.delayMs, signal, recovery)
       }
-
-      discardResponse(response)
-      lease.release()
-      recovery.retryCount++
-      this.logger.warn(
-        [
-          `Upstream ${status};`,
-          `retrying ${formatRequestContext(context)}`,
-          `in ${formatDurationMs(retryDelay.delayMs)}`,
-          `(attempt ${recovery.retryCount}/${recovery.retryLimit})`,
-        ].join(' '),
-      )
-      this.emit('retry', context, {
-        retryCount: recovery.retryCount,
-        status,
-        scope,
-        delaySource: retryDelay.source,
-        delayMs: retryDelay.delayMs,
-        decision: 'retry',
-      })
-      await this.waitForRecovery(retryDelay.delayMs, signal, recovery)
+      catch (error) {
+        discardResponse(response)
+        lease.release()
+        throw error
+      }
     }
   }
 
@@ -360,12 +454,20 @@ export class UpstreamRequestQueue {
     this.throwIfFallbackCooled(context)
     this.prepareCooldownWait(context)
     this.throwIfRecoveryExpired(context.recovery, causalError)
-    this.drain()
 
-    if (this.active < this.options.concurrency && this.isEligible(context)) {
-      return this.grant(context, 0)
+    const eligible = this.isEligible(context)
+    if (
+      this.active < this.options.concurrency
+      && (eligible || (this.drainTimerAt !== undefined && this.drainTimerAt <= this.now()))
+    ) {
+      this.drain()
+      if (eligible && this.active < this.options.concurrency)
+        return this.grant(context, 0)
     }
 
+    if (this.waiters.length >= this.options.maxQueueDepth) {
+      this.drain()
+    }
     if (this.waiters.length >= this.options.maxQueueDepth) {
       this.emit('admission', context, { decision: 'queue-full' })
       throw new HTTPError(503, {
@@ -389,13 +491,18 @@ export class UpstreamRequestQueue {
             return
           this.waiters.splice(index, 1)
           reject(signal.reason)
-          this.drain()
+          if (
+            waiter.wakeAt === this.drainTimerAt
+            && !this.waiters.some(candidate => candidate.wakeAt === waiter.wakeAt)
+          ) {
+            this.scheduleNextWake()
+          }
         }
         signal.addEventListener('abort', waiter.onAbort, { once: true })
       }
       this.waiters.push(waiter)
       this.emit('admission', context, { decision: 'queued' })
-      this.drain()
+      this.scheduleNextWake(waiter)
     })
   }
 
@@ -456,19 +563,44 @@ export class UpstreamRequestQueue {
     this.scheduleNextWake()
   }
 
-  private scheduleNextWake(): void {
-    let wakeAt: number | undefined
+  private scheduleNextWake(addedWaiter?: QueueWaiter): void {
     const now = this.now()
-
-    for (const waiter of this.waiters) {
-      const cooldown = this.getActiveCooldown(waiter.context.effectiveModel)
-      if (cooldown && cooldown.notBeforeMonotonicMs > now)
-        wakeAt = Math.min(wakeAt ?? Number.POSITIVE_INFINITY, cooldown.notBeforeMonotonicMs)
-      const deadline = waiter.context.recovery.deadlineMonotonicMs
-      if (deadline !== undefined && deadline > now)
-        wakeAt = Math.min(wakeAt ?? Number.POSITIVE_INFINITY, deadline)
+    if (addedWaiter) {
+      const wakeAt = this.getWaiterWakeAt(addedWaiter, now)
+      addedWaiter.wakeAt = wakeAt
+      if (
+        wakeAt === undefined
+        || (this.drainTimerAt !== undefined && wakeAt >= this.drainTimerAt)
+      ) {
+        return
+      }
+      this.replaceDrainTimer(wakeAt, now)
+      return
     }
 
+    let wakeAt: number | undefined
+
+    for (const waiter of this.waiters) {
+      waiter.wakeAt = this.getWaiterWakeAt(waiter, now)
+      if (waiter.wakeAt !== undefined)
+        wakeAt = Math.min(wakeAt ?? Number.POSITIVE_INFINITY, waiter.wakeAt)
+    }
+
+    this.replaceDrainTimer(wakeAt, now)
+  }
+
+  private getWaiterWakeAt(waiter: QueueWaiter, now: number): number | undefined {
+    let wakeAt: number | undefined
+    const cooldown = this.getActiveCooldown(waiter.context.effectiveModel)
+    if (cooldown && cooldown.notBeforeMonotonicMs > now)
+      wakeAt = cooldown.notBeforeMonotonicMs
+    const deadline = waiter.context.recovery.deadlineMonotonicMs
+    if (deadline !== undefined && deadline > now)
+      wakeAt = Math.min(wakeAt ?? Number.POSITIVE_INFINITY, deadline)
+    return wakeAt
+  }
+
+  private replaceDrainTimer(wakeAt: number | undefined, now: number): void {
     if (wakeAt === this.drainTimerAt)
       return
     if (this.drainTimer) {
@@ -571,7 +703,7 @@ export class UpstreamRequestQueue {
     this.emit('cooldown', context, {
       scope,
       delayMs,
-      nextRetryAt: new Date(this.wallNow() + delayMs).toISOString(),
+      nextRetryAt: formatNextRetryAt(this.wallNow() + delayMs),
       decision: scope === 'request' ? 'request-local' : 'installed',
     })
     this.drain()
@@ -657,7 +789,13 @@ export class UpstreamRequestQueue {
       throw lastConnectionError ?? createLocalCapacityError(recovery)
     const deadline = createDeadlineSignal(signal, remaining, this.setTimer, this.clearTimer)
     try {
-      await abortableSleep(this.sleep, delayMs, deadline.signal)
+      await abortableSleep(
+        this.sleep,
+        delayMs,
+        deadline.signal,
+        this.setTimer,
+        this.clearTimer,
+      )
     }
     catch (error) {
       if (signal?.aborted)
@@ -691,15 +829,24 @@ export class UpstreamRequestQueue {
       const response = await fetcher(deadline.signal)
       if (this.now() >= recovery.deadlineMonotonicMs) {
         discardResponse(response)
-        throw new RecoveryBudgetError(lastConnectionError ?? createLocalCapacityError(recovery))
+        throw new RecoveryBudgetError(
+          recovery.fallbackFetchStarted
+            ? createRecoveryTimeoutError()
+            : lastConnectionError ?? createLocalCapacityError(recovery),
+        )
       }
       return response
     }
     catch (error) {
       if (signal?.aborted)
         throw signal.reason
-      if (deadline.timedOut())
-        throw new RecoveryBudgetError(lastConnectionError ?? createLocalCapacityError(recovery))
+      if (deadline.timedOut()) {
+        throw new RecoveryBudgetError(
+          recovery.fallbackFetchStarted
+            ? createRecoveryTimeoutError()
+            : lastConnectionError ?? createLocalCapacityError(recovery),
+        )
+      }
       throw error
     }
     finally {
@@ -710,9 +857,19 @@ export class UpstreamRequestQueue {
   private committed(
     response: Response,
     lease: QueueLease,
-    recovery: UpstreamRecoveryRecord,
+    context: UpstreamRequestContext & { recovery: UpstreamRecoveryRecord },
     retryDelay?: RetryDelay,
+    terminalDecision = 'upstream-terminal',
   ): QueuedUpstreamResponse {
+    const { recovery } = context
+    if (recovery.startedAtMonotonicMs !== undefined) {
+      this.emitTerminal('retry', context, {
+        retryCount: recovery.retryCount,
+        status: response.status,
+        scope: resolveCapacityCooldownScope(response.status, context.effectiveModel),
+        decision: response.ok ? 'recovered' : terminalDecision,
+      })
+    }
     return {
       response: retryDelay
         ? ensureRetryAfter(response, retryDelay.retryAfter ?? formatRetryAfter(retryDelay.delayMs))
@@ -727,17 +884,21 @@ export class UpstreamRequestQueue {
     context: UpstreamRequestContext & { recovery: UpstreamRecoveryRecord },
     fields: Omit<RecoveryEvent, 'requestId' | 'event' | 'effectiveModel' | 'activeSlots' | 'maxSlots' | 'pendingDepth' | 'maxPendingDepth'>,
   ): void {
-    if (!this.logger.info)
-      return
     const recovery = context.recovery
-    logRecoveryEvent({
-      requestId: recovery.requestId,
-      event,
-      effectiveModel: context.effectiveModel,
+    recovery.queueMetrics = {
       activeSlots: this.active,
       maxSlots: this.options.concurrency,
       pendingDepth: this.waiters.length,
       maxPendingDepth: this.options.maxQueueDepth,
+    }
+    if (!this.logger.info)
+      return
+    logRecoveryEvent({
+      requestId: recovery.requestId,
+      callerRequestId: recovery.callerRequestId,
+      event,
+      effectiveModel: context.effectiveModel,
+      ...recovery.queueMetrics,
       ...(recovery.startedAtMonotonicMs !== undefined
         ? {
             elapsedMs: Math.max(0, this.now() - recovery.startedAtMonotonicMs),
@@ -746,6 +907,17 @@ export class UpstreamRequestQueue {
         : {}),
       ...fields,
     }, { info: this.logger.info.bind(this.logger) })
+  }
+
+  private emitTerminal(
+    event: RecoveryEvent['event'],
+    context: UpstreamRequestContext & { recovery: UpstreamRecoveryRecord },
+    fields: Omit<RecoveryEvent, 'requestId' | 'event' | 'effectiveModel' | 'activeSlots' | 'maxSlots' | 'pendingDepth' | 'maxPendingDepth'>,
+  ): void {
+    if (this.terminalRecoveries.has(context.recovery))
+      return
+    this.terminalRecoveries.add(context.recovery)
+    this.emit(event, context, fields)
   }
 
   private cleanupWaiter(waiter: QueueWaiter): void {
@@ -842,6 +1014,11 @@ function formatRetryAfter(delayMs: number): string {
   return String(Math.max(0, Math.ceil(delayMs / 1_000)))
 }
 
+function formatNextRetryAt(timestampMs: number): string | undefined {
+  const retryAt = new Date(timestampMs)
+  return Number.isNaN(retryAt.getTime()) ? undefined : retryAt.toISOString()
+}
+
 function formatRequestContext(context: UpstreamRequestContext): string {
   try {
     const url = new URL(context.url)
@@ -853,24 +1030,37 @@ function formatRequestContext(context: UpstreamRequestContext): string {
 }
 
 function abortableSleep(
-  sleep: (ms: number) => Promise<void>,
+  sleep: ((ms: number) => Promise<void>) | undefined,
   ms: number,
   signal?: AbortSignal,
+  setTimer: typeof globalThis.setTimeout = globalThis.setTimeout,
+  clearTimer: typeof globalThis.clearTimeout = globalThis.clearTimeout,
 ): Promise<void> {
-  if (!signal)
+  if (sleep && !signal)
     return sleep(ms)
-  signal.throwIfAborted()
-  const abortSignal = signal
+  signal?.throwIfAborted()
 
   return new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof globalThis.setTimeout> | undefined
     function cleanup() {
-      abortSignal.removeEventListener('abort', onAbort)
+      if (timer !== undefined)
+        clearTimer(timer)
+      signal?.removeEventListener('abort', onAbort)
     }
     function onAbort() {
       cleanup()
-      reject(abortSignal.reason)
+      reject(signal?.reason)
     }
-    abortSignal.addEventListener('abort', onAbort, { once: true })
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    if (!sleep) {
+      timer = setTimer(() => {
+        cleanup()
+        resolve()
+      }, ms)
+      return
+    }
+
     sleep(ms).then(
       () => {
         cleanup()
@@ -913,6 +1103,15 @@ class RecoveryBudgetError extends Error {
     this.name = 'RecoveryBudgetError'
     this.cause = cause
   }
+}
+
+function createRecoveryTimeoutError(): HTTPError {
+  return new HTTPError(504, {
+    error: {
+      message: localCapacityErrorMessage(504),
+      type: 'timeout_error',
+    },
+  })
 }
 
 function createLocalCapacityError(recovery: UpstreamRecoveryRecord): HTTPError {

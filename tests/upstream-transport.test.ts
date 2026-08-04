@@ -279,8 +279,12 @@ describe('UpstreamRequestQueue', () => {
     )
 
     const controller = new AbortController()
+    let cancelledFetches = 0
     const blocked = queue.dispatch(
-      () => Promise.resolve(new Response('should not run')),
+      () => {
+        cancelledFetches++
+        return Promise.resolve(new Response('should not run'))
+      },
       { url: 'https://test' },
       controller.signal,
     )
@@ -290,6 +294,16 @@ describe('UpstreamRequestQueue', () => {
 
     await expect(blocked).rejects.toBe('client disconnected')
     first.release()
+    for (let index = 0; index < 5; index++)
+      await Promise.resolve()
+    expect(cancelledFetches).toBe(0)
+
+    const next = await queue.dispatch(
+      () => Promise.resolve(new Response('ok')),
+      { url: 'https://test' },
+    )
+    expect(await next.response.text()).toBe('ok')
+    next.release()
   })
 
   test('aborts backoff sleep when signal fires during retry wait', async () => {
@@ -869,7 +883,11 @@ describe('upstream error diagnostics', () => {
   test('threads the serialized model and pipeline recovery into a typed terminal 529', async () => {
     consola.error = ((..._args: unknown[]) => {}) as typeof consola.error
     const events: Array<Record<string, unknown>> = []
-    const recovery = { requestId: 'pipeline-request', retryCount: 0 }
+    const recovery = {
+      requestId: 'pipeline-request',
+      callerRequestId: 'caller-request',
+      retryCount: 0,
+    }
     let serializedModel: unknown
     const requestQueue = new UpstreamRequestQueue(
       { concurrency: 1, maxRetries: 0, recoveryBudgetMs: 1_000 },
@@ -918,6 +936,7 @@ describe('upstream error diagnostics', () => {
     expect((error as TerminalUpstreamRecoveryError).toResponse().headers.get('retry-after')).toBe('3')
     expect(events).toContainEqual(expect.objectContaining({
       requestId: 'pipeline-request',
+      callerRequestId: 'caller-request',
       effectiveModel: 'claude-opus-5',
       activeSlots: 1,
       maxSlots: 1,
