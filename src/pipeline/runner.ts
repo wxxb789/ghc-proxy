@@ -358,7 +358,7 @@ function validateFallback(
   if (requestsTools(payload) && !modelCache.supportsToolCalls(target))
     return { ok: false, reason: 'unsupported-tools' }
   if (
-    requestsParallelToolCalls(payload)
+    requestsParallelToolCalls(protocol, payload)
     && target.capabilities.supports.parallel_tool_calls !== true
   ) {
     return { ok: false, reason: 'unsupported-parallel-tools' }
@@ -387,7 +387,9 @@ function requestsTools(payload: unknown): boolean {
   return Array.isArray(tools) && tools.length > 0
 }
 
-function requestsParallelToolCalls(payload: unknown): boolean {
+function requestsParallelToolCalls(protocol: ProtocolId, payload: unknown): boolean {
+  if (protocol === 'anthropic-messages')
+    return requestsTools(payload)
   return asRecord(payload)?.parallel_tool_calls === true
 }
 

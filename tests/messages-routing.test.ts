@@ -1099,6 +1099,59 @@ describe('messages routing', () => {
     })
   })
 
+  test('/v1/messages preserves source 529 when target lacks parallel tool calls', async () => {
+    const app = createApp()
+    const source = buildModel('messages-source', {
+      supported_endpoints: ['/v1/messages'],
+    })
+    const target = buildModel('responses-target', {
+      supported_endpoints: ['/responses'],
+    })
+    target.capabilities.supports.parallel_tool_calls = false
+    modelCache.cacheModels(buildModelsResponse(source, target))
+    const config = getCachedConfig() as Record<string, unknown>
+    config.overloadFallbacks = { 'messages-source': 'responses-target' }
+
+    const sourceError = new HTTPError(529, {
+      error: { message: 'source overloaded', type: 'overloaded_error' },
+    }, { headers: { 'retry-after': '7' } })
+    let sourceCalls = 0
+    let targetCalls = 0
+    CopilotClient.prototype.createMessages = (async () => {
+      sourceCalls++
+      throw new TerminalUpstreamRecoveryError(sourceError, {
+        requestId: 'parallel-tools-fallback',
+        retryCount: 1,
+        sourceModel: 'messages-source',
+      })
+    }) as typeof CopilotClient.prototype.createMessages
+    CopilotClient.prototype.createResponses = (async () => {
+      targetCalls++
+      return buildResponsesResult({ model: 'responses-target', status: 'completed' })
+    }) as typeof CopilotClient.prototype.createResponses
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'messages-source',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'look this up' }],
+        tools: [{
+          name: 'lookup',
+          description: 'Look up a value',
+          input_schema: { type: 'object', properties: {} },
+        }],
+      }),
+    }))
+
+    expect(response.status).toBe(529)
+    expect(response.headers.get('retry-after')).toBe('7')
+    expect(await response.json()).toEqual({ type: 'error', ...sourceError.body })
+    expect(sourceCalls).toBe(1)
+    expect(targetCalls).toBe(0)
+  })
+
   test('small-model routing preserves vision capability requirements', async () => {
     const app = createApp()
     const chatCalls: Array<CapturedChatCall> = []
