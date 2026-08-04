@@ -1,132 +1,81 @@
 # Upstream Request Queue
 
-## Problem
-
-Copilot can return HTTP 429 for service-wide, account-wide, or model-family limits, and 529 when the upstream is overloaded. The `/v1/messages` upstream currently does not expose a stable public quota that ghc-proxy can encode as a fixed local rate. Some 429 responses are plain text (`too many requests`) and may not include a precise reset time.
-
-Returning the first transient failure directly makes the proxy available only when Copilot has spare capacity at the exact request instant. For agent clients, that breaks long-running workflows even when a short wait would have succeeded.
-
-## Design Goals
-
-- Keep protocol routes focused on validation, routing, and translation.
-- Centralize upstream back-pressure in the Copilot transport boundary.
-- Prefer delayed success over immediate 429 when the upstream limit is temporary.
-- Preserve correct final errors when retries are exhausted.
-- Avoid unbounded retries, unbounded concurrency, or hidden per-route behavior.
-
-## Architecture
-
-`UpstreamRequestQueue` lives in `src/clients/upstream-queue.ts` and is injected into `CopilotClient` by `createCopilotClient()`.
+`UpstreamRequestQueue` centralizes Copilot admission, capacity cooldowns, bounded pre-`Response` recovery, and cleanup below all public protocol routes.
 
 ```text
-Route Handler
-  -> Strategy / Adapter / Translator
-    -> CopilotClient
-      -> UpstreamRequestQueue
-        -> fetch(api.githubcopilot.com / api.enterprise.githubcopilot.com)
+Route -> strategy -> CopilotClient -> UpstreamRequestQueue -> Copilot
 ```
 
-The queue is below all public API protocol logic. This keeps Anthropic, OpenAI, and Responses compatibility independent from Copilot's transient capacity behavior.
+The singleton queue is created in `src/clients/factory.ts`. `src/start.ts` reads CLI/config values and calls `configureUpstreamRequestQueue()` directly; queue startup settings are not queried through `ConfigStore`.
 
-## Runtime Behavior
+## Admission and Cooldown Scope
 
-1. Requests acquire a global upstream queue slot before calling Copilot.
-2. The default queue concurrency is `10`, so up to 10 upstream requests can occupy queue slots at the same time.
-3. If upstream returns a non-transient response, the response is handed back to `CopilotClient`.
-4. If upstream returns a status this request may replay (see Retry scope below) and retry budget remains:
-   - The response body is discarded.
-   - A retry delay is selected from `Retry-After` when present.
-   - Otherwise exponential backoff is used.
-   - For capacity limits (`429`, `529`) the global queue enters cooldown so other queued requests do not immediately hit the same limit.
-   - The same request is retried after the delay.
-5. If retry budget is exhausted, the final response is passed to normal upstream error handling.
+The queue holds one process-global active-slot count, one process-global pending list, one account deadline, and a deadline map keyed by final effective upstream model.
 
-### Retry scope vs. cooldown scope
+| Upstream outcome | Cooldown scope | Effect |
+|---|---|---|
+| `429` | account | Blocks every new grant until the full deadline |
+| `529` with effective model | model | Blocks only requests for that serialized model |
+| `529` without effective model | request | Does not create shared cooldown state |
+| other status/connection failure | none | No shared cooldown |
 
-These are two different decisions and the queue treats them separately.
+Capacity cooldown is installed before the triggering lease is released, including when retry count is zero or exhausted. Pending work stays FIFO among currently eligible requests: the drain skips cooled-model waiters and grants the oldest eligible waiter. If a global slot is free, cooled waiters occupying pending depth do not make an eligible request fail admission.
 
-Which statuses may be replayed depends on what a duplicate would cost, declared
-per call site as `UpstreamRequestContext.retryable`:
+One coalesced timer tracks the earliest shared deadline. A wake grants at most the number of free global slots. Active streams still hold slots, and both active-slot capacity and maximum pending depth remain shared across every model. When all slots are occupied and pending depth is full, an unrelated model can still receive the existing queue-full `503`; this design does not provide per-model reservations or quotas.
 
-| Request | `retryable` | Replays |
-|---------|-------------|---------|
-| Completions (`/v1/messages`, `/chat/completions`, `/responses`) | `'capacity'` | `429`, `529` |
-| Effect-free reads and `/embeddings` | `true` | `408`, `429`, `500`, `502`, `503`, `504`, `529` |
-| `DELETE /responses/{id}` | omitted | none |
+## Retry Policy
 
-A completion request bills a generation, and an upstream 5xx does **not** mean
-the request was refused — it may have been fully processed before failing. No
-HTTP status proves otherwise: a proxy stream-idle timeout surfaces as `408`, and
-Envoy maps upstream connection termination to `503`. Replaying one can therefore
-spend quota twice for a single client request, so completions replay only the
-two statuses where the upstream declined to serve rather than failed while
-serving. That is a lower prior on duplicated work, not a guarantee.
+`UpstreamRequestContext.retryable` declares what one call site may replay:
 
-Retrying a non-idempotent 5xx is a decision about whether a duplicate is
-acceptable, which the client owns — the Anthropic and OpenAI SDKs and Claude
-Code all retry 5xx at their own boundary.
+| Request kind | Value | HTTP statuses |
+|---|---|---|
+| Generation (`/v1/messages`, `/chat/completions`, `/responses`) | `'capacity'` | `429`, `529` |
+| Effect-free request | `true` | `408`, `429`, `500`, `502`, `503`, `504`, `529` |
+| Non-replayable request | omitted | none |
 
-Cooldown scope is a separate axis and unchanged:
+Generation and effect-free requests may also retry the measured connection-establishment allowlist: Bun `ConnectionRefused`, or Node `ECONNREFUSED`, `ENOTFOUND`, and `EAI_AGAIN` found in the bounded cause chain. Caller aborts, all timeout shapes, TLS/configuration failures, resets, top-level generic fetch errors, body parsing, and stream failures are excluded.
 
-| Status | Global cooldown |
-|--------|-----------------|
-| `429`, `529` | Yes — the limit is account- or service-wide |
-| `408`, `500`, `502`, `503`, `504` | No — request-scoped fault |
-| everything else | No |
+The default is one retry after the original attempt; configuration accepts `0..2`. Capacity and approved connection failures share that counter. A configured overload fallback is a separate single dispatch and receives no new retry allowance, so the default maximum is original + one same-model retry + one fallback.
 
-A request-scoped 5xx says one request failed, not that the account is out of capacity. Applying a queue-wide cooldown there would let a single bad gateway hop stall every other in-flight request.
+## Recovery Deadline and Pacing
 
-**Streaming is safe by construction.** `dispatch` returns the response only once
-no retry will follow (`upstream-queue.ts`, the single `return` inside the loop),
-so a replay can never happen after bytes have reached the client.
+The initial attempt keeps the normal `upstreamTimeoutSeconds`. At the first approved retryable outcome or the first encounter with an already-active cooldown, the queue creates one recovery record with a monotonic deadline. The budget defaults to 60 seconds and accepts `1..120`; it covers all later cooldown/backoff waits, queue acquisition, retry attempts until `fetch()` returns a `Response`, and overload fallback.
 
-Queue concurrency counts active upstream occupancy, not just the moment a request is started. For non-streaming responses, the slot is released after the response body is parsed. For streaming responses, the slot is released only when the returned upstream stream is consumed or closed. This prevents the proxy from starting another expensive upstream request while one stream is still active.
+`Retry-After` parsing accepts a complete non-negative integer-seconds value, a complete fractional-seconds provider extension, or a strict HTTP-date. A valid value is a lower bound:
 
-## Defaults
+- the full server deadline is stored in account/model cooldown state;
+- `upstreamQueueMaxDelaySeconds` never clamps it;
+- if the wait does not fit the remaining request budget, same-model retry stops instead of firing early;
+- the terminal source capacity result retains the source header, while a local cooldown result synthesizes rounded-up remaining seconds.
 
-| Setting | Default | Reason |
-|---------|---------|--------|
-| `concurrency` | `10` | Allows moderate parallelism while still applying global back-pressure |
-| `maxRetries` | `5` | Avoid immediate failure while keeping retry duration bounded |
-| `baseDelayMs` | `2000` | Fast first recovery when upstream omits `Retry-After` |
-| `maxDelayMs` | `60000` | Avoid runaway sleep on malformed or excessive headers |
+Without a valid header, full jitter is selected from `0` through:
 
-Worst-case backoff without `Retry-After` is about a minute before returning the final 429. This is intentionally below the default upstream timeout.
-
-## Configuration
-
-These settings are configurable through the `start` command:
-
-| CLI Flag | Unit | Default |
-|----------|------|---------|
-| `--upstream-queue-concurrency` | requests | `10` |
-| `--upstream-queue-retries` | retries | `5` |
-| `--upstream-queue-base-delay` | seconds | `2` |
-| `--upstream-queue-max-delay` | seconds | `60` |
-
-Raising concurrency improves throughput only when upstream capacity allows it. When the active limit is model-family or account-wide, higher concurrency can amplify 429s.
-
-The same settings can be persisted in `~/.local/share/ghc-proxy/config.json`:
-
-```json
-{
-  "upstreamQueueConcurrency": 10,
-  "upstreamQueueMaxRetries": 5,
-  "upstreamQueueBaseDelaySeconds": 2,
-  "upstreamQueueMaxDelaySeconds": 60
-}
+```text
+min(baseDelay * 2^retryCount, maxDelay, remainingRecoveryBudget)
 ```
 
-CLI flags override config file values for the current process.
+`maxDelay` therefore caps computed backoff only. Every wait and queued acquisition observes caller cancellation and removes its timer/listener state.
 
-## Error Handling
+## Response Commit Boundary
 
-The queue classifies transient upstream statuses with `isTransientUpstreamStatus()` in `src/lib/error.ts` — the same predicate the Copilot token refresh uses, where retrying is unconditionally safe — and narrows to `isCapacityLimitStatus()` for requests that bill a generation. Other statuses (`400`, `401`, `404`, ...) are returned immediately; retrying a request that can never succeed only multiplies it.
+For any status the call site has not explicitly authorized the queue to handle privately, `fetch()` resolving to a `Response` commits the attempt. Before a retry, the private response body is cancelled and its lease is released. After a deliverable `Response` is returned, the lease remains active until body parsing or stream consumption finishes.
 
-The final exhausted response is still processed by `throwUpstreamError`, which:
+A `200` stream that fails before its first downstream event is still committed. JSON errors, body timeouts, and mid-stream disconnects do not enter retry or overload fallback. Caller cancellation and normal delivery timeout handling remain live after recovery listeners are disarmed.
 
-- forwards structured upstream error bodies as-is,
-- returns plain-text upstream bodies as the client-facing message,
-- classifies HTTP 429 as `rate_limit_error`.
+## Defaults and Configuration
 
-This means better error messages are a fallback, not the first mitigation.
+| CLI | `config.json` | Default | Bounds/meaning |
+|---|---|---|---|
+| `--upstream-queue-concurrency` | `upstreamQueueConcurrency` | `10` | positive integer active slots |
+| `--upstream-queue-retries` | `upstreamQueueMaxRetries` | `1` | `0..2` retries |
+| `--upstream-recovery-budget` | `upstreamRecoveryBudgetSeconds` | `60` | `1..120` seconds |
+| `--upstream-queue-base-delay` | `upstreamQueueBaseDelaySeconds` | `2` | computed backoff base |
+| `--upstream-queue-max-delay` | `upstreamQueueMaxDelaySeconds` | `60` | computed backoff cap only |
+
+CLI values override the corresponding config fields for that process. Migrating from releases that defaulted to five retries requires no config change: absent `upstreamQueueMaxRetries` now means one. Values above two are rejected rather than silently preserving the old retry multiplier.
+
+## Diagnostics and Public Errors
+
+Recovery events use the existing request ID and the allowlisted fields in `src/lib/request-logger.ts`: `event`, `retryCount`, `status`, `connectionClass`, `effectiveModel`, `scope`, active/max slots, pending/max depth, queue wait, delay source/delay, elapsed/remaining budget, `nextRetryAt`, and `decision`. The model trace records a successful substitution as `OVERLOAD_FALLBACK`.
+
+Logs do not serialize prompts, payloads, tools, authorization data, tokens, or credential-derived account IDs. Public errors keep their Anthropic/OpenAI-compatible payload and safe standard `Retry-After`; the queue does not add retry-progress SSE events, custom recovery headers, or a metrics endpoint.

@@ -149,6 +149,12 @@ The two type parameters let each route keep its own payload and strategy context
 4. **afterTransform hook** (optional) -- runs after model transformation. The chat-completions handler uses this to calculate token counts and set `max_tokens` defaults.
 5. **Dispatch** -- creates a `CopilotClient` and upstream signal, builds the strategy context via `buildStrategyContext()`, selects the strategy from the `StrategyRegistry`, and executes it.
 
+`runPipeline()` also owns the only overload-fallback branch. It preserves pristine post-ingest input before the source attempt. After a terminal source-model `529` (or a pre-existing local source cooldown), it looks up one exact `overloadFallbacks` target, validates advertised capabilities, and calls the same preparation boundary again with that target. This reruns transforms, capability checks, strategy-context construction, and registry selection without reapplying source model resolution. The target dispatch receives no new retry allowance and cannot trigger another fallback.
+
+Fallback preflight failures preserve the source `529`. If target fetch begins, the target result becomes authoritative. A successful result rewrites known model identity fields in JSON or SSE to the actual target and appends `OVERLOAD_FALLBACK` to the access-log trace. Responses emulator persistence therefore records the served target, not the failed source.
+
+The replay boundary is earlier than delivery: once `strategy.execute()` obtains an upstream `Response`, the queue has committed the request. `runStrategy()` may later translate JSON, iterate a stream, or emit a protocol error, but a body failure or stream failure before the first client event never re-enters retry or fallback. Caller cancellation and normal upstream timeout cleanup remain active during delivery; the recovery deadline covers only pre-`Response` work.
+
 ### Configuration
 
 ```typescript

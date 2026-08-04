@@ -17,7 +17,7 @@ When a client requests a model ID (e.g., `claude-sonnet-4.6`), the resolver chec
 
 ### Configuration
 
-Fallbacks can be configured via environment variables or config file (`~/.ghc-proxy/config.json`):
+Fallbacks can be configured via environment variables or config file (`~/.local/share/ghc-proxy/config.json`):
 
 ```text
 MODEL_FALLBACK_CLAUDE_OPUS      → config.modelFallback.claudeOpus
@@ -31,6 +31,26 @@ claudeOpus:   claude-opus-5
 claudeSonnet: claude-sonnet-5
 claudeHaiku:  claude-haiku-4.5
 ```
+
+### Overload Fallback
+
+Overload fallback is not the missing-model fallback above. It starts only after normal model rewrite, compact routing, and family resolution have produced a valid final effective source model that reaches a terminal `529` or is already locally cooled.
+
+`config.json` may opt in with exact advertised IDs:
+
+```json
+{
+  "overloadFallbacks": {
+    "claude-opus-5": "claude-opus-4.8"
+  }
+}
+```
+
+There is no default mapping. A target must differ from the source, exist in the cached advertised model list, not be behind an account or target-model cooldown, and satisfy the request's endpoint, tool, parallel-tool, streaming, vision, reasoning/thinking, and structured-output requirements. `/responses` targets must advertise `/responses`; Messages re-runs its normal strategy registry for the selected target.
+
+The pipeline rebuilds the fallback attempt from pristine post-ingest input, reapplies target-dependent transforms and capability checks, and appends `OVERLOAD_FALLBACK` as the last model trace step. It dispatches once without a new retry allowance. Successful JSON/SSE output and persisted Responses emulator records disclose the actual target model. Preflight rejection preserves the source `529`; once target fetch starts, any target failure is final.
+
+Mappings are exact one-hop choices, not a fallback graph. Reciprocal mappings are valid because a request never follows a second edge. Fallback does not run for account `429`, connection failures, timeouts, cancellation, other HTTP statuses, validation failures, or failures after any upstream `Response` has committed.
 
 ## Model Capabilities
 

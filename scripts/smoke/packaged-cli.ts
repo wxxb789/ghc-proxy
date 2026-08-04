@@ -117,7 +117,7 @@ async function main() {
     runSelfcheck('bun', packagedBinPath, installRoot)
     runSelfcheck('node', packagedBinPath, installRoot)
 
-    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (5 tokenizer chunks loaded under bun + node)`)
+    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (11 tokenizer/runtime probes passed under bun + node)`)
   }
   finally {
     if (tarballPath) {
@@ -134,11 +134,35 @@ interface SelfcheckProbe {
   error?: string
 }
 
+interface RuntimeProbe {
+  name: string
+  ok: boolean
+  error?: string
+}
+
 interface SelfcheckReport {
   ok?: boolean
   probes?: Array<SelfcheckProbe>
+  runtimeProbes?: Array<RuntimeProbe>
   failedCount?: number
 }
+
+const EXPECTED_TOKENIZER_PROBES = [
+  'o200k_base',
+  'cl100k_base',
+  'p50k_base',
+  'p50k_edit',
+  'r50k_base',
+]
+
+const EXPECTED_RUNTIME_PROBES = [
+  'http-error-response-contract',
+  'connection-error-classification',
+  'response-body-cancellation',
+  'response-commit-boundary',
+  'caller-cancellation',
+  'protocol-payload-contract',
+]
 
 function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: string): void {
   const result = Bun.spawnSync([runtime, packagedBinPath, 'selfcheck', '--json'], {
@@ -155,13 +179,23 @@ function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: str
   const report = tryParseJsonOrUndefined<SelfcheckReport>(stdout)
 
   if (report) {
-    const failures = (report.probes ?? []).filter(p => !p.ok)
-    if (report.ok && report.failedCount === 0 && failures.length === 0) {
+    const tokenizerProbes = report.probes ?? []
+    const runtimeProbes = report.runtimeProbes ?? []
+    const failures = [
+      ...tokenizerProbes.filter(p => !p.ok).map(p => `${p.encoding}: ${p.error ?? 'unknown error'}`),
+      ...runtimeProbes.filter(p => !p.ok).map(p => `${p.name}: ${p.error ?? 'unknown error'}`),
+    ]
+    const missing = [
+      ...missingProbeNames(EXPECTED_TOKENIZER_PROBES, tokenizerProbes.map(p => p.encoding)),
+      ...missingProbeNames(EXPECTED_RUNTIME_PROBES, runtimeProbes.map(p => p.name)),
+    ]
+    if (report.ok && report.failedCount === 0 && failures.length === 0 && missing.length === 0) {
       return
     }
-    const detail = failures.length > 0
-      ? failures.map(p => `  - ${p.encoding}: ${p.error ?? 'unknown error'}`).join('\n')
-      : '  (probes array empty or shape unexpected)'
+    const detail = [
+      ...failures.map(failure => `  - ${failure}`),
+      ...missing.map(name => `  - missing required probe: ${name}`),
+    ].join('\n') || '  (selfcheck report shape unexpected)'
     throw new Error(
       `Packaged CLI selfcheck under '${runtime}' reported failures:\n${detail}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
     )
@@ -170,6 +204,11 @@ function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: str
   throw new Error(
     `Packaged CLI selfcheck under '${runtime}' produced no parseable JSON (exit ${result.exitCode}).\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
   )
+}
+
+function missingProbeNames(expected: Array<string>, actual: Array<string>): Array<string> {
+  const actualNames = new Set(actual)
+  return expected.filter(name => !actualNames.has(name))
 }
 
 await main()

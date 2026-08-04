@@ -54,3 +54,14 @@ A conversation-summarization request, identified by a recognizable system-prompt
 
 ### Model fallback
 Resolution of a requested model family prefix (e.g. `claude-opus-*`) to a concrete Copilot model when no exact match exists. Distinct from a model rewrite, which substitutes a specific configured `from` pattern for a `to` model across all endpoints.
+
+### Overload fallback
+An opt-in, exact effective-model mapping used only after a terminal model-scoped `529` or a pre-existing local cooldown for that source model. It is not missing-model resolution: the source was valid, but temporarily overloaded. The pipeline may rebuild and dispatch one compatible advertised target with no fresh retry allowance, then discloses the actual served model. Mappings are one-hop choices rather than a traversed graph, so reciprocal entries are valid and cannot create a per-request fallback loop.
+
+## Upstream Recovery
+
+### Cooldown scope
+The set of requests held behind one upstream capacity deadline. A `429` creates an account cooldown, a `529` with a known final effective model creates a cooldown only for that model, and a model-less `529` remains request-scoped. Scope controls admission; it does not cancel active streams or reserve per-model queue capacity.
+
+### Recovery budget
+The one request-local monotonic deadline created at the first approved retryable outcome or the first encounter with an already-active cooldown. It defaults to 60 seconds and covers later cooldown/backoff waits, queue acquisition, attempts until `fetch()` returns a `Response`, and an optional overload fallback. The first attempt uses the normal upstream timeout. A committed `Response` ends recovery timing; body and stream handling continue under their normal timeout and are never replayed.
