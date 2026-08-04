@@ -3,7 +3,7 @@ import { node } from '@elysiajs/node'
 import { Elysia } from 'elysia'
 
 import { HTTPError } from './lib/error'
-import { formatElapsed, getRequestModelMapping, logRequest, setRequestModelMapping } from './lib/request-logger'
+import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, logRequest, setRequestModelMapping } from './lib/request-logger'
 import { isTimeoutLikeError } from './lib/timeout-error'
 import { createCompletionRoutes } from './routes/chat-completions/route'
 import { createEmbeddingRoutes } from './routes/embeddings/route'
@@ -75,9 +75,10 @@ export function createServer(options?: ServerOptions) {
     .error({ HTTP: HTTPError })
     .derive(({ request }) => ({
       requestStart: Date.now(),
-      requestId: request.headers.get('x-request-id') ?? crypto.randomUUID(),
+      ...getOrCreateRequestCorrelation(request),
     }))
-    .onBeforeHandle(({ body, request }) => {
+    .onBeforeHandle(({ body, request, responseRequestId, set }) => {
+      set.headers['x-request-id'] = responseRequestId
       if (request.method !== 'POST')
         return
       const model = body && typeof body === 'object' && 'model' in body
@@ -88,7 +89,6 @@ export function createServer(options?: ServerOptions) {
       }
     })
     .onAfterResponse(({ request, requestStart, requestId, set }) => {
-      set.headers['x-request-id'] = requestId
       const elapsed = formatElapsed(requestStart)
       const status = typeof set.status === 'number' ? set.status : 200
       logRequest(request.method, request.url, status, elapsed, getRequestModelMapping(request), requestId)

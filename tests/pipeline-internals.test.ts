@@ -196,11 +196,18 @@ describe('runPipeline', () => {
     return registry
   }
 
-  function makeParams(body: SimplePayload): { body: SimplePayload, signal: AbortSignal, headers: Headers } {
+  function makeParams(body: SimplePayload): {
+    body: SimplePayload
+    signal: AbortSignal
+    headers: Headers
+    requestId: string
+    callerRequestId?: string
+  } {
     return {
       body,
       signal: new AbortController().signal,
       headers: new Headers({ 'content-type': 'application/json' }),
+      requestId: 'internal-request-id',
     }
   }
 
@@ -450,5 +457,33 @@ describe('runPipeline', () => {
     expect(capturedCtx!.copilotClient).toBeDefined()
     expect(capturedCtx!.upstreamSignal).toBeDefined()
     expect(capturedCtx!.modelMapping).toBeDefined()
+    expect(capturedCtx!.recovery).toEqual({
+      requestId: 'internal-request-id',
+      retryCount: 0,
+    })
+    expect(capturedCtx!.recovery).not.toHaveProperty('deadlineMonotonicMs')
+  })
+
+  test('keeps caller correlation separate from the internal recovery id', async () => {
+    let capturedCtx: Record<string, unknown> | undefined
+    const params = {
+      ...makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'hi' }] }),
+      requestId: 'internal-unique-id',
+      callerRequestId: 'caller-reused-id',
+    }
+    const config = makeConfig({
+      buildStrategyContext: (ctx) => {
+        capturedCtx = ctx as Record<string, unknown>
+        return { payload: ctx.payload }
+      },
+    })
+
+    await runPipeline(params, config)
+
+    expect(capturedCtx!.recovery).toEqual({
+      requestId: 'internal-unique-id',
+      callerRequestId: 'caller-reused-id',
+      retryCount: 0,
+    })
   })
 })

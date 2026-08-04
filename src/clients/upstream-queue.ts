@@ -1,5 +1,14 @@
+import type { CapacityCooldownScope } from '~/lib/error'
+
 import consola from 'consola'
 
+import {
+  DEFAULT_UPSTREAM_QUEUE_MAX_RETRIES,
+  DEFAULT_UPSTREAM_RECOVERY_BUDGET_SECONDS,
+  MAX_UPSTREAM_QUEUE_RETRIES,
+  MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS,
+  MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS,
+} from '~/lib/config'
 import { HTTPError, isCapacityLimitStatus, isTransientUpstreamStatus } from '~/lib/error'
 import { formatDurationMs } from '~/util/duration'
 import { sleep as defaultSleep } from '~/util/sleep'
@@ -10,6 +19,28 @@ export interface UpstreamRequestQueueOptions {
   baseDelayMs: number
   maxDelayMs: number
   maxQueueDepth: number
+  recoveryBudgetMs: number
+}
+
+export interface RecoveryCooldownState {
+  scope: CapacityCooldownScope
+  notBeforeMonotonicMs: number
+}
+
+export interface RecoveryPublicError {
+  status: number
+  retryAfter?: string
+}
+
+export interface UpstreamRecoveryRecord {
+  requestId: string
+  callerRequestId?: string
+  retryCount: number
+  retryLimit?: number
+  deadlineMonotonicMs?: number
+  sourceModel?: string
+  cooldown?: RecoveryCooldownState
+  publicError?: RecoveryPublicError
 }
 
 export interface UpstreamRequestContext {
@@ -30,6 +61,7 @@ export interface UpstreamRequestContext {
    *   termination to 503. Use for anything whose replay spends model quota.
    */
   retryable?: boolean | 'capacity'
+  recovery?: UpstreamRecoveryRecord
 }
 
 export interface QueuedUpstreamResponse {
@@ -55,10 +87,11 @@ interface QueueLease {
 
 const DEFAULT_UPSTREAM_QUEUE_OPTIONS: UpstreamRequestQueueOptions = {
   concurrency: 10,
-  maxRetries: 5,
+  maxRetries: DEFAULT_UPSTREAM_QUEUE_MAX_RETRIES,
   baseDelayMs: 2_000,
   maxDelayMs: 60_000,
   maxQueueDepth: 1_000,
+  recoveryBudgetMs: DEFAULT_UPSTREAM_RECOVERY_BUDGET_SECONDS * 1_000,
 }
 
 export class UpstreamRequestQueue {
@@ -268,10 +301,17 @@ function normalizeOptions(
 ): UpstreamRequestQueueOptions {
   return {
     concurrency: Math.max(1, Math.floor(finiteOr(options.concurrency, DEFAULT_UPSTREAM_QUEUE_OPTIONS.concurrency))),
-    maxRetries: Math.max(0, Math.floor(finiteOr(options.maxRetries, DEFAULT_UPSTREAM_QUEUE_OPTIONS.maxRetries))),
+    maxRetries: Math.min(MAX_UPSTREAM_QUEUE_RETRIES, Math.max(0, Math.floor(finiteOr(options.maxRetries, DEFAULT_UPSTREAM_QUEUE_OPTIONS.maxRetries)))),
     baseDelayMs: Math.max(0, Math.floor(finiteOr(options.baseDelayMs, DEFAULT_UPSTREAM_QUEUE_OPTIONS.baseDelayMs))),
     maxDelayMs: Math.max(1, Math.floor(finiteOr(options.maxDelayMs, DEFAULT_UPSTREAM_QUEUE_OPTIONS.maxDelayMs))),
     maxQueueDepth: Math.max(1, Math.floor(finiteOr(options.maxQueueDepth, DEFAULT_UPSTREAM_QUEUE_OPTIONS.maxQueueDepth))),
+    recoveryBudgetMs: Math.min(
+      MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS * 1_000,
+      Math.max(
+        MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS * 1_000,
+        Math.floor(finiteOr(options.recoveryBudgetMs, DEFAULT_UPSTREAM_QUEUE_OPTIONS.recoveryBudgetMs)),
+      ),
+    ),
   }
 }
 
@@ -285,6 +325,7 @@ function mergeDefinedOptions(
     baseDelayMs: next.baseDelayMs ?? current.baseDelayMs,
     maxDelayMs: next.maxDelayMs ?? current.maxDelayMs,
     maxQueueDepth: next.maxQueueDepth ?? current.maxQueueDepth,
+    recoveryBudgetMs: next.recoveryBudgetMs ?? current.recoveryBudgetMs,
   }
 }
 

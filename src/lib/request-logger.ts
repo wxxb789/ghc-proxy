@@ -1,3 +1,6 @@
+import type { CapacityCooldownScope } from '~/lib/error'
+
+import consola from 'consola'
 import { colorize } from 'consola/utils'
 
 import { formatDurationMs } from '~/util/duration'
@@ -25,6 +28,98 @@ export interface ModelMappingInfo {
  * Uses WeakMap so entries are GC'd when the Request is collected.
  */
 const requestModelMapping = new WeakMap<Request, ModelMappingInfo>()
+
+export interface RequestCorrelation {
+  requestId: string
+  callerRequestId?: string
+  responseRequestId: string
+}
+
+const requestCorrelation = new WeakMap<Request, RequestCorrelation>()
+
+export function getOrCreateRequestCorrelation(request: Request): RequestCorrelation {
+  const existing = requestCorrelation.get(request)
+  if (existing) {
+    return existing
+  }
+
+  const requestId = crypto.randomUUID()
+  const callerRequestId = request.headers.get('x-request-id') ?? undefined
+  const correlation: RequestCorrelation = {
+    requestId,
+    ...(callerRequestId ? { callerRequestId } : {}),
+    responseRequestId: callerRequestId ?? requestId,
+  }
+  requestCorrelation.set(request, correlation)
+  return correlation
+}
+
+export type RecoveryEventName
+  = | 'admission'
+    | 'budget'
+    | 'cooldown'
+    | 'fallback'
+    | 'grant'
+    | 'retry'
+
+export interface RecoveryEvent {
+  requestId: string
+  event: RecoveryEventName
+  retryCount?: number
+  status?: number
+  connectionClass?: string
+  effectiveModel?: string
+  scope?: CapacityCooldownScope
+  activeSlots?: number
+  maxSlots?: number
+  pendingDepth?: number
+  maxPendingDepth?: number
+  queueWaitMs?: number
+  delaySource?: string
+  delayMs?: number
+  elapsedMs?: number
+  remainingBudgetMs?: number
+  nextRetryAt?: string
+  decision?: string
+}
+
+interface RecoveryEventLogger {
+  info: (message: string, fields: RecoveryEvent) => void
+}
+
+const RECOVERY_EVENT_OPTIONAL_FIELDS = [
+  'retryCount',
+  'status',
+  'connectionClass',
+  'effectiveModel',
+  'scope',
+  'activeSlots',
+  'maxSlots',
+  'pendingDepth',
+  'maxPendingDepth',
+  'queueWaitMs',
+  'delaySource',
+  'delayMs',
+  'elapsedMs',
+  'remainingBudgetMs',
+  'nextRetryAt',
+  'decision',
+] as const
+
+export function logRecoveryEvent(
+  input: RecoveryEvent,
+  logger: RecoveryEventLogger = consola,
+): void {
+  const fields: RecoveryEvent = {
+    requestId: input.requestId,
+    event: input.event,
+  }
+  for (const key of RECOVERY_EVENT_OPTIONAL_FIELDS) {
+    if (input[key] !== undefined)
+      Object.assign(fields, { [key]: input[key] })
+  }
+  logger.info('Upstream recovery', fields)
+}
 
 export function setRequestModelMapping(request: Request, info: ModelMappingInfo): void {
   requestModelMapping.set(request, info)

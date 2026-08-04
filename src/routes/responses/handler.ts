@@ -19,6 +19,8 @@ export interface ResponsesCoreParams {
   body: unknown
   signal: AbortSignal
   headers: Headers
+  requestId: string
+  callerRequestId?: string
 }
 
 export type ResponsesCoreResult = PipelineResult
@@ -30,14 +32,14 @@ export type ResponsesCoreResult = PipelineResult
  * through the afterIngest / afterTransform lifecycle hooks.
  */
 export async function handleResponsesCore(
-  { body, signal, headers }: ResponsesCoreParams,
+  { body, signal, headers, requestId, callerRequestId }: ResponsesCoreParams,
 ): Promise<ResponsesCoreResult> {
   const emulatorMode = configStore.isEmulatorEnabled()
   let originalPayload: ResponsesPayload | undefined
   let emulatorPrepared: ReturnType<typeof prepareEmulatorRequest> | undefined
 
   const pipelineResult = await runPipeline<ResponsesPayload, ResponsesStrategyContext>(
-    { body, signal, headers },
+    { body, signal, headers, requestId, callerRequestId },
     {
       protocol: 'responses',
       strategyRegistry: responsesStrategyRegistry,

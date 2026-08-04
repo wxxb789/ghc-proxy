@@ -5,11 +5,14 @@ import process from 'node:process'
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import {
+  DEFAULT_UPSTREAM_QUEUE_MAX_RETRIES,
+  DEFAULT_UPSTREAM_RECOVERY_BUDGET_SECONDS,
   getCachedConfig,
   readConfig,
   writeConfigField,
 } from '../src/lib/config'
-import { resolveDumpFailedPayloadsOption } from '../src/start'
+import { resolveCapacityCooldownScope } from '../src/lib/error'
+import { parseBoundedIntArg, resolveDumpFailedPayloadsOption } from '../src/start'
 import { authStore, modelCache } from '../src/state'
 import { configStore } from '../src/state/config-store'
 
@@ -63,7 +66,11 @@ describe('config module', () => {
         claudeOpus: 'gpt-4-opus',
       },
       upstreamQueueConcurrency: 12,
-      upstreamQueueMaxRetries: 4,
+      upstreamQueueMaxRetries: 2,
+      upstreamRecoveryBudgetSeconds: 60,
+      overloadFallbacks: {
+        'claude-opus-5': 'claude-opus-4.8',
+      },
       upstreamQueueBaseDelaySeconds: 3,
       upstreamQueueMaxDelaySeconds: 45,
     }
@@ -87,6 +94,61 @@ describe('config module', () => {
     await fs.writeFile(tempConfigPath, JSON.stringify(['not', 'an', 'object']))
     const config = await readConfig()
     expect(config).toEqual({})
+  })
+
+  test('recovery policy defaults are bounded and overload fallback is disabled', () => {
+    expect(DEFAULT_UPSTREAM_QUEUE_MAX_RETRIES).toBe(1)
+    expect(DEFAULT_UPSTREAM_RECOVERY_BUDGET_SECONDS).toBe(60)
+    expect(configStore.getOverloadFallback('claude-opus-5')).toBeUndefined()
+  })
+
+  test.each([0, 1, 2])('readConfig() accepts upstreamQueueMaxRetries=%i', async (value) => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({ upstreamQueueMaxRetries: value }))
+
+    expect((await readConfig()).upstreamQueueMaxRetries).toBe(value)
+  })
+
+  test.each([-1, 0.5, 3])('readConfig() rejects upstreamQueueMaxRetries=%p without dropping valid fields', async (value) => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      githubToken: 'still-valid',
+      upstreamQueueMaxRetries: value,
+    }))
+
+    expect(await readConfig()).toEqual({ githubToken: 'still-valid' })
+  })
+
+  test.each([1, 60, 120])('readConfig() accepts upstreamRecoveryBudgetSeconds=%i', async (value) => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({ upstreamRecoveryBudgetSeconds: value }))
+
+    expect((await readConfig()).upstreamRecoveryBudgetSeconds).toBe(value)
+  })
+
+  test.each([0, 1.5, 121])('readConfig() rejects upstreamRecoveryBudgetSeconds=%p without dropping valid fields', async (value) => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      githubToken: 'still-valid',
+      upstreamRecoveryBudgetSeconds: value,
+    }))
+
+    expect(await readConfig()).toEqual({ githubToken: 'still-valid' })
+  })
+
+  test('readConfig() drops blank and self fallback entries but keeps reciprocal one-hop mappings', async () => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      overloadFallbacks: {
+        '': 'target',
+        'blankTarget': '   ',
+        'self': 'self',
+        'modelA': 'modelB',
+        'modelB': 'modelA',
+        ' modelC ': ' modelD ',
+      },
+    }))
+
+    expect((await readConfig()).overloadFallbacks).toEqual({
+      modelA: 'modelB',
+      modelB: 'modelA',
+      modelC: 'modelD',
+    })
   })
 
   test('writeConfigField() — file doesn\'t exist → creates file, keeps platform-appropriate permissions', async () => {
@@ -268,6 +330,13 @@ describe('ConfigStore accessors', () => {
     expect(configStore.getModelFallback()).toEqual({ claudeOpus: 'gpt-5' })
   })
 
+  test('getOverloadFallback returns an exact configured target', () => {
+    const config = getCachedConfig() as Record<string, unknown>
+    config.overloadFallbacks = { source: 'target' }
+    expect(configStore.getOverloadFallback('source')).toBe('target')
+    expect(configStore.getOverloadFallback('SOURCE')).toBeUndefined()
+  })
+
   // ── isContextManagementEnabled ──
 
   test('isContextManagementEnabled defaults to false', () => {
@@ -416,5 +485,28 @@ describe('start options', () => {
     expect(resolveDumpFailedPayloadsOption(false, '0')).toBe(false)
     expect(resolveDumpFailedPayloadsOption(false, 'false')).toBe(false)
     expect(resolveDumpFailedPayloadsOption(false, 'yes')).toBe(false)
+  })
+
+  test.each([
+    { raw: '0', min: 0, max: 2, expected: 0 },
+    { raw: '2', min: 0, max: 2, expected: 2 },
+    { raw: '1', min: 1, max: 120, expected: 1 },
+    { raw: '120', min: 1, max: 120, expected: 120 },
+    { raw: '-1', min: 0, max: 2, expected: undefined },
+    { raw: '1.5', min: 0, max: 2, expected: undefined },
+    { raw: '3', min: 0, max: 2, expected: undefined },
+    { raw: '121', min: 1, max: 120, expected: undefined },
+    { raw: '', min: 0, max: 2, expected: undefined },
+  ])('bounded integer CLI parsing: $raw in $min..$max -> $expected', ({ raw, min, max, expected }) => {
+    expect(parseBoundedIntArg(raw, 'test', 'Using default.', min, max)).toBe(expected)
+  })
+})
+
+describe('capacity cooldown policy', () => {
+  test('classifies account, model, request, and non-capacity outcomes', () => {
+    expect(resolveCapacityCooldownScope(429, 'model-a')).toBe('account')
+    expect(resolveCapacityCooldownScope(529, 'model-a')).toBe('model')
+    expect(resolveCapacityCooldownScope(529)).toBe('request')
+    expect(resolveCapacityCooldownScope(503, 'model-a')).toBeUndefined()
   })
 })

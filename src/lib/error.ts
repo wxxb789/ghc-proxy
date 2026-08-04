@@ -38,6 +38,8 @@ export class HTTPError extends Error {
 
 const TRANSIENT_UPSTREAM_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529])
 
+export type CapacityCooldownScope = 'account' | 'model' | 'request'
+
 /**
  * Upstream statuses worth retrying: request-scoped faults (timeouts, gateway
  * errors) plus capacity limits. Shared by `UpstreamRequestQueue` and the
@@ -54,6 +56,17 @@ export function isTransientUpstreamStatus(status: number): boolean {
  */
 export function isCapacityLimitStatus(status: number): boolean {
   return status === 429 || status === 529
+}
+
+export function resolveCapacityCooldownScope(
+  status: number,
+  effectiveModel?: string,
+): CapacityCooldownScope | undefined {
+  if (status === 429)
+    return 'account'
+  if (status === 529)
+    return effectiveModel ? 'model' : 'request'
+  return undefined
 }
 
 /**

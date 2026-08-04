@@ -12,17 +12,19 @@ export interface MessagesCoreParams {
   body: unknown
   signal: AbortSignal
   headers: Headers
+  requestId: string
+  callerRequestId?: string
 }
 
 export type MessagesCoreResult = PipelineResult
 
 export async function handleMessagesCore(
-  { body, signal, headers }: MessagesCoreParams,
+  { body, signal, headers, requestId, callerRequestId }: MessagesCoreParams,
 ): Promise<MessagesCoreResult> {
   let anthropicBetaHeader: string | undefined
 
   return runPipeline<AnthropicMessagesPayload, MessagesStrategyContext>(
-    { body, signal, headers },
+    { body, signal, headers, requestId, callerRequestId },
     {
       protocol: 'anthropic-messages',
       applyModelPolicy: true,

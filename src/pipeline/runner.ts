@@ -1,4 +1,5 @@
 import type { CopilotClient } from '~/clients'
+import type { UpstreamRecoveryRecord } from '~/clients/upstream-queue'
 import type { StrategyRegistry } from '~/dispatch'
 import type { ProtocolId, RequestMeta } from '~/ingest'
 import type { ExecutionResult } from '~/lib/execution-strategy'
@@ -14,6 +15,8 @@ export interface PipelineParams {
   body: unknown
   signal: AbortSignal
   headers: Headers
+  requestId: string
+  callerRequestId?: string
 }
 
 export interface PipelineResult {
@@ -50,6 +53,7 @@ export interface PipelineConfig<TPayload, TStrategyCtx> {
     copilotClient: CopilotClient
     upstreamSignal: ReturnType<typeof createUpstreamSignalFromConfig>
     modelMapping: ModelMappingInfo
+    recovery: UpstreamRecoveryRecord
   }) => TStrategyCtx
   /**
    * Runs immediately after ingest, before transform. Resolves the payload that
@@ -73,6 +77,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   params: PipelineParams,
   config: PipelineConfig<TPayload, TStrategyCtx>,
 ): Promise<PipelineResult> {
+  const recovery = createRecoveryRecord(params)
   const ingested = protocolRegistry.ingest<TPayload>(
     config.protocol,
     params.body,
@@ -105,9 +110,20 @@ export async function runPipeline<TPayload, TStrategyCtx>(
     copilotClient,
     upstreamSignal,
     modelMapping,
+    recovery,
   })
   const entry = config.strategyRegistry.select(selectedModel, ctx)
   const result = await entry.execute(ctx)
 
   return { result, modelMapping }
+}
+
+export function createRecoveryRecord(
+  request: Pick<PipelineParams, 'requestId' | 'callerRequestId'>,
+): UpstreamRecoveryRecord {
+  return {
+    requestId: request.requestId,
+    ...(request.callerRequestId ? { callerRequestId: request.callerRequestId } : {}),
+    retryCount: 0,
+  }
 }

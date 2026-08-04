@@ -77,6 +77,10 @@ export class ConfigStore {
   getModelFallback() {
     return getCachedConfig().modelFallback
   }
+
+  getOverloadFallback(sourceModel: string): string | undefined {
+    return getCachedConfig().overloadFallbacks?.[sourceModel]
+  }
 }
 
 export const configStore = new ConfigStore()
