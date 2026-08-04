@@ -1,4 +1,4 @@
-import type { UpstreamRequestQueue } from './upstream-queue'
+import type { UpstreamRecoveryRecord, UpstreamRequestQueue } from './upstream-queue'
 
 export interface ClientAuth {
   githubToken?: string
@@ -17,4 +17,6 @@ export interface ClientConfig {
 export interface ClientDeps {
   fetch?: typeof fetch
   requestQueue?: UpstreamRequestQueue
+  recovery?: UpstreamRecoveryRecord
+  offerLocalModelCooldown?: boolean
 }

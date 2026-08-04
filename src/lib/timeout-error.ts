@@ -55,30 +55,34 @@ const TIMEOUT_ERROR_CODES = new Set([
 // `cause` from looping forever.
 const MAX_CAUSE_DEPTH = 5
 
-function matchesTimeoutShape(value: unknown, depth: number): boolean {
+export function errorCauseChainSome(
+  value: unknown,
+  predicate: (candidate: { name?: unknown, code?: unknown }) => boolean,
+  depth = 0,
+): boolean {
   if (typeof value !== 'object' || value === null)
     return false
 
   const candidate = value as { name?: unknown, code?: unknown, cause?: unknown, errors?: unknown }
-  if (typeof candidate.name === 'string' && TIMEOUT_ERROR_NAMES.has(candidate.name))
-    return true
-  if (typeof candidate.code === 'string' && TIMEOUT_ERROR_CODES.has(candidate.code))
+  if (predicate(candidate))
     return true
 
   if (depth >= MAX_CAUSE_DEPTH)
     return false
-  if (matchesTimeoutShape(candidate.cause, depth + 1))
+  if (errorCauseChainSome(candidate.cause, predicate, depth + 1))
     return true
   // `.errors` too, not just `.cause`: a dual-stack connect failure buries the
   // ETIMEDOUT leaf in an AggregateError under the TypeError.
   return Array.isArray(candidate.errors)
-    && candidate.errors.some(inner => matchesTimeoutShape(inner, depth + 1))
+    && candidate.errors.some(inner => errorCauseChainSome(inner, predicate, depth + 1))
 }
 
 export function isTimeoutLikeError(error: unknown): boolean {
   // A `cause` getter that throws must not turn a predicate into a throw site.
   try {
-    return matchesTimeoutShape(error, 0)
+    return errorCauseChainSome(error, candidate =>
+      (typeof candidate.name === 'string' && TIMEOUT_ERROR_NAMES.has(candidate.name))
+      || (typeof candidate.code === 'string' && TIMEOUT_ERROR_CODES.has(candidate.code)))
   }
   catch {
     return false

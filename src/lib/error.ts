@@ -4,6 +4,7 @@ import consola from 'consola'
 
 import { modelCache } from '~/state'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
+import { errorCauseChainSome, isTimeoutLikeError } from './timeout-error'
 
 export interface HTTPErrorBody {
   error: {
@@ -20,19 +21,25 @@ export interface HTTPErrorBody {
   }
 }
 
+export interface HTTPErrorOptions {
+  headers?: ConstructorParameters<typeof Headers>[0]
+}
+
 export class HTTPError extends Error {
   readonly status: number
   readonly body: HTTPErrorBody
+  readonly headers: Headers
 
-  constructor(status: number, body: HTTPErrorBody) {
+  constructor(status: number, body: HTTPErrorBody, options: HTTPErrorOptions = {}) {
     super(body.error.message)
     this.name = 'HTTPError'
     this.status = status
     this.body = body
+    this.headers = new Headers(options.headers)
   }
 
   toResponse() {
-    return Response.json(this.body, { status: this.status })
+    return Response.json(this.body, { status: this.status, headers: this.headers })
   }
 }
 
@@ -67,6 +74,36 @@ export function resolveCapacityCooldownScope(
   if (status === 529)
     return effectiveModel ? 'model' : 'request'
   return undefined
+}
+
+export type ConnectionEstablishmentClass = 'dns' | 'connection-refused'
+
+const CONNECTION_ESTABLISHMENT_CODES: Record<string, ConnectionEstablishmentClass> = {
+  ENOTFOUND: 'dns',
+  EAI_AGAIN: 'dns',
+  ECONNREFUSED: 'connection-refused',
+  ConnectionRefused: 'connection-refused',
+}
+
+export function isRetryableConnectionEstablishmentError(
+  error: unknown,
+): ConnectionEstablishmentClass | undefined {
+  if (isTimeoutLikeError(error))
+    return undefined
+
+  let connectionClass: ConnectionEstablishmentClass | undefined
+  try {
+    errorCauseChainSome(error, (candidate) => {
+      if (typeof candidate.code !== 'string')
+        return false
+      connectionClass = CONNECTION_ESTABLISHMENT_CODES[candidate.code]
+      return connectionClass !== undefined
+    })
+  }
+  catch {
+    return undefined
+  }
+  return connectionClass
 }
 
 /**
@@ -205,5 +242,10 @@ export async function throwUpstreamError(message: string, response: Response): P
     rawBody: rawText ? previewBody(rawText) : '<empty>',
     headers: getDiagnosticHeaders(response),
   })
-  throw new HTTPError(response.status, body)
+  const retryAfter = response.headers.get('retry-after')
+  throw new HTTPError(
+    response.status,
+    body,
+    retryAfter ? { headers: { 'retry-after': retryAfter } } : undefined,
+  )
 }

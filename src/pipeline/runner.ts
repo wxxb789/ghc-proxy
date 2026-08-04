@@ -100,7 +100,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   }
 
   const upstreamSignal = createUpstreamSignalFromConfig(params.signal)
-  const copilotClient = createCopilotClient()
+  const copilotClient = createCopilotClient(recovery)
 
   const ctx = config.buildStrategyContext({
     payload,

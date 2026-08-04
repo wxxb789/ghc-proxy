@@ -4,7 +4,13 @@ import { afterEach, describe, expect, mock, test } from 'bun:test'
 import consola from 'consola'
 
 import { CopilotClient } from '~/clients'
-import { createDefaultUpstreamRequestQueue, parseRetryAfterMs, UpstreamRequestQueue } from '~/clients/upstream-queue'
+import {
+  createDefaultUpstreamRequestQueue,
+  LocalModelCooldownError,
+  parseRetryAfterMs,
+  TerminalUpstreamRecoveryError,
+  UpstreamRequestQueue,
+} from '~/clients/upstream-queue'
 import { runStrategy } from '~/lib/execution-strategy'
 import {
   disableIdleTimeout,
@@ -26,6 +32,26 @@ describe('parseRetryAfterMs', () => {
     })
 
     expect(parseRetryAfterMs(headers, Date.parse('Wed, 21 Oct 2015 07:27:55 GMT'))).toBe(5_000)
+  })
+
+  test('uses the upstream Date header as the HTTP-date reference', () => {
+    const headers = new Headers({
+      'date': 'Wed, 21 Oct 2015 07:27:55 GMT',
+      'retry-after': 'Wed, 21 Oct 2015 07:28:00 GMT',
+    })
+
+    expect(parseRetryAfterMs(headers, Date.parse('Thu, 22 Oct 2015 07:27:55 GMT'))).toBe(5_000)
+  })
+
+  test.each(['2.5 seconds', '-1', 'Infinity', '1e3'])(
+    'rejects non-grammar Retry-After value %s',
+    (value) => {
+      expect(parseRetryAfterMs(new Headers({ 'retry-after': value }), 1_000)).toBeUndefined()
+    },
+  )
+
+  test('rejects a numeric Retry-After value that overflows milliseconds', () => {
+    expect(parseRetryAfterMs(new Headers({ 'retry-after': '9'.repeat(400) }), 1_000)).toBeUndefined()
   })
 })
 
@@ -404,8 +430,19 @@ describe('UpstreamRequestQueue', () => {
     )
 
     expect(queued.response.status).toBe(429)
-    queued.release()
 
+    let waiterCalls = 0
+    void queue.dispatch(
+      () => {
+        waiterCalls++
+        return Promise.resolve(new Response('ok'))
+      },
+      { method: 'GET', url: 'https://api.githubcopilot.com/models' },
+    )
+    queued.release()
+    await Promise.resolve()
+
+    expect(waiterCalls).toBe(0)
     expect(timers.length).toBeGreaterThanOrEqual(1)
     const lastTimer = timers.at(-1)!
     expect(lastTimer.delay).toBeGreaterThan(0)
@@ -827,6 +864,109 @@ describe('upstream error diagnostics', () => {
 
     expect(response.data).toHaveLength(1)
     expect(calls).toBe(2)
+  })
+
+  test('threads the serialized model and pipeline recovery into a typed terminal 529', async () => {
+    consola.error = ((..._args: unknown[]) => {}) as typeof consola.error
+    const events: Array<Record<string, unknown>> = []
+    const recovery = { requestId: 'pipeline-request', retryCount: 0 }
+    let serializedModel: unknown
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 0, recoveryBudgetMs: 1_000 },
+      {
+        logger: {
+          warn: () => {},
+          info: (_message, fields) => events.push(fields as unknown as Record<string, unknown>),
+        },
+      },
+    )
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        recovery,
+        fetch: ((async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          serializedModel = JSON.parse(String(init?.body)).model
+          return new Response('overloaded', {
+            status: 529,
+            headers: { 'retry-after': '3' },
+          })
+        }) as unknown) as typeof fetch,
+      },
+    )
+
+    let error: unknown
+    try {
+      await client.createMessages({
+        model: 'claude-opus-5',
+        max_tokens: 16,
+        messages: [{ role: 'user', content: 'hi' }],
+      })
+    }
+    catch (caught) {
+      error = caught
+    }
+
+    expect(serializedModel).toBe('claude-opus-5')
+    expect(error).toBeInstanceOf(TerminalUpstreamRecoveryError)
+    expect(error).toMatchObject({
+      status: 529,
+      recovery: { requestId: 'pipeline-request', sourceModel: 'claude-opus-5' },
+    })
+    expect((error as TerminalUpstreamRecoveryError).headers.get('retry-after')).toBe('3')
+    expect((error as TerminalUpstreamRecoveryError).toResponse().headers.get('retry-after')).toBe('3')
+    expect(events).toContainEqual(expect.objectContaining({
+      requestId: 'pipeline-request',
+      effectiveModel: 'claude-opus-5',
+      activeSlots: 1,
+      maxSlots: 1,
+      pendingDepth: 0,
+    }))
+  })
+
+  test('offers an existing model cooldown through CopilotClient without a second fetch', async () => {
+    consola.error = ((..._args: unknown[]) => {}) as typeof consola.error
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 0, recoveryBudgetMs: 1_000 },
+      { logger: { warn: () => {} } },
+    )
+    let fetchCalls = 0
+    const fetchImpl = ((async () => {
+      fetchCalls++
+      return new Response('overloaded', {
+        status: 529,
+        headers: { 'retry-after': '3' },
+      })
+    }) as unknown) as typeof fetch
+    const firstClient = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      { requestQueue, fetch: fetchImpl },
+    )
+    await expect(firstClient.createMessages({
+      model: 'claude-opus-5',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'hi' }],
+    })).rejects.toBeInstanceOf(TerminalUpstreamRecoveryError)
+
+    const secondClient = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        fetch: fetchImpl,
+        recovery: { requestId: 'second-request', retryCount: 0 },
+        offerLocalModelCooldown: true,
+      },
+    )
+
+    await expect(secondClient.createMessages({
+      model: 'claude-opus-5',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'hi' }],
+    })).rejects.toBeInstanceOf(LocalModelCooldownError)
+    expect(fetchCalls).toBe(1)
   })
 })
 
