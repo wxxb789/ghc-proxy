@@ -98,19 +98,17 @@ export class CopilotClient {
 
     if (!response.ok) {
       try {
-        try {
-          await throwUpstreamError(errorMessage, response)
+        await throwUpstreamError(errorMessage, response)
+      }
+      catch (error) {
+        if (
+          error instanceof HTTPError
+          && response.status === 529
+          && queuedResponse.recovery
+        ) {
+          throw new TerminalUpstreamRecoveryError(error, queuedResponse.recovery)
         }
-        catch (error) {
-          if (
-            error instanceof HTTPError
-            && response.status === 529
-            && queuedResponse.recovery
-          ) {
-            throw new TerminalUpstreamRecoveryError(error, queuedResponse.recovery)
-          }
-          throw error
-        }
+        throw error
       }
       finally {
         queuedResponse.release()

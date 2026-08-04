@@ -15,6 +15,7 @@ import {
   isRetryableConnectionEstablishmentError,
   isTransientUpstreamStatus,
   resolveCapacityCooldownScope,
+  upstreamErrorType,
 } from '~/lib/error'
 import { logRecoveryEvent } from '~/lib/request-logger'
 import { formatDurationMs } from '~/util/duration'
@@ -140,7 +141,6 @@ export class TerminalUpstreamRecoveryError extends HTTPError {
 }
 
 export class LocalModelCooldownError extends TerminalUpstreamRecoveryError {
-  private handled = false
   private readonly resumeDispatch: () => Promise<QueuedUpstreamResponse>
 
   constructor(
@@ -158,17 +158,9 @@ export class LocalModelCooldownError extends TerminalUpstreamRecoveryError {
     this.resumeDispatch = resumeDispatch
   }
 
-  override claimFallback(): boolean {
-    if (this.handled)
-      return false
-    this.handled = true
-    return super.claimFallback()
-  }
-
   resume(): Promise<QueuedUpstreamResponse> {
-    if (this.handled)
+    if (!this.claimFallback())
       return Promise.reject(new Error('Recovery handoff already consumed'))
-    this.handled = true
     return this.resumeDispatch()
   }
 }
@@ -253,7 +245,7 @@ export class UpstreamRequestQueue {
         lease.release()
         if (signal?.aborted)
           throw signal.reason
-        if (isRecoveryBudgetError(error))
+        if (error instanceof RecoveryBudgetError)
           throw error.cause ?? error
 
         const connectionClass = isRetryableConnectionEstablishmentError(error)
@@ -524,21 +516,16 @@ export class UpstreamRequestQueue {
     context: UpstreamRequestContext & { recovery: UpstreamRecoveryRecord },
   ): void {
     const deadline = this.now() + delayMs
+    let stored = deadline
     if (scope === 'account') {
       this.accountNotBefore = Math.max(this.accountNotBefore, deadline)
+      stored = this.accountNotBefore
     }
     else if (scope === 'model' && effectiveModel) {
-      this.modelNotBefore.set(
-        effectiveModel,
-        Math.max(this.modelNotBefore.get(effectiveModel) ?? 0, deadline),
-      )
+      stored = Math.max(this.modelNotBefore.get(effectiveModel) ?? 0, deadline)
+      this.modelNotBefore.set(effectiveModel, stored)
     }
 
-    const stored = scope === 'account'
-      ? this.accountNotBefore
-      : scope === 'model' && effectiveModel
-        ? this.modelNotBefore.get(effectiveModel)!
-        : deadline
     this.setRecoveryCooldown(context.recovery, {
       scope,
       notBeforeMonotonicMs: stored,
@@ -576,7 +563,6 @@ export class UpstreamRequestQueue {
 
   private canRetry(recovery: UpstreamRecoveryRecord): boolean {
     return recovery.retryCount < (recovery.retryLimit ?? this.options.maxRetries)
-      && this.remainingBudget(recovery) >= 0
   }
 
   private remainingBudget(recovery: UpstreamRecoveryRecord): number {
@@ -841,16 +827,17 @@ function abortableSleep(
   if (!signal)
     return sleep(ms)
   signal.throwIfAborted()
+  const abortSignal = signal
 
   return new Promise<void>((resolve, reject) => {
     function cleanup() {
-      signal.removeEventListener('abort', onAbort)
+      abortSignal.removeEventListener('abort', onAbort)
     }
     function onAbort() {
       cleanup()
-      reject(signal.reason)
+      reject(abortSignal.reason)
     }
-    signal.addEventListener('abort', onAbort, { once: true })
+    abortSignal.addEventListener('abort', onAbort, { once: true })
     sleep(ms).then(
       () => {
         cleanup()
@@ -895,16 +882,13 @@ class RecoveryBudgetError extends Error {
   }
 }
 
-function isRecoveryBudgetError(error: unknown): error is RecoveryBudgetError {
-  return error instanceof RecoveryBudgetError
-}
-
 function createLocalCapacityError(recovery: UpstreamRecoveryRecord): HTTPError {
   const status = recovery.publicError?.status ?? 504
   const retryAfter = recovery.publicError?.retryAfter
     ?? (recovery.cooldown
       ? formatRetryAfter(recovery.cooldown.notBeforeMonotonicMs - (recovery.deadlineMonotonicMs ?? 0))
       : undefined)
+  const errorType = status === 504 ? 'timeout_error' : upstreamErrorType(status)
   const error = new HTTPError(status, {
     error: {
       message: status === 429
@@ -914,13 +898,7 @@ function createLocalCapacityError(recovery: UpstreamRecoveryRecord): HTTPError {
           : status === 504
             ? 'The upstream recovery budget was exhausted.'
             : `The last upstream attempt failed with status ${status}.`,
-      type: status === 429
-        ? 'rate_limit_error'
-        : status === 529
-          ? 'overloaded_error'
-          : status === 504
-            ? 'timeout_error'
-            : 'upstream_error',
+      type: errorType,
     },
   }, retryAfter ? { headers: { 'retry-after': retryAfter } } : undefined)
   return status === 529 ? new TerminalUpstreamRecoveryError(error, recovery) : error

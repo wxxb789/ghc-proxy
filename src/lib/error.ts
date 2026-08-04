@@ -56,15 +56,6 @@ export function isTransientUpstreamStatus(status: number): boolean {
   return TRANSIENT_UPSTREAM_STATUSES.has(status)
 }
 
-/**
- * Capacity signals that apply to the whole account or service rather than one
- * request. Only these warrant global back-pressure — applying a queue-wide
- * cooldown to a request-scoped 5xx turns one bad request into a proxy stall.
- */
-export function isCapacityLimitStatus(status: number): boolean {
-  return status === 429 || status === 529
-}
-
 export function resolveCapacityCooldownScope(
   status: number,
   effectiveModel?: string,
@@ -178,7 +169,7 @@ function isStructuredErrorPayload(
     && value.error !== null
 }
 
-function upstreamErrorType(status: number): string {
+export function upstreamErrorType(status: number): string {
   if (status === 429)
     return 'rate_limit_error'
   // Anthropic clients classify 529 as overloaded_error; leaking a non-standard
