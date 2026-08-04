@@ -17,6 +17,12 @@ const reasoningEffortSchema = z.enum([
 
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>
 
+export const DEFAULT_UPSTREAM_QUEUE_MAX_RETRIES = 1
+export const MAX_UPSTREAM_QUEUE_RETRIES = 2
+export const DEFAULT_UPSTREAM_RECOVERY_BUDGET_SECONDS = 60
+export const MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS = 1
+export const MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS = 120
+
 const configFileSchema = z.object({
   githubToken: z.string().optional(),
   modelFallback: z.object({
@@ -41,7 +47,13 @@ const configFileSchema = z.object({
   modelReasoningEfforts: z.record(z.string(), reasoningEffortSchema).optional(),
   modelRewrites: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
   upstreamQueueConcurrency: z.number().int().positive().optional(),
-  upstreamQueueMaxRetries: z.number().int().nonnegative().optional(),
+  upstreamQueueMaxRetries: z.number().int().min(0).max(MAX_UPSTREAM_QUEUE_RETRIES).optional(),
+  upstreamRecoveryBudgetSeconds: z.number()
+    .int()
+    .min(MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS)
+    .max(MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS)
+    .optional(),
+  overloadFallbacks: z.record(z.string(), z.string()).optional(),
   upstreamQueueBaseDelaySeconds: z.number().int().nonnegative().optional(),
   upstreamQueueMaxDelaySeconds: z.number().int().positive().optional(),
   gheDomain: z.string().optional(),
@@ -101,7 +113,7 @@ export async function readConfig(): Promise<ConfigFile> {
           }
         }
       }
-      cachedConfig = partial as ConfigFile
+      cachedConfig = sanitizeConfig(partial as ConfigFile)
       return cachedConfig
     }
 
@@ -112,7 +124,7 @@ export async function readConfig(): Promise<ConfigFile> {
       consola.warn(`config.json contains unknown fields: ${unknownKeys.join(', ')}`)
     }
 
-    cachedConfig = result.data
+    cachedConfig = sanitizeConfig(result.data)
     return cachedConfig
   }
   catch (error: unknown) {
@@ -127,6 +139,40 @@ export async function readConfig(): Promise<ConfigFile> {
     cachedConfig = {}
     return {}
   }
+}
+
+function sanitizeConfig(config: ConfigFile): ConfigFile {
+  if (!config.overloadFallbacks) {
+    return config
+  }
+
+  const normalizedFallbacks: Record<string, string> = {}
+  const invalidSources: string[] = []
+  for (const [source, target] of Object.entries(config.overloadFallbacks)) {
+    const normalizedSource = source.trim()
+    const normalizedTarget = target.trim()
+    if (!normalizedSource || !normalizedTarget || normalizedSource === normalizedTarget) {
+      invalidSources.push(source || '<blank>')
+      continue
+    }
+    normalizedFallbacks[normalizedSource] = normalizedTarget
+  }
+
+  const overloadFallbacks: Record<string, string> = {}
+  for (const [source, target] of Object.entries(normalizedFallbacks)) {
+    if (normalizedFallbacks[target] === source) {
+      invalidSources.push(source)
+      continue
+    }
+    overloadFallbacks[source] = target
+  }
+
+  if (invalidSources.length > 0) {
+    consola.warn(
+      `config.json contains invalid overloadFallbacks entries: ${invalidSources.join(', ')}. Ignoring those entries.`,
+    )
+  }
+  return { ...config, overloadFallbacks }
 }
 
 export function getCachedConfig(): ConfigFile {

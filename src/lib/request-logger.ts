@@ -1,3 +1,6 @@
+import type { CapacityCooldownScope } from '~/lib/error'
+
+import consola from 'consola'
 import { colorize } from 'consola/utils'
 
 import { formatDurationMs } from '~/util/duration'
@@ -7,6 +10,7 @@ export type ModelTransformTag
     | 'CONFIG_REWRITE'
     | 'COMPACT'
     | 'MODEL_RESOLVE'
+    | 'OVERLOAD_FALLBACK'
 
 export interface ModelTransformStep {
   tag: ModelTransformTag
@@ -25,6 +29,110 @@ export interface ModelMappingInfo {
  * Uses WeakMap so entries are GC'd when the Request is collected.
  */
 const requestModelMapping = new WeakMap<Request, ModelMappingInfo>()
+
+export interface RequestCorrelation {
+  requestId: string
+  callerRequestId?: string
+  responseRequestId: string
+}
+
+const requestCorrelation = new WeakMap<Request, RequestCorrelation>()
+
+export function getOrCreateRequestCorrelation(request: Request): RequestCorrelation {
+  const existing = requestCorrelation.get(request)
+  if (existing) {
+    return existing
+  }
+
+  const requestId = crypto.randomUUID()
+  const callerRequestId = request.headers.get('x-request-id') ?? undefined
+  const correlation: RequestCorrelation = {
+    requestId,
+    ...(callerRequestId ? { callerRequestId } : {}),
+    responseRequestId: callerRequestId ?? requestId,
+  }
+  requestCorrelation.set(request, correlation)
+  return correlation
+}
+
+export type RecoveryEventName
+  = | 'admission'
+    | 'budget'
+    | 'cooldown'
+    | 'fallback'
+    | 'grant'
+    | 'retry'
+
+export interface RecoveryEvent {
+  requestId: string
+  callerRequestId?: string
+  event: RecoveryEventName
+  retryCount?: number
+  status?: number
+  connectionClass?: string
+  effectiveModel?: string
+  scope?: CapacityCooldownScope
+  activeSlots?: number
+  maxSlots?: number
+  pendingDepth?: number
+  maxPendingDepth?: number
+  queueWaitMs?: number
+  delaySource?: string
+  delayMs?: number
+  elapsedMs?: number
+  remainingBudgetMs?: number
+  nextRetryAt?: string
+  decision?: string
+}
+
+interface RecoveryEventLogger {
+  info: (message: string, fields: RecoveryEvent) => void
+}
+
+const MAX_LOGGED_CALLER_REQUEST_ID_LENGTH = 128
+const UNSAFE_CALLER_REQUEST_ID_CHARACTERS = /[^\w.:@/-]/g
+
+function sanitizeCallerRequestId(value: string | undefined): string | undefined {
+  return value
+    ? value.replace(UNSAFE_CALLER_REQUEST_ID_CHARACTERS, '_').slice(0, MAX_LOGGED_CALLER_REQUEST_ID_LENGTH)
+    : undefined
+}
+
+const RECOVERY_EVENT_OPTIONAL_FIELDS = [
+  'retryCount',
+  'status',
+  'connectionClass',
+  'effectiveModel',
+  'scope',
+  'activeSlots',
+  'maxSlots',
+  'pendingDepth',
+  'maxPendingDepth',
+  'queueWaitMs',
+  'delaySource',
+  'delayMs',
+  'elapsedMs',
+  'remainingBudgetMs',
+  'nextRetryAt',
+  'decision',
+] as const
+
+export function logRecoveryEvent(
+  input: RecoveryEvent,
+  logger: RecoveryEventLogger = consola,
+): void {
+  const callerRequestId = sanitizeCallerRequestId(input.callerRequestId)
+  const fields: RecoveryEvent = {
+    requestId: input.requestId,
+    ...(callerRequestId ? { callerRequestId } : {}),
+    event: input.event,
+  }
+  for (const key of RECOVERY_EVENT_OPTIONAL_FIELDS) {
+    if (input[key] !== undefined)
+      Object.assign(fields, { [key]: input[key] })
+  }
+  logger.info('Upstream recovery', fields)
+}
 
 export function setRequestModelMapping(request: Request, info: ModelMappingInfo): void {
   requestModelMapping.set(request, info)
@@ -125,6 +233,7 @@ export function logRequest(
   elapsed: string,
   modelInfo?: ModelMappingInfo,
   requestId?: string,
+  callerRequestId?: string,
 ): void {
   const path = formatPath(url)
   const line = [
@@ -136,7 +245,11 @@ export function logRequest(
   ].join(' ')
 
   const rid = requestId ? ` ${colorize('dim', `rid=${requestId.slice(0, 8)}`)}` : ''
+  const safeCallerRequestId = sanitizeCallerRequestId(callerRequestId)
+  const callerRid = safeCallerRequestId
+    ? ` ${colorize('dim', `callerRid=${safeCallerRequestId}`)}`
+    : ''
 
   // eslint-disable-next-line no-console
-  console.log(`${line}${formatModelMapping(modelInfo)}${rid}`)
+  console.log(`${line}${formatModelMapping(modelInfo)}${rid}${callerRid}`)
 }

@@ -19,6 +19,8 @@ export interface ResponsesCoreParams {
   body: unknown
   signal: AbortSignal
   headers: Headers
+  requestId: string
+  callerRequestId?: string
 }
 
 export type ResponsesCoreResult = PipelineResult
@@ -30,14 +32,14 @@ export type ResponsesCoreResult = PipelineResult
  * through the afterIngest / afterTransform lifecycle hooks.
  */
 export async function handleResponsesCore(
-  { body, signal, headers }: ResponsesCoreParams,
+  { body, signal, headers, requestId, callerRequestId }: ResponsesCoreParams,
 ): Promise<ResponsesCoreResult> {
   const emulatorMode = configStore.isEmulatorEnabled()
   let originalPayload: ResponsesPayload | undefined
   let emulatorPrepared: ReturnType<typeof prepareEmulatorRequest> | undefined
 
   const pipelineResult = await runPipeline<ResponsesPayload, ResponsesStrategyContext>(
-    { body, signal, headers },
+    { body, signal, headers, requestId, callerRequestId },
     {
       protocol: 'responses',
       strategyRegistry: responsesStrategyRegistry,
@@ -76,7 +78,7 @@ export async function handleResponsesCore(
         clampResponsesOutputTokens(payload)
         clampResponsesReasoningEffort(payload, selectedModel)
       },
-      buildStrategyContext({ payload, meta, copilotClient, upstreamSignal }) {
+      buildStrategyContext({ payload, meta, selectedModel, copilotClient, upstreamSignal }) {
         const { vision, initiator } = getResponsesRequestOptions(payload)
         const prepared = emulatorPrepared
         const requestPayload = originalPayload ?? payload
@@ -88,7 +90,11 @@ export async function handleResponsesCore(
           vision,
           initiator,
           decorateResponse: prepared
-            ? (response: ResponsesResult) => decorateStoredResponse(response, requestPayload, prepared)
+            ? (response: ResponsesResult) => decorateStoredResponse(
+                { ...response, model: selectedModel?.id ?? response.model },
+                requestPayload,
+                prepared,
+              )
             : undefined,
           onTerminalResponse: prepared
             ? (terminalResponse: ResponsesResult) => {

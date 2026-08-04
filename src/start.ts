@@ -10,7 +10,13 @@ import { generateEnvScript } from './cli/shell'
 import { printStartupBanner } from './cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from './clients/factory'
 import { applyGheDomain } from './clients/ghe-domain'
-import { getCachedConfig, readConfig } from './lib/config'
+import {
+  getCachedConfig,
+  MAX_UPSTREAM_QUEUE_RETRIES,
+  MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS,
+  MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS,
+  readConfig,
+} from './lib/config'
 import { ensurePaths } from './lib/paths'
 import { setupCopilotToken, setupGitHubToken } from './lib/token'
 import { createServer } from './server'
@@ -30,6 +36,7 @@ interface RunServerOptions {
   upstreamTimeoutSeconds?: number
   upstreamQueueConcurrency?: number
   upstreamQueueMaxRetries?: number
+  upstreamRecoveryBudgetSeconds?: number
   upstreamQueueBaseDelaySeconds?: number
   upstreamQueueMaxDelaySeconds?: number
   gheDomain?: string
@@ -127,12 +134,14 @@ async function runServer(options: RunServerOptions): Promise<void> {
 
   const upstreamQueueConcurrency = options.upstreamQueueConcurrency ?? cachedConfig.upstreamQueueConcurrency
   const upstreamQueueMaxRetries = options.upstreamQueueMaxRetries ?? cachedConfig.upstreamQueueMaxRetries
+  const upstreamRecoveryBudgetSeconds = options.upstreamRecoveryBudgetSeconds ?? cachedConfig.upstreamRecoveryBudgetSeconds
   const upstreamQueueBaseDelaySeconds = options.upstreamQueueBaseDelaySeconds ?? cachedConfig.upstreamQueueBaseDelaySeconds
   const upstreamQueueMaxDelaySeconds = options.upstreamQueueMaxDelaySeconds ?? cachedConfig.upstreamQueueMaxDelaySeconds
 
   configureUpstreamRequestQueue({
     concurrency: upstreamQueueConcurrency,
     maxRetries: upstreamQueueMaxRetries,
+    recoveryBudgetMs: secondsToMs(upstreamRecoveryBudgetSeconds),
     baseDelayMs: secondsToMs(upstreamQueueBaseDelaySeconds),
     maxDelayMs: secondsToMs(upstreamQueueMaxDelaySeconds),
   })
@@ -186,6 +195,23 @@ function parseIntArg(raw: string | undefined, name: string, fallbackMsg: string)
     return undefined
   }
   return n
+}
+
+export function parseBoundedIntArg(
+  raw: string | undefined,
+  name: string,
+  fallbackMsg: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (raw === undefined)
+    return undefined
+  const value = Number(raw)
+  if (!raw.trim() || !Number.isInteger(value) || value < min || value > max) {
+    consola.warn(`Invalid --${name} value "${raw}". ${fallbackMsg}`)
+    return undefined
+  }
+  return value
 }
 
 function secondsToMs(seconds: number | undefined): number | undefined {
@@ -283,7 +309,11 @@ export const start = defineCommand({
     },
     'upstream-queue-retries': {
       type: 'string',
-      description: 'Maximum retries for transient upstream responses (default: 5)',
+      description: 'Maximum retries for transient upstream responses (0-2, default: 1)',
+    },
+    'upstream-recovery-budget': {
+      type: 'string',
+      description: 'Recovery budget in seconds after the first retryable outcome (1-120, default: 60)',
     },
     'upstream-queue-base-delay': {
       type: 'string',
@@ -310,7 +340,8 @@ export const start = defineCommand({
     const idleTimeoutSeconds = parseIntArg(args['idle-timeout'], 'idle-timeout', 'Falling back to Bun default.')
     const upstreamTimeoutSeconds = parseIntArg(args['upstream-timeout'], 'upstream-timeout', 'Falling back to default (300s).')
     const upstreamQueueConcurrency = parseIntArg(args['upstream-queue-concurrency'], 'upstream-queue-concurrency', 'Using default upstream queue concurrency.')
-    const upstreamQueueMaxRetries = parseIntArg(args['upstream-queue-retries'], 'upstream-queue-retries', 'Using default upstream queue retry count.')
+    const upstreamQueueMaxRetries = parseBoundedIntArg(args['upstream-queue-retries'], 'upstream-queue-retries', 'Using default upstream queue retry count.', 0, MAX_UPSTREAM_QUEUE_RETRIES)
+    const upstreamRecoveryBudgetSeconds = parseBoundedIntArg(args['upstream-recovery-budget'], 'upstream-recovery-budget', 'Using default upstream recovery budget.', MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS, MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS)
     const upstreamQueueBaseDelaySeconds = parseIntArg(args['upstream-queue-base-delay'], 'upstream-queue-base-delay', 'Using default upstream queue base delay.')
     const upstreamQueueMaxDelaySeconds = parseIntArg(args['upstream-queue-max-delay'], 'upstream-queue-max-delay', 'Using default upstream queue max delay.')
 
@@ -329,6 +360,7 @@ export const start = defineCommand({
       upstreamTimeoutSeconds,
       upstreamQueueConcurrency,
       upstreamQueueMaxRetries,
+      upstreamRecoveryBudgetSeconds,
       upstreamQueueBaseDelaySeconds,
       upstreamQueueMaxDelaySeconds,
       gheDomain: args['ghe-domain'],

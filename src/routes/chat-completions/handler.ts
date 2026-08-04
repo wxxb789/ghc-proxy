@@ -13,15 +13,17 @@ export interface CompletionCoreParams {
   body: unknown
   signal: AbortSignal
   headers: Headers
+  requestId: string
+  callerRequestId?: string
 }
 
 export type CompletionCoreResult = PipelineResult
 
 export async function handleCompletionCore(
-  { body, signal, headers }: CompletionCoreParams,
+  { body, signal, headers, requestId, callerRequestId }: CompletionCoreParams,
 ): Promise<CompletionCoreResult> {
   return runPipeline<ChatCompletionsPayload, ChatCompletionsStrategyContext>(
-    { body, signal, headers },
+    { body, signal, headers, requestId, callerRequestId },
     {
       protocol: 'openai-chat',
       strategyRegistry: chatCompletionsStrategyRegistry,

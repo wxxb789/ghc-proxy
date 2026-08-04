@@ -1,6 +1,6 @@
 import type { CopilotHeaderOptions } from './api-config'
 import type { ClientAuth, ClientConfig, ClientDeps } from './types'
-import type { QueuedUpstreamResponse, UpstreamRequestQueue } from './upstream-queue'
+import type { QueuedUpstreamResponse, UpstreamRecoveryRecord, UpstreamRequestQueue } from './upstream-queue'
 import type {
   CapiChatCompletionResponse,
   CapiChatCompletionsPayload,
@@ -23,9 +23,10 @@ import type {
 
 import { events } from 'fetch-event-stream'
 
-import { throwUpstreamError } from '~/lib/error'
+import { HTTPError, throwUpstreamError } from '~/lib/error'
 
 import { copilotBaseUrl, copilotHeaders } from './api-config'
+import { TerminalUpstreamRecoveryError } from './upstream-queue'
 
 interface RequestOptions {
   method?: string
@@ -34,6 +35,7 @@ interface RequestOptions {
   headerOptions?: CopilotHeaderOptions
   extraHeaders?: Record<string, string>
   retryable?: boolean | 'capacity'
+  effectiveModel?: string
 }
 
 interface FetchParams {
@@ -46,12 +48,18 @@ export class CopilotClient {
   private config: ClientConfig
   private fetchImpl: typeof fetch
   private requestQueue: UpstreamRequestQueue | undefined
+  private recovery: UpstreamRecoveryRecord | undefined
+  private offerLocalModelCooldown: ClientDeps['offerLocalModelCooldown']
+  private fallbackAttempt: boolean
 
   constructor(auth: ClientAuth, config: ClientConfig, deps?: ClientDeps) {
     this.auth = auth
     this.config = config
     this.fetchImpl = deps?.fetch ?? fetch
     this.requestQueue = deps?.requestQueue
+    this.recovery = deps?.recovery
+    this.offerLocalModelCooldown = deps?.offerLocalModelCooldown ?? false
+    this.fallbackAttempt = deps?.fallbackAttempt ?? false
   }
 
   private requireToken(): void {
@@ -83,12 +91,26 @@ export class CopilotClient {
       },
     }
 
-    const queuedResponse = await this.fetchWithQueue(request, options.retryable)
+    const queuedResponse = await this.fetchWithQueue(
+      request,
+      options.retryable,
+      options.effectiveModel,
+    )
     const { response } = queuedResponse
 
     if (!response.ok) {
       try {
         await throwUpstreamError(errorMessage, response)
+      }
+      catch (error) {
+        if (
+          error instanceof HTTPError
+          && response.status === 529
+          && queuedResponse.recovery
+        ) {
+          throw new TerminalUpstreamRecoveryError(error, queuedResponse.recovery)
+        }
+        throw error
       }
       finally {
         queuedResponse.release()
@@ -116,7 +138,7 @@ export class CopilotClient {
   /** POST payload, return parsed JSON or SSE stream based on payload.stream */
   private async requestStreamable<T>(
     path: string,
-    payload: { stream?: boolean | null },
+    payload: { stream?: boolean | null, model?: unknown },
     errorMessage: string,
     options?: Omit<RequestOptions, 'method' | 'body' | 'retryable'>,
   ) {
@@ -131,6 +153,7 @@ export class CopilotClient {
       // excluded from `options` above so a future caller cannot widen this
       // back to the full transient set without saying so here.
       retryable: 'capacity',
+      effectiveModel: typeof payload.model === 'string' ? payload.model : undefined,
       ...options,
     })
 
@@ -149,19 +172,32 @@ export class CopilotClient {
   private async fetchWithQueue(
     request: FetchParams,
     retryable?: boolean | 'capacity',
+    effectiveModel?: string,
   ): Promise<QueuedUpstreamResponse> {
-    const fetcher = () => this.fetchImpl(request.url, request.init)
+    const fetcher = (signal?: AbortSignal) => this.fetchImpl(request.url, {
+      ...request.init,
+      signal: signal ?? request.init.signal,
+    })
     if (this.requestQueue) {
       return this.requestQueue.dispatch(fetcher, {
         method: request.init.method,
         url: request.url,
         retryable,
+        effectiveModel,
+        recovery: this.recovery,
+        offerLocalModelCooldown: this.offerLocalModelCooldown,
+        fallbackAttempt: this.fallbackAttempt,
       }, request.init.signal ?? undefined)
     }
 
+    const recovery = this.recovery ?? {
+      requestId: crypto.randomUUID(),
+      retryCount: 0,
+    }
     return {
-      response: await fetcher(),
+      response: await fetcher(request.init.signal ?? undefined),
       release: () => {},
+      recovery,
     }
   }
 
@@ -210,6 +246,7 @@ export class CopilotClient {
         method: 'POST',
         body: JSON.stringify(payload),
         signal: options?.signal,
+        effectiveModel: payload.model,
         retryable: true,
       },
     )

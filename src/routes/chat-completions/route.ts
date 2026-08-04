@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia'
 
 import { deliverResult } from '~/deliver'
+import { getOrCreateRequestCorrelation } from '~/lib/request-logger'
 import { disableIdleTimeout, hasStreamingFlag } from '~/lib/request-timeout'
 import { requestGuardPlugin } from '~/routes/middleware/request-guard'
 
@@ -18,6 +19,7 @@ export function createCompletionRoutes() {
         body,
         signal: request.signal,
         headers: request.headers,
+        ...getOrCreateRequestCorrelation(request),
       })
       const delivery = deliverResult(request, result, modelMapping)
       if (!delivery.streaming)

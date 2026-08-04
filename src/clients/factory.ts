@@ -1,4 +1,4 @@
-import type { UpstreamRequestQueueOptions } from './upstream-queue'
+import type { UpstreamRecoveryRecord, UpstreamRequestQueueOptions } from './upstream-queue'
 import type { ClientConfig } from '~/clients'
 
 import consola from 'consola'
@@ -26,9 +26,17 @@ export function getClientConfig(): ClientConfig {
   }
 }
 
-export function createCopilotClient(): CopilotClient {
+export function createCopilotClient(
+  recovery?: UpstreamRecoveryRecord,
+  options: {
+    offerLocalModelCooldown?: (effectiveModel: string) => boolean
+    fallbackAttempt?: boolean
+  } = {},
+): CopilotClient {
   return new CopilotClient(authStore, getClientConfig(), {
     requestQueue: upstreamRequestQueue,
+    recovery,
+    ...options,
   })
 }
 

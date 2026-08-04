@@ -35,9 +35,11 @@ class HTTPError extends Error {
 }
 ```
 
-Before a transient Copilot status reaches this helper, `UpstreamRequestQueue` may retry it, with global back-pressure for capacity limits. Which statuses are replayed depends on what a duplicate would cost: completion requests replay only `429`/`529`, effect-free requests also replay `408`, `500`, `502`, `503`, `504`. See [Upstream Request Queue](upstream-request-queue.md).
+Before a transient Copilot status reaches this helper, `UpstreamRequestQueue` may perform bounded pre-`Response` recovery. Generation requests replay only `429`/`529`; effect-free requests retain `408`, `429`, `500`, `502`, `503`, `504`, and `529`. Both may retry only the measured DNS/refusal connection-establishment allowlist. Timeouts, aborts, resets, TLS/configuration failures, unknown fetch errors, and body/stream failures are not connection-retried. See [Upstream Request Queue](upstream-request-queue.md).
 
-The upstream error helper (`throwUpstreamError`) extracts the response body and status code. Structured upstream error bodies are forwarded as-is. Plain-text upstream bodies are returned as the client-facing error message, with HTTP 429 classified as `rate_limit_error`. If the upstream body is empty, the client gets the fallback proxy error message while logs still include upstream status metadata and a safe body preview.
+The upstream error helper (`throwUpstreamError`) extracts the response body and status code. Structured upstream error bodies are forwarded as-is. Plain-text upstream bodies become the client-facing message, with HTTP `429` classified as `rate_limit_error` and `529` as `overloaded_error`. Final capacity errors preserve the standard `Retry-After` header. If the upstream body is empty, the client gets the fallback proxy message while logs retain bounded status/body metadata.
+
+Capacity scope is separate from error shape: `429` installs an account cooldown, `529` with a final effective model installs a model cooldown, and model-less `529` remains request-only. A valid `Retry-After` is the full shared cooldown deadline and a lower bound for automatic retry; the computed-backoff maximum never shortens it.
 
 ### Streaming Errors
 
@@ -53,7 +55,7 @@ During streaming, errors become protocol-level events:
 }
 ```
 
-This preserves the SSE connection and gives the client structured error information.
+This preserves the SSE connection and gives the client structured error information. A successful upstream `Response` is already committed, so a later stream failure -- including before the first downstream event -- never starts a retry or overload fallback.
 
 ## Validation Architecture
 
@@ -124,10 +126,13 @@ Elysia-native error class with `status` property and `toResponse()`. Elysia auto
 class HTTPError extends Error {
   status: number // HTTP status code
   body: HTTPErrorBody // Structured { error: { message, type, param?, code? } }
+  headers: Headers // Safe response metadata such as Retry-After
 
-  toResponse(): Response // Returns Response.json(body, { status })
+  toResponse(): Response // Native Response with the stored status/body/headers
 }
 ```
+
+`HTTPError.toResponse()` is the protocol boundary. Recovery diagnostics stay in structured logs; they are not appended to the JSON body, emitted as non-standard SSE events, or exposed as custom retry headers.
 
 ### `TranslationFailure`
 
@@ -213,7 +218,7 @@ Client Response
 
 ### Upstream Queue Depth
 
-`UpstreamRequestQueue` enforces a maximum queue depth of **1,000 pending waiters** (configurable via `maxQueueDepth`). When the queue is full, new requests are immediately rejected with HTTP 503:
+`UpstreamRequestQueue` enforces a maximum queue depth of **1,000 pending waiters** internally. A cooled-model waiter does not consume an otherwise free active slot: the oldest eligible waiter may bypass it. When every global slot is occupied and global pending depth is full, new requests are rejected with HTTP 503:
 
 ```json
 {

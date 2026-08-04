@@ -60,9 +60,10 @@ interface RunServerOptions {
   showToken: boolean // Display token in logs
   upstreamTimeoutSeconds?: number // Upstream request timeout
   upstreamQueueConcurrency?: number // Concurrent Copilot upstream occupancy
-  upstreamQueueMaxRetries?: number // Max retries for upstream 429
+  upstreamQueueMaxRetries?: number // Shared retry count (0..2, default 1)
+  upstreamRecoveryBudgetSeconds?: number // Recovery deadline (1..120, default 60)
   upstreamQueueBaseDelaySeconds?: number // Base retry delay when Retry-After is absent
-  upstreamQueueMaxDelaySeconds?: number // Max retry delay
+  upstreamQueueMaxDelaySeconds?: number // Computed backoff cap; not Retry-After
   // ...plus githubToken, claudeCode, proxyEnv, idleTimeoutSeconds, gheDomain, dumpFailedPayloads
 }
 ```
@@ -106,13 +107,10 @@ configStore.isContextManagementModel(model) // responsesApiContextManagementMode
 configStore.getReasoningEffort(model) // modelReasoningEfforts
 configStore.getModelRewrites() // modelRewrites
 configStore.getModelFallback() // modelFallback
-configStore.getUpstreamQueueConcurrency() // upstreamQueueConcurrency
-configStore.getUpstreamQueueMaxRetries() // upstreamQueueMaxRetries
-configStore.getUpstreamQueueBaseDelaySeconds() // upstreamQueueBaseDelaySeconds
-configStore.getUpstreamQueueMaxDelaySeconds() // upstreamQueueMaxDelaySeconds
+configStore.getOverloadFallback(sourceModel) // exact overloadFallbacks entry
 ```
 
-Each method reads from `getCachedConfig()` and applies the appropriate default value. This consolidates 10+ config access patterns into a single, discoverable interface and eliminates the risk of inconsistent default handling across call sites.
+Feature/model queries read from `getCachedConfig()` and apply their local defaults. Queue startup values deliberately do not have `ConfigStore` getters: `src/start.ts` merges CLI values with `getCachedConfig()` once and passes milliseconds/counts directly to `configureUpstreamRequestQueue()` in `src/clients/factory.ts`.
 
 ## Configuration File (`~/.local/share/ghc-proxy/config.json`)
 
@@ -153,9 +151,11 @@ interface ConfigFile {
 
   // Copilot upstream queue
   upstreamQueueConcurrency?: number // Concurrent upstream occupancy (default 10)
-  upstreamQueueMaxRetries?: number // Max retries for upstream 429 (default 5)
+  upstreamQueueMaxRetries?: number // Shared retry count, 0..2 (default 1)
+  upstreamRecoveryBudgetSeconds?: number // Recovery deadline, 1..120 seconds (default 60)
   upstreamQueueBaseDelaySeconds?: number // Base backoff delay (default 2)
-  upstreamQueueMaxDelaySeconds?: number // Max backoff delay (default 60)
+  upstreamQueueMaxDelaySeconds?: number // Computed backoff cap only (default 60)
+  overloadFallbacks?: Record<string, string> // Exact one-hop source -> target mappings; absent disables fallback
 
   // GitHub Enterprise
   gheDomain?: string // GitHub Enterprise domain
@@ -178,9 +178,10 @@ The `start` command maps CLI flags onto `authStore` and the upstream queue:
 | `--dump-failed-payloads` / `-D` | `runtimeStore.dumpFailedPayloads` | `false` |
 | `--upstream-timeout`   | `upstreamTimeoutSeconds`  | (none)         |
 | `--upstream-queue-concurrency` | `upstreamQueueConcurrency` | `10`     |
-| `--upstream-queue-retries` | `upstreamQueueMaxRetries` | `5`       |
+| `--upstream-queue-retries` | `upstreamQueueMaxRetries` | `1` (`0..2`) |
+| `--upstream-recovery-budget` | `upstreamRecoveryBudgetSeconds` | `60` (`1..120`) |
 | `--upstream-queue-base-delay` | `upstreamQueueBaseDelaySeconds` | `2` |
-| `--upstream-queue-max-delay` | `upstreamQueueMaxDelaySeconds` | `60` |
+| `--upstream-queue-max-delay` | `upstreamQueueMaxDelaySeconds` | `60` (computed backoff only) |
 | `--proxy-env`          | (http proxy setup)        | `false`        |
 | `--claude-code`        | (interactive setup)       | `false`        |
 
@@ -204,18 +205,18 @@ The Docker image is the exception: its [`entrypoint.sh`](../../entrypoint.sh)
 forwards `GH_TOKEN` to `start --github-token`, so `GH_TOKEN` works only inside
 the container, not for the bare binary.
 
-Priority: CLI argument > Environment variable > Config file > Default value. `DUMP_FAILED_PAYLOADS` is a runtime debug flag only and is not persisted to `config.json`.
+Priority for queue settings is CLI argument > config file > queue default; there are no queue environment variables. `DUMP_FAILED_PAYLOADS` is a runtime debug flag only and is not persisted to `config.json`.
 
 ## Startup Sequence
 
 ```text
 1. Parse CLI arguments
 2. Read config file (~/.local/share/ghc-proxy/config.json)
-3. Initialize state singletons (`authStore`, etc.) with merged config
-4. Authenticate with GitHub (device code flow or provided token)
-5. Obtain Copilot API token from GitHub token
-6. Cache VS Code version
-7. Cache Copilot model list
+3. Merge queue CLI/config values and call `configureUpstreamRequestQueue()` directly
+4. Initialize remaining state singletons (`authStore`, etc.)
+5. Authenticate with GitHub (device code flow or provided token)
+6. Obtain Copilot API token from GitHub token
+7. Cache VS Code version and Copilot model list
 8. Start Elysia HTTP server (Bun-native adapter or @elysiajs/node fallback)
 9. (Optional) Interactive Claude Code setup
 ```
@@ -253,7 +254,7 @@ Two modes controlled by `rateLimitWait`:
 - If a request arrives too early, delay it until the rate limit window passes
 - The request is held in-process (not queued externally)
 
-This local request guard is separate from the Copilot upstream queue. The upstream queue is always active for Copilot API calls and handles upstream HTTP 429 with global back-pressure and retry. See [Upstream Request Queue](upstream-request-queue.md).
+This local request guard is separate from the Copilot upstream queue. The upstream queue is always active: `429` creates account back-pressure, model-aware `529` creates model-scoped back-pressure, and model-less `529` stays request-only. See [Upstream Request Queue](upstream-request-queue.md).
 
 ## Token Lifecycle
 

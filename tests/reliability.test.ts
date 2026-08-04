@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
 import { HTTPError } from '~/lib/error'
+import { getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
 import { createServer } from '~/server'
 import { createApp } from './helpers'
 
@@ -289,6 +290,7 @@ describe('Error classification in onError handler', () => {
     expect(response.status).toBe(429)
     const json = await response.json()
     expect(json).toEqual({
+      type: 'error',
       error: {
         message: 'Upstream error',
         type: 'error',
@@ -389,6 +391,7 @@ const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, 'g')
 
 async function captureAccessLogLine(
   reject: () => Promise<never>,
+  callerRequestId?: string,
 ): Promise<string> {
   const lines: Array<string> = []
   // eslint-disable-next-line no-console
@@ -402,7 +405,10 @@ async function captureAccessLogLine(
     CopilotClient.prototype.createChatCompletions = reject as never
     await createServer().handle(new Request('http://localhost/v1/messages', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        ...(callerRequestId ? { 'x-request-id': callerRequestId } : {}),
+      },
       body: JSON.stringify({
         model: 'claude-haiku-4.5',
         max_tokens: 64,
@@ -456,6 +462,76 @@ describe('Access-log status code matches the client response', () => {
     ))
 
     expect(accessLogStatus(line)).toBe('429')
+  })
+
+  test('logs the caller request id alongside the unique internal id', async () => {
+    const line = await captureAccessLogLine(
+      () => Promise.reject(new Error('Something went wrong')),
+      'caller request/id',
+    )
+
+    expect(line).toContain('callerRid=caller_request/id')
+    expect(line).toMatch(/\brid=[\da-f]{8}\b/)
+  })
+})
+
+describe('Request correlation and recovery logging', () => {
+  test('preserves caller x-request-id on the public response', async () => {
+    const response = await createServer().handle(new Request('http://localhost/health', {
+      headers: { 'x-request-id': 'caller-request-id' },
+    }))
+
+    expect(response.headers.get('x-request-id')).toBe('caller-request-id')
+  })
+
+  test('uses a unique internal id while preserving a reused caller request id', () => {
+    const first = getOrCreateRequestCorrelation(new Request('http://localhost', {
+      headers: { 'x-request-id': 'caller-reused-id' },
+    }))
+    const second = getOrCreateRequestCorrelation(new Request('http://localhost', {
+      headers: { 'x-request-id': 'caller-reused-id' },
+    }))
+
+    expect(first.requestId).not.toBe(second.requestId)
+    expect(first.callerRequestId).toBe('caller-reused-id')
+    expect(second.callerRequestId).toBe('caller-reused-id')
+    expect(first.responseRequestId).toBe('caller-reused-id')
+  })
+
+  test('reuses one correlation record for the same Request object', () => {
+    const request = new Request('http://localhost')
+    expect(getOrCreateRequestCorrelation(request)).toBe(getOrCreateRequestCorrelation(request))
+  })
+
+  test('structured recovery events emit only allowlisted scalar fields', () => {
+    const calls: Array<Array<unknown>> = []
+    const logger = {
+      info: (...args: Array<unknown>) => calls.push(args),
+    }
+
+    logRecoveryEvent({
+      requestId: 'internal-id',
+      callerRequestId: `caller id\n${'x'.repeat(200)}`,
+      event: 'retry',
+      retryCount: 1,
+      status: 529,
+      decision: 'retry',
+      payload: { prompt: 'secret' },
+      headers: { authorization: 'Bearer secret' },
+      token: 'secret',
+    } as never, logger)
+
+    expect(calls).toEqual([[
+      'Upstream recovery',
+      {
+        requestId: 'internal-id',
+        callerRequestId: `caller_id_${'x'.repeat(118)}`,
+        event: 'retry',
+        retryCount: 1,
+        status: 529,
+        decision: 'retry',
+      },
+    ]])
   })
 })
 

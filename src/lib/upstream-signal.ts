@@ -2,6 +2,15 @@ import { authStore } from '~/state'
 
 const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 minutes
 
+export function createUpstreamDeadlineFromConfig(
+  now = performance.now(),
+): number | null {
+  const timeoutMs = authStore.upstreamTimeoutSeconds !== undefined
+    ? authStore.upstreamTimeoutSeconds * 1000
+    : DEFAULT_TIMEOUT_MS
+  return timeoutMs > 0 ? now + timeoutMs : null
+}
+
 export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController()
   // No abort reason on purpose: a bare `abort()` yields the standard
@@ -38,11 +47,25 @@ export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEF
  * runtime instead. `isTimeoutLikeError` recognizes both runtimes' shapes so
  * every path maps to a 504.
  */
-export function createUpstreamSignalFromConfig(clientSignal: AbortSignal) {
-  return createUpstreamSignal(
+export function createUpstreamSignalFromConfig(
+  clientSignal: AbortSignal,
+  deadlineMonotonicMs = createUpstreamDeadlineFromConfig(),
+) {
+  const remainingMs = deadlineMonotonicMs === null
+    ? undefined
+    : deadlineMonotonicMs - performance.now()
+  const upstreamSignal = remainingMs !== undefined && remainingMs <= 0
+    ? createExpiredUpstreamSignal(clientSignal)
+    : createUpstreamSignal(clientSignal, remainingMs ?? 0)
+  return { ...upstreamSignal, deadlineMonotonicMs }
+}
+
+function createExpiredUpstreamSignal(clientSignal: AbortSignal) {
+  const controller = new AbortController()
+  controller.abort()
+  return {
+    signal: controller.signal,
     clientSignal,
-    authStore.upstreamTimeoutSeconds !== undefined
-      ? authStore.upstreamTimeoutSeconds * 1000
-      : undefined,
-  )
+    cleanup: () => {},
+  }
 }

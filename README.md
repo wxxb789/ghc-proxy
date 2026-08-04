@@ -100,7 +100,7 @@ bunx ghc-proxy@latest start          # Start the proxy server
 bunx ghc-proxy@latest auth           # Run GitHub auth flow without starting the server
 bunx ghc-proxy@latest check-usage    # Show your Copilot usage/quota in the terminal
 bunx ghc-proxy@latest debug          # Print diagnostic info (version, paths, token status)
-bunx ghc-proxy@latest selfcheck      # Probe the packaged bundle (loads every tokenizer chunk; useful for install troubleshooting)
+bunx ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node runtime contracts in the packaged bundle
 ```
 
 ### `start` Options
@@ -121,9 +121,10 @@ bunx ghc-proxy@latest selfcheck      # Probe the packaged bundle (loads every to
 | `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds (`0` disables; Bun max is `255`; streaming routes disable idle timeout automatically) |
 | `--upstream-timeout` | -- | `1800` | Upstream request timeout in seconds (`0` disables). Enforced as a total-duration `AbortSignal`. Note both runtimes also apply their own ~300s **idle** timeout to `fetch` (Bun's built-in limit; Node's undici `headersTimeout`/`bodyTimeout`), which fires when no byte arrives for that long — a steadily streaming response is not capped by it, but a stalled one is rejected at ~300s and returned as a `504`. |
 | `--upstream-queue-concurrency` | -- | `10` | Maximum concurrent Copilot upstream requests |
-| `--upstream-queue-retries` | -- | `5` | Maximum retries for transient upstream responses. Completion requests (`/v1/messages`, `/chat/completions`, `/responses`) retry only `429`/`529`; effect-free requests also retry `408`, `500`, `502`, `503`, `504` |
+| `--upstream-queue-retries` | -- | `1` | Maximum retries across capacity and approved pre-connection failures (`0..2`). Generation requests retry HTTP `429`/`529`; effect-free requests retain the broader transient-status policy |
+| `--upstream-recovery-budget` | -- | `60` | Seconds available after the first approved retryable outcome or active-cooldown encounter for all later waits and pre-`Response` attempts (`1..120`) |
 | `--upstream-queue-base-delay` | -- | `2` | Base delay in seconds for upstream retry backoff when `Retry-After` is absent |
-| `--upstream-queue-max-delay` | -- | `60` | Maximum delay in seconds for upstream retry backoff |
+| `--upstream-queue-max-delay` | -- | `60` | Maximum computed backoff in seconds; never shortens a valid `Retry-After` minimum |
 | `--ghe-domain` | `--ghe` | -- | GitHub Enterprise Cloud company domain (e.g. `company.ghe.com`). Required for GHE.com device login on first run; persisted automatically for later runs. |
 
 ## Rate Limiting
@@ -206,9 +207,11 @@ All fields are optional. The full schema:
 | `responsesOfficialEmulatorTtlSeconds` | `number` | `14400` | In-memory TTL for locally emulated Responses state |
 | `modelReasoningEfforts` | `Record<string, string>` | -- | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (ascending) |
 | `upstreamQueueConcurrency` | `number` | `10` | Maximum concurrent Copilot upstream requests |
-| `upstreamQueueMaxRetries` | `number` | `5` | Maximum retries for transient upstream responses. Completion requests (`/v1/messages`, `/chat/completions`, `/responses`) retry only `429`/`529`; effect-free requests also retry `408`, `500`, `502`, `503`, `504` |
+| `upstreamQueueMaxRetries` | `number` | `1` | Maximum retries across capacity and approved pre-connection failures (`0..2`) |
+| `upstreamRecoveryBudgetSeconds` | `number` | `60` | Shared recovery deadline after the first retryable outcome or active-cooldown encounter (`1..120` seconds) |
+| `overloadFallbacks` | `Record<string, string>` | -- | Exact effective-model mappings for one opt-in fallback dispatch after terminal model `529`; absent means disabled |
 | `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream retry backoff when `Retry-After` is absent |
-| `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum delay (seconds) for upstream retry backoff |
+| `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum computed backoff (seconds); does not clamp `Retry-After` |
 | `gheDomain` | `string` | -- | GitHub Enterprise Cloud company domain (persisted automatically after GHE.com auth) |
 
 Example:
@@ -233,6 +236,9 @@ Example:
   "modelReasoningEfforts": {
     "gpt-5": "high",
     "gpt-5-mini": "medium"
+  },
+  "overloadFallbacks": {
+    "claude-opus-5": "claude-opus-4.8"
   }
 }
 ```
@@ -295,7 +301,33 @@ Unlike model fallbacks (which only apply to the chat completions path), rewrites
 
 Rewrites run **before** any other model policy — small-model routing and strategy selection all see the rewritten model.
 
-### Small-Model Routing
+### Overload Fallbacks
+
+`overloadFallbacks` is a separate, opt-in recovery policy. Each key and value is an exact advertised model ID after normal rewrite/compact resolution:
+
+```json
+{
+  "overloadFallbacks": {
+    "claude-opus-5": "claude-opus-4.8"
+  }
+}
+```
+
+Fallback is considered only after a terminal source-model `529` or a pre-existing local cooldown for that source. It never runs for account `429`, connection failures, timeouts, cancellation, validation failures, other statuses, or failures after an upstream `Response` exists. The target must be distinct, advertised, not locally cooled, and compatible with the request's endpoint, tools, parallel tools, streaming, vision, reasoning/thinking, and structured-output needs. The pipeline rebuilds target-dependent transforms and strategy selection from pristine input, dispatches once with no fresh retry allowance, and reports the actual served target in response model fields and the `OVERLOAD_FALLBACK` model trace.
+
+Mappings are exact one-hop choices, not a traversed graph. Blank, same-model, and reciprocal two-node entries such as `A -> B` plus `B -> A` are ignored with a configuration warning. An unknown or incompatible runtime target preserves the source `529`.
+
+## Upstream Capacity Recovery
+
+An upstream `429` establishes an account cooldown. A `529` is scoped to the final effective upstream model; if no effective model is known, it remains request-only. Eligible models can bypass cooled waiters while a global slot is free, but active slots and the maximum pending depth remain process-global limits.
+
+The first attempt keeps the normal upstream timeout. The recovery budget starts at the first approved retryable outcome or the first encounter with an already-active cooldown, then covers every later cooldown/backoff wait, queue acquisition, same-model attempt until `Response`, and overload fallback. A valid integer-seconds, HTTP-date, or full-string fractional-seconds `Retry-After` is a strict lower bound and installs its full cooldown deadline. If that minimum cannot fit, the proxy skips the same-model retry instead of shortening it. Without a valid header, full jitter is sampled from zero through the smallest of exponential backoff, `upstreamQueueMaxDelaySeconds`, and remaining budget.
+
+Generation requests additionally retry only measured pre-connection shapes: Bun `ConnectionRefused`, or Node `ECONNREFUSED`, `ENOTFOUND`, and `EAI_AGAIN`. Caller aborts, every timeout, TLS/configuration failures, resets, generic fetch errors, body failures, and stream failures are excluded. Once `fetch()` returns a `Response`, that attempt is committed: a later JSON/SSE/body failure is never replayed or sent to fallback.
+
+Recovery logs use the existing request ID and structured fields such as event, retry count, status/connection class, effective model, scope, active/max slots, pending/max depth, queue wait, delay source/delay, elapsed/remaining budget, `nextRetryAt`, and decision. Public responses keep protocol-compatible payloads and only safe standard metadata such as `Retry-After`; no retry-progress SSE event or recovery payload extension is added. Per inbound request, the attempt ceiling is `1 + upstreamQueueMaxRetries + at most one configured fallback`; outer SDK retries multiply that ceiling independently.
+
+## Small-Model Routing
 
 `/v1/messages` can optionally reroute specific low-value requests to a cheaper model:
 
