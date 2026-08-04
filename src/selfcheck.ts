@@ -286,8 +286,7 @@ async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
       const detail = probe.ok ? '' : ` error=${probe.error}`
       process.stdout.write(`  [${mark}] ${probe.name}${detail}\n`)
     }
-    const passed = probes.filter(probe => probe.ok).length
-      + runtimeProbes.filter(probe => probe.ok).length
+    const passed = probes.length + runtimeProbes.length - failed.length
     process.stdout.write(`\n${result.ok ? 'PASS' : 'FAIL'} — ${passed}/${probes.length + runtimeProbes.length} probes passed\n`)
   }
 

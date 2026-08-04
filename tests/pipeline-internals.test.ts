@@ -597,7 +597,6 @@ describe('runPipeline', () => {
     config_.overloadFallbacks = { source: 'target' }
     modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
     let attempts = 0
-    let resumed = false
     const registry = new StrategyRegistry<{
       payload: SimplePayload
       recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
@@ -609,10 +608,7 @@ describe('runPipeline', () => {
         attempts++
         if (attempts === 1) {
           recovery.sourceModel = 'source'
-          throw new LocalModelCooldownError(recovery, '3', () => {
-            resumed = true
-            return Promise.reject(new Error('source resumed'))
-          })
+          throw new LocalModelCooldownError(recovery, '3')
         }
         return { kind: 'json', data: { model: 'target' } }
       },
@@ -632,7 +628,6 @@ describe('runPipeline', () => {
 
     expect(result).toEqual({ kind: 'json', data: { model: 'target' } })
     expect(attempts).toBe(2)
-    expect(resumed).toBe(false)
   })
 
   test('surfaces the target error without retrying or chaining fallback', async () => {

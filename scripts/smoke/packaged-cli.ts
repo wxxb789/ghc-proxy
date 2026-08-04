@@ -9,6 +9,23 @@ interface NpmPackResult {
   filename: string
 }
 
+const EXPECTED_TOKENIZER_PROBES = [
+  'o200k_base',
+  'cl100k_base',
+  'p50k_base',
+  'p50k_edit',
+  'r50k_base',
+]
+
+const EXPECTED_RUNTIME_PROBES = [
+  'http-error-response-contract',
+  'connection-error-classification',
+  'response-body-cancellation',
+  'response-commit-boundary',
+  'caller-cancellation',
+  'protocol-payload-contract',
+]
+
 async function main() {
   const repoRoot = process.cwd()
   const tempDir = await fs.mkdtemp(
@@ -117,7 +134,8 @@ async function main() {
     runSelfcheck('bun', packagedBinPath, installRoot)
     runSelfcheck('node', packagedBinPath, installRoot)
 
-    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (11 tokenizer/runtime probes passed under bun + node)`)
+    const probeCount = EXPECTED_TOKENIZER_PROBES.length + EXPECTED_RUNTIME_PROBES.length
+    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (${probeCount} tokenizer/runtime probes passed under bun + node)`)
   }
   finally {
     if (tarballPath) {
@@ -146,23 +164,6 @@ interface SelfcheckReport {
   runtimeProbes?: Array<RuntimeProbe>
   failedCount?: number
 }
-
-const EXPECTED_TOKENIZER_PROBES = [
-  'o200k_base',
-  'cl100k_base',
-  'p50k_base',
-  'p50k_edit',
-  'r50k_base',
-]
-
-const EXPECTED_RUNTIME_PROBES = [
-  'http-error-response-contract',
-  'connection-error-classification',
-  'response-body-cancellation',
-  'response-commit-boundary',
-  'caller-cancellation',
-  'protocol-payload-contract',
-]
 
 function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: string): void {
   const result = Bun.spawnSync([runtime, packagedBinPath, 'selfcheck', '--json'], {

@@ -66,7 +66,7 @@ export interface UpstreamRequestContext {
   retryable?: boolean | 'capacity'
   effectiveModel?: string
   recovery?: UpstreamRecoveryRecord
-  offerLocalModelCooldown?: boolean
+  offerLocalModelCooldown?: boolean | ((effectiveModel: string) => boolean)
   fallbackAttempt?: boolean
 }
 
@@ -143,12 +143,9 @@ export class TerminalUpstreamRecoveryError extends HTTPError {
 }
 
 export class LocalModelCooldownError extends TerminalUpstreamRecoveryError {
-  private readonly resumeDispatch: () => Promise<QueuedUpstreamResponse>
-
   constructor(
     recovery: UpstreamRecoveryRecord,
     retryAfter: string,
-    resumeDispatch: () => Promise<QueuedUpstreamResponse>,
   ) {
     super(new HTTPError(529, {
       error: {
@@ -157,13 +154,6 @@ export class LocalModelCooldownError extends TerminalUpstreamRecoveryError {
       },
     }, { headers: { 'retry-after': retryAfter } }), recovery)
     this.name = 'LocalModelCooldownError'
-    this.resumeDispatch = resumeDispatch
-  }
-
-  resume(): Promise<QueuedUpstreamResponse> {
-    if (!this.claimFallback())
-      return Promise.reject(new Error('Recovery handoff already consumed'))
-    return this.resumeDispatch()
   }
 }
 
@@ -230,8 +220,14 @@ export class UpstreamRequestQueue {
     this.throwIfFallbackCooled(context)
 
     const localCooldown = this.getActiveCooldown(context.effectiveModel)
+    const offerLocalModelCooldown = typeof context.offerLocalModelCooldown === 'function'
+      ? Boolean(
+          context.effectiveModel
+          && context.offerLocalModelCooldown(context.effectiveModel),
+        )
+      : context.offerLocalModelCooldown
     if (
-      context.offerLocalModelCooldown
+      offerLocalModelCooldown
       && localCooldown?.scope === 'model'
       && localCooldown.notBeforeMonotonicMs > this.now()
     ) {
@@ -242,7 +238,6 @@ export class UpstreamRequestQueue {
       throw new LocalModelCooldownError(
         recovery,
         retryAfter,
-        () => this.dispatch(fetcher, { ...context, offerLocalModelCooldown: false }, signal),
       )
     }
 
@@ -468,10 +463,10 @@ export class UpstreamRequestQueue {
     for (const waiter of this.waiters) {
       const cooldown = this.getActiveCooldown(waiter.context.effectiveModel)
       if (cooldown && cooldown.notBeforeMonotonicMs > now)
-        wakeAt = minDefined(wakeAt, cooldown.notBeforeMonotonicMs)
+        wakeAt = Math.min(wakeAt ?? Number.POSITIVE_INFINITY, cooldown.notBeforeMonotonicMs)
       const deadline = waiter.context.recovery.deadlineMonotonicMs
       if (deadline !== undefined && deadline > now)
-        wakeAt = minDefined(wakeAt, deadline)
+        wakeAt = Math.min(wakeAt ?? Number.POSITIVE_INFINITY, deadline)
     }
 
     if (wakeAt === this.drainTimerAt)
@@ -822,10 +817,6 @@ function mergeDefinedOptions(
   }
 }
 
-function minDefined(current: number | undefined, next: number): number {
-  return current === undefined ? next : Math.min(current, next)
-}
-
 function discardResponse(response: Response): void {
   try {
     void response.body?.cancel().catch(() => {})
@@ -933,15 +924,22 @@ function createLocalCapacityError(recovery: UpstreamRecoveryRecord): HTTPError {
   const errorType = status === 504 ? 'timeout_error' : upstreamErrorType(status)
   const error = new HTTPError(status, {
     error: {
-      message: status === 429
-        ? 'The upstream account is temporarily rate limited.'
-        : status === 529
-          ? 'The selected upstream model is temporarily overloaded.'
-          : status === 504
-            ? 'The upstream recovery budget was exhausted.'
-            : `The last upstream attempt failed with status ${status}.`,
+      message: localCapacityErrorMessage(status),
       type: errorType,
     },
   }, retryAfter ? { headers: { 'retry-after': retryAfter } } : undefined)
   return status === 529 ? new TerminalUpstreamRecoveryError(error, recovery) : error
+}
+
+function localCapacityErrorMessage(status: number): string {
+  switch (status) {
+    case 429:
+      return 'The upstream account is temporarily rate limited.'
+    case 529:
+      return 'The selected upstream model is temporarily overloaded.'
+    case 504:
+      return 'The upstream recovery budget was exhausted.'
+    default:
+      return `The last upstream attempt failed with status ${status}.`
+  }
 }

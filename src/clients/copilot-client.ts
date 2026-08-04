@@ -179,16 +179,13 @@ export class CopilotClient {
       signal: signal ?? request.init.signal,
     })
     if (this.requestQueue) {
-      const offerLocalModelCooldown = typeof this.offerLocalModelCooldown === 'function'
-        ? Boolean(effectiveModel && this.offerLocalModelCooldown(effectiveModel))
-        : this.offerLocalModelCooldown
       return this.requestQueue.dispatch(fetcher, {
         method: request.init.method,
         url: request.url,
         retryable,
         effectiveModel,
         recovery: this.recovery,
-        offerLocalModelCooldown,
+        offerLocalModelCooldown: this.offerLocalModelCooldown,
         fallbackAttempt: this.fallbackAttempt,
       }, request.init.signal ?? undefined)
     }

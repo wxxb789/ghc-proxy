@@ -99,7 +99,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
   const payload = config.afterIngest
     ? config.afterIngest({ payload: ingested.payload, meta, headers: params.headers })
     : ingested.payload
-  const pristinePayload = structuredClone(payload)
+  const pristinePayload = payload
   const sourceAttempt = await prepareAttempt(
     pristinePayload,
     meta,
@@ -205,7 +205,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
       emitFallbackEvent(
         error.recovery,
         candidate.target.id,
-        params.signal.aborted ? 'aborted' : 'target-failed',
+        'target-failed',
         fallbackError instanceof HTTPError ? fallbackError.status : undefined,
         isRetryableConnectionEstablishmentError(fallbackError),
       )
