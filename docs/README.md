@@ -22,7 +22,9 @@ Investigation notes and findings from upstream API behavior analysis.
 | Document | Description |
 |----------|-------------|
 | [Copilot Token Usage](research/copilot-token-usage.md) | How Copilot returns token usage across all API paths |
+| [Builtin Tool Support](research/builtin-tool-support.md) | Which builtin tools actually run, per model family and boundary |
 | [Responses Web Search](research/responses-web-search.md) | Whether `/responses` supports built-in web search, and whether it actually searches |
+| [grok-4.5 Request Schema](research/grok-4.5-schema.md) | Accepted and rejected `/responses` fields for the one xAI model |
 | [Competitive Analysis: LiteLLM](research/competitive-analysis-litellm.md) | LiteLLM proxy comparison and feature gap analysis |
 | [Environment Variables](research/environment-variables.md) | Environment variable reference and configuration |
 

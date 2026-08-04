@@ -133,7 +133,7 @@ stays current for free.
 
 The evidence for this change came from throwaway scripts. Those prove the point
 once; they do not catch the next drift. `web_search` and `web_search_2025_08_26`
-are now cases in `scripts/probes/copilot-tools.ts` alongside the `_preview`
+are now cases in `scripts/probes/tool-support.ts` alongside the `_preview`
 spellings, so the weekly JSON diff covers them. A finding that does not land in
 the standing probe is a finding with a one-run shelf life.
 
@@ -259,5 +259,5 @@ verdict came from.
   boundary, and reading one correctly says nothing about the other.
 - `docs/messages-routing-and-translation.md` — per-boundary tool tables; the
   `/v1/messages` verdict there is unchanged and still correct.
-- `scripts/probes/copilot-tools.ts` — the standing probe, now covering
+- `scripts/probes/tool-support.ts` — the standing probe, now covering
   `web_search` and `web_search_2025_08_26`.

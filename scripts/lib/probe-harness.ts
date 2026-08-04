@@ -17,6 +17,23 @@ import { authStore, MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/state'
 export const REQUEST_TIMEOUT_MS = 30_000
 
 /**
+ * Upstream statuses that say nothing about capability.
+ *
+ * A 503 "experiencing high demand" is a statement about load, not about
+ * whether the model supports the field being probed. Recording it as
+ * `rejected` manufactures a capability verdict out of a capacity blip — the
+ * exact class of mistake `docs/solutions/conventions/` keeps cataloguing.
+ * Mirrors `isTransientUpstreamStatus` (`src/lib/error.ts`); duplicated rather
+ * than imported because probes must not depend on runtime retry policy
+ * changing underneath them.
+ */
+const UNMEASURED_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529])
+
+export function isUnmeasuredStatus(status: number): boolean {
+  return UNMEASURED_STATUSES.has(status)
+}
+
+/**
  * Copilot's OpenAI-compatible chat endpoint. Unlike MESSAGES_ENDPOINT and
  * RESPONSES_ENDPOINT this has no constant in `~/state` — the client inlines it
  * (src/clients/copilot-client.ts) — so probes get it from here.
@@ -26,10 +43,17 @@ export const CHAT_COMPLETIONS_ENDPOINT = '/chat/completions' as const
 export interface ProbeResult {
   name: string
   extraFields: Record<string, unknown>
-  status: 'accepted' | 'rejected' | 'error'
+  /**
+   * `unmeasured` is not a third flavour of failure — it means the probe
+   * produced no evidence either way and the cell must stay blank in any
+   * capability table. Never fold it into `rejected`.
+   */
+  status: 'accepted' | 'rejected' | 'unmeasured' | 'error'
   httpStatus?: number
   errorMessage?: string
   note: string
+  /** Attempts spent before this verdict, when the probe retried. */
+  attempts?: number
 }
 
 export interface RawResponse {
@@ -76,6 +100,36 @@ export async function sendRaw(
 }
 
 /**
+ * Low-level POST to a Copilot upstream endpoint, retrying statuses that carry
+ * no capability signal.
+ *
+ * Probes are slow and quota-expensive, so a transient 503 in the middle of a
+ * 100-cell matrix is worth a few seconds of backoff rather than a re-run of
+ * the whole sweep. Retries only on {@link isUnmeasuredStatus}: a 400 is the
+ * answer the probe came for and must never be retried away.
+ */
+export async function sendRawWithRetry(
+  body: Record<string, unknown>,
+  options?: { endpoint?: string, timeoutMs?: number, attempts?: number, backoffMs?: number },
+): Promise<RawResponse & { attempts: number }> {
+  const maxAttempts = options?.attempts ?? 3
+  const backoffMs = options?.backoffMs ?? 4000
+  let last: RawResponse | undefined
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    last = await sendRaw(body, options)
+    if (!isUnmeasuredStatus(last.httpStatus)) {
+      return { ...last, attempts: attempt }
+    }
+    if (attempt < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, backoffMs * attempt))
+    }
+  }
+
+  return { ...last!, attempts: maxAttempts }
+}
+
+/**
  * Initialize state for probe scripts: silence logs, set config defaults,
  * then bootstrap tokens and model cache.
  */
@@ -108,7 +162,7 @@ export async function bootstrapProbe(options?: { silent?: boolean, timeoutMs?: n
 export async function probeEndpoint(
   body: Record<string, unknown>,
   baseFields?: Record<string, unknown>,
-  options?: { endpoint?: string, timeoutMs?: number },
+  options?: { endpoint?: string, timeoutMs?: number, attempts?: number },
 ): Promise<ProbeResult> {
   const extraFields: Record<string, unknown> = {}
   if (baseFields) {
@@ -120,7 +174,7 @@ export async function probeEndpoint(
   }
 
   try {
-    const { httpStatus, parsed } = await sendRaw(body, options)
+    const { httpStatus, parsed, attempts } = await sendRawWithRetry(body, options)
 
     if (httpStatus >= 200 && httpStatus < 300) {
       return {
@@ -128,16 +182,34 @@ export async function probeEndpoint(
         extraFields,
         status: 'accepted',
         httpStatus,
+        attempts,
         note: summarizeResponse(parsed),
       }
     }
 
     const errorMsg = extractErrorMessage(parsed)
+
+    // Capacity and gateway faults are not verdicts. Surfacing them as
+    // `unmeasured` keeps them out of capability tables instead of freezing a
+    // load spike into a permanent "this model rejects X".
+    if (isUnmeasuredStatus(httpStatus)) {
+      return {
+        name: '',
+        extraFields,
+        status: 'unmeasured',
+        httpStatus,
+        attempts,
+        errorMessage: errorMsg,
+        note: `no verdict after ${attempts} attempt(s): ${errorMsg}`,
+      }
+    }
+
     return {
       name: '',
       extraFields,
       status: 'rejected',
       httpStatus,
+      attempts,
       errorMessage: errorMsg,
       note: errorMsg,
     }

@@ -3,7 +3,7 @@
 Whether Copilot's `/responses` boundary supports the OpenAI/Codex built-in
 web-search tool, and whether it *actually searches* or merely accepts the field.
 
-**Probe:** `scripts/probes/copilot-tools.ts` (accept/reject matrix) — re-run
+**Probe:** `scripts/probes/tool-support.ts` — re-run
 when models change. The functional runs below were one-off scripts built on
 `scripts/lib/probe-harness.ts`; the reproduction recipe is at the bottom.
 **Date:** 2026-08-04.
@@ -194,7 +194,7 @@ enum in `src/ingest/validation/responses.ts` and `ToolChoiceBuiltin` in
 The accept/reject matrix is now part of the standing probe:
 
 ```bash
-bun scripts/probes/copilot-tools.ts --json --model=gpt-5.6-terra
+bun scripts/probes/tool-support.ts --json --model=gpt-5.6-terra
 ```
 
 Level 2 needs a question whose answer is not in training data, a

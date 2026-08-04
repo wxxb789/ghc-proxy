@@ -160,7 +160,7 @@ As of April 30, 2026, prompt caching via `cache_control: { type: "ephemeral" }` 
 
 Run `bun scripts/probes/cache-threshold.ts --model=<id>` to probe a specific model's cache threshold.
 
-Run `bun scripts/probes/copilot-tools.ts --json` to get a current snapshot. Weekly diffs detect backend changes.
+Run `bun scripts/probes/tool-support.ts --json` to get a current snapshot. Weekly diffs detect backend changes. Latest results: [research/builtin-tool-support.md](research/builtin-tool-support.md).
 
 ## Streaming Guarantees
 

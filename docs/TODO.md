@@ -2,12 +2,20 @@
 
 Tracked items for future work. Items are roughly ordered by priority.
 
+## Known Defects
+
+- [ ] **`reasoning.effort: none` leaks to models that reject it (`/responses`)**
+  - `clampResponsesReasoningEffort` (`src/transform/parameter-filter.ts`) returns early for `none` and `minimal`, on the belief — probed 2026-07-26 — that every `/responses` model advertises `none`.
+  - `grok-4.5` does not. Verified through the proxy 2026-08-04: `{"model":"grok-4.5","reasoning":{"effort":"none"}}` → `400 This model does not support 'reasoning_effort' value 'none'`. The same request with `effort: max` returns 200 (clamps to `high`), so only the unranked bypass leaks.
+  - Not a plain clamp-up: `none` means "do not reason", and the nearest advertised level (`low`) is a materially different request. Options are to drop the field, to reject locally with a clear message, or to map to `low` and say so — pick deliberately rather than by default.
+  - Evidence: `docs/research/grok-4.5-schema.md`. Convention amended in `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md`.
+
 ## Upstream Probe Refresh
 
 - [ ] **Re-probe `/responses` + `/chat/completions` (gpt/gemini) upstream surface**
   - The 2026-07-25 refresh covered only the Claude `/v1/messages` surface (models, output_config/effort, cache threshold, official tools). The `/responses` and gpt/gemini rows in `docs/design/model-routing.md` "Model Endpoint Map" are still the 2026-06-17 baseline and may be stale.
   - New models observed in the 2026-07-25 listing but NOT behavior-probed: `gpt-5.6-terra` / `-sol` / `-luna` (1050k ctx), `gemini-3.6-flash`, `mai-code-1-flash-picker`, `trajectory-compaction`.
-  - Re-run sequentially (shared rate-limited upstream, burns real quota): `scripts/probes/responses-resilience.ts`, `scripts/probes/copilot-tools.ts` (responses models), `scripts/matrix/live-compat-matrix.ts` as needed.
+  - Re-run sequentially (shared rate-limited upstream, burns real quota): `scripts/probes/responses-resilience.ts`, `scripts/probes/tool-support.ts` (responses models), `scripts/matrix/live-compat-matrix.ts` as needed.
   - Confirm June-17 `/responses` findings still hold: `store:true` → 400 (ZDR org), `previous_response_id` → 400, encrypted_content round-trip, gemini-3.1-pro-preview cache-miss.
   - Update the endpoint map + `docs/messages-routing-and-translation.md` and refresh the `project-copilot-upstream-status` memory snapshot.
 

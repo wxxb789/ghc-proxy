@@ -108,6 +108,29 @@ answered both questions, and they came out differently per dimension:
   `supportedEfforts` (`src/routes/messages/strategy-registry.ts:68`) — no
   hardcoded model IDs needed.
 
+**Amended 2026-08-04 — the second bullet has aged.** `grok-4.5` advertises
+`["low","medium","high"]` and accepts `minimal` and `xhigh` as well, while
+rejecting `none` (which every `/responses` model accepted in the 2026-07-26
+run). See `docs/research/grok-4.5-schema.md`. Two consequences, opposite in
+severity:
+
+- For the **ranked** levels the advertised list is a **safe floor, not an exact
+  set**. Clamping down to it still never produces an upstream 400, so
+  `clampEffortToAdvertised` stays correct; a caller merely loses a level the
+  model would have honoured.
+- For the **unranked** levels it is now unsafe. `clampResponsesReasoningEffort`
+  returns early for `none` and `minimal` because they were believed universal,
+  so `reasoning.effort: none` reaches grok and returns
+  `400 This model does not support 'reasoning_effort' value 'none'` — verified
+  through the proxy. An open defect, tracked in `docs/TODO.md`.
+
+That amendment is this doc's own thesis turned on itself. "Advertised is exact"
+was a probe result, not a law, and it was true of every model that existed on
+the day it was measured. A rule extracted from a probe inherits the probe's
+expiry date — including the rule that a level is *universally* supported, which
+is the same kind of unbounded generalization
+`policy-rejection-is-not-a-protocol-limit.md` warns about.
+
 The counterexample that pins the second point down: `claude-opus-4.6` and
 `claude-sonnet-4.6` advertise `max` but **not** `xhigh`, and behave that way —
 accepting `max`, rejecting `xhigh`. The effort levels are not an ordered ladder

@@ -545,13 +545,19 @@ bun run matrix:live --stateful-only --json --model=gpt-5.2-codex
 
 ### Tool Support Probe
 
-Tests which server-side tool types (bash, text_editor, web_search, memory, etc.) each Copilot model actually accepts. Useful for tracking backend changes over time.
+Answers whether a tool **works**, not merely whether upstream returns `200` when you mention it. For each (model × tool) it declares the tool, then — unless `--accept-only` — sends a prompt that cannot be answered without it and looks in the response for proof it ran.
+
+Verdicts: `supported` (the tool ran or was called), `inert` (accepted but never invoked), `unsupported` (upstream rejected it), `unmeasured` (capacity/gateway fault — no verdict, re-run before publishing).
 
 ```bash
-bun scripts/probes/copilot-tools.ts              # human-readable table
-bun scripts/probes/copilot-tools.ts --json        # JSON snapshot to stdout
-bun scripts/probes/copilot-tools.ts --model=claude-opus-4.6  # single model
+bun scripts/probes/tool-support.ts                       # both boundaries
+bun scripts/probes/tool-support.ts --json                # JSON snapshot to stdout
+bun scripts/probes/tool-support.ts --model=claude-opus-5 # single model
+bun scripts/probes/tool-support.ts --boundary=responses  # or: messages
+bun scripts/probes/tool-support.ts --accept-only         # skip the functional pass (half the quota)
 ```
+
+Latest results: [docs/research/builtin-tool-support.md](docs/research/builtin-tool-support.md).
 
 The JSON output is designed for weekly diffing — `generatedAt` is the only volatile field:
 
