@@ -7,6 +7,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
+import { TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
 import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
 import { PATHS } from '~/lib/paths'
@@ -55,6 +56,76 @@ afterEach(() => {
 })
 
 describe('responses and routing', () => {
+  test('/v1/responses uses one compatible overload target and discloses it', async () => {
+    const calls: Array<CapturedResponsesCall> = []
+    const target = buildModel('target', { supported_endpoints: ['/responses'] })
+    target.capabilities.supports.structured_outputs = false
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('source', { supported_endpoints: ['/responses'] }),
+      target,
+    ))
+    getCachedConfig().overloadFallbacks = { source: 'target' }
+    CopilotClient.prototype.createResponses = (async (payload, options) => {
+      calls.push({ payload, options })
+      if (calls.length === 1) {
+        throw new TerminalUpstreamRecoveryError(
+          new HTTPError(529, {
+            error: { message: 'source overloaded', type: 'overloaded_error' },
+          }),
+          { requestId: 'responses-fallback', retryCount: 1, sourceModel: 'source' },
+        )
+      }
+      return buildResponsesResult({ model: 'source', status: 'completed' })
+    }) as typeof CopilotClient.prototype.createResponses
+
+    const response = await createApp().handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'source',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+        text: { format: { type: 'text' } },
+      }),
+    }))
+    const body = await response.json() as { model: string }
+
+    expect(response.status).toBe(200)
+    expect(calls.map(call => call.payload.model)).toEqual(['source', 'target'])
+    expect(body.model).toBe('target')
+  })
+
+  test('/v1/responses preserves source 529 when target lacks a requested capability', async () => {
+    const source = buildModel('source', { supported_endpoints: ['/responses'] })
+    const target = buildModel('target', { supported_endpoints: ['/responses'] })
+    target.capabilities.supports.tool_calls = false
+    modelCache.cacheModels(buildModelsResponse(source, target))
+    getCachedConfig().overloadFallbacks = { source: 'target' }
+    let calls = 0
+    CopilotClient.prototype.createResponses = (async () => {
+      calls++
+      throw new TerminalUpstreamRecoveryError(
+        new HTTPError(529, {
+          error: { message: 'source overloaded', type: 'overloaded_error' },
+        }, { headers: { 'retry-after': '4' } }),
+        { requestId: 'responses-rejected', retryCount: 1, sourceModel: 'source' },
+      )
+    }) as typeof CopilotClient.prototype.createResponses
+
+    const response = await createApp().handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'source',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+        tools: [{ type: 'function', name: 'lookup', parameters: { type: 'object' } }],
+      }),
+    }))
+
+    expect(response.status).toBe(529)
+    expect(response.headers.get('retry-after')).toBe('4')
+    expect(calls).toBe(1)
+  })
+
   test('/v1/responses transforms apply_patch before forwarding', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []

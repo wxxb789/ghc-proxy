@@ -18,5 +18,6 @@ export interface ClientDeps {
   fetch?: typeof fetch
   requestQueue?: UpstreamRequestQueue
   recovery?: UpstreamRecoveryRecord
-  offerLocalModelCooldown?: boolean
+  offerLocalModelCooldown?: boolean | ((effectiveModel: string) => boolean)
+  fallbackAttempt?: boolean
 }

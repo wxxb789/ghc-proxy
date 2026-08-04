@@ -49,7 +49,8 @@ export class CopilotClient {
   private fetchImpl: typeof fetch
   private requestQueue: UpstreamRequestQueue | undefined
   private recovery: UpstreamRecoveryRecord | undefined
-  private offerLocalModelCooldown: boolean
+  private offerLocalModelCooldown: ClientDeps['offerLocalModelCooldown']
+  private fallbackAttempt: boolean
 
   constructor(auth: ClientAuth, config: ClientConfig, deps?: ClientDeps) {
     this.auth = auth
@@ -58,6 +59,7 @@ export class CopilotClient {
     this.requestQueue = deps?.requestQueue
     this.recovery = deps?.recovery
     this.offerLocalModelCooldown = deps?.offerLocalModelCooldown ?? false
+    this.fallbackAttempt = deps?.fallbackAttempt ?? false
   }
 
   private requireToken(): void {
@@ -177,13 +179,17 @@ export class CopilotClient {
       signal: signal ?? request.init.signal,
     })
     if (this.requestQueue) {
+      const offerLocalModelCooldown = typeof this.offerLocalModelCooldown === 'function'
+        ? Boolean(effectiveModel && this.offerLocalModelCooldown(effectiveModel))
+        : this.offerLocalModelCooldown
       return this.requestQueue.dispatch(fetcher, {
         method: request.init.method,
         url: request.url,
         retryable,
         effectiveModel,
         recovery: this.recovery,
-        offerLocalModelCooldown: this.offerLocalModelCooldown,
+        offerLocalModelCooldown,
+        fallbackAttempt: this.fallbackAttempt,
       }, request.init.signal ?? undefined)
     }
 

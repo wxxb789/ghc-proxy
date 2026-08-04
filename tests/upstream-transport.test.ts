@@ -968,6 +968,59 @@ describe('upstream error diagnostics', () => {
     })).rejects.toBeInstanceOf(LocalModelCooldownError)
     expect(fetchCalls).toBe(1)
   })
+
+  test('rejects a fallback waiter when the target cools before its grant', async () => {
+    const queue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 0, recoveryBudgetMs: 1_000 },
+      {
+        logger: { warn: () => {} },
+        setTimeout: ((() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown) as typeof setTimeout,
+        clearTimeout: (() => {}) as typeof clearTimeout,
+      },
+    )
+    let resolveTarget!: (response: Response) => void
+    const targetInFlight = queue.dispatch(
+      () => new Promise<Response>(resolve => resolveTarget = resolve),
+      {
+        method: 'POST',
+        url: 'https://api.githubcopilot.com/responses',
+        effectiveModel: 'target',
+      },
+    )
+    await Promise.resolve()
+
+    let fallbackFetches = 0
+    let fallbackOutcome = 'pending'
+    const fallback = queue.dispatch(
+      () => {
+        fallbackFetches++
+        return Promise.resolve(Response.json({ ok: true }))
+      },
+      {
+        method: 'POST',
+        url: 'https://api.githubcopilot.com/responses',
+        effectiveModel: 'target',
+        recovery: { requestId: 'fallback-request', retryCount: 0, sourceModel: 'source' },
+        fallbackAttempt: true,
+      },
+    )
+    void fallback.then(
+      () => fallbackOutcome = 'resolved',
+      () => fallbackOutcome = 'rejected',
+    )
+
+    resolveTarget(new Response('overloaded', {
+      status: 529,
+      headers: { 'retry-after': '2' },
+    }))
+    const target = await targetInFlight
+    target.release()
+    for (let index = 0; index < 5; index++)
+      await Promise.resolve()
+
+    expect(fallbackOutcome).toBe('rejected')
+    expect(fallbackFetches).toBe(0)
+  })
 })
 
 describe('completion POSTs are not replayed on ambiguous upstream failures', () => {

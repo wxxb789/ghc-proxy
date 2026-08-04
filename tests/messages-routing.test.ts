@@ -5,7 +5,9 @@ import type { ResponseStreamEvent } from '~/types'
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
+import { TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
 import { getCachedConfig } from '~/lib/config'
+import { HTTPError } from '~/lib/error'
 import { sanitizeNativeMessagesPayloadForCopilot } from '~/routes/messages/strategies/native-messages'
 import { authStore, modelCache } from '~/state'
 import { normalizeOutputConfigEffort } from '~/transform'
@@ -869,6 +871,62 @@ describe('messages routing', () => {
     }))
 
     expect(chatCalls[0]?.payload.model).toBe('gpt-4.1-mini')
+  })
+
+  test('compact fallback applies one exact target after source resolution', async () => {
+    const app = createApp()
+    const calls: Array<CapturedChatCall> = []
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('claude-opus-4.6'),
+      buildModel('gpt-4.1-mini'),
+      buildModel('gpt-5-target'),
+      buildModel('wrong-target'),
+    ))
+    const config = getCachedConfig() as Record<string, unknown>
+    config.smallModel = 'gpt-4.1-mini'
+    config.compactUseSmallModel = true
+    config.overloadFallbacks = { 'gpt-4.1-mini': 'gpt-5-target' }
+    config.modelRewrites = [{ from: 'gpt-5-target', to: 'wrong-target' }]
+
+    CopilotClient.prototype.createChatCompletions = (async (payload, options) => {
+      calls.push({ payload, options })
+      if (calls.length === 1) {
+        throw new TerminalUpstreamRecoveryError(
+          new HTTPError(529, {
+            error: { message: 'source overloaded', type: 'overloaded_error' },
+          }, { headers: { 'retry-after': '3' } }),
+          { requestId: 'messages-fallback', retryCount: 1, sourceModel: 'gpt-4.1-mini' },
+        )
+      }
+      return {
+        id: 'chat_fallback',
+        object: 'chat.completion',
+        created: 1,
+        model: 'gpt-4.1-mini',
+        choices: [{
+          index: 0,
+          finish_reason: 'stop',
+          logprobs: null,
+          message: { role: 'assistant', content: 'ok' },
+        }],
+      }
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-4.6',
+        max_tokens: 1024,
+        system: 'You are a helpful AI assistant tasked with summarizing conversations for context.',
+        messages: [{ role: 'user', content: 'Summarize the conversation so far.' }],
+      }),
+    }))
+    const body = await response.json() as AnthropicResponse
+
+    expect(response.status).toBe(200)
+    expect(calls.map(call => call.payload.model)).toEqual(['gpt-4.1-mini', 'gpt-5-target'])
+    expect(body.model).toBe('gpt-5-target')
   })
 
   test('small-model routing preserves vision capability requirements', async () => {

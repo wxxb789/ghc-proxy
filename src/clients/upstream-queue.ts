@@ -51,6 +51,7 @@ export interface UpstreamRecoveryRecord {
   sourceModel?: string
   cooldown?: RecoveryCooldownState
   publicError?: RecoveryPublicError
+  fallbackFetchStarted?: boolean
 }
 
 export interface UpstreamRequestContext {
@@ -66,6 +67,7 @@ export interface UpstreamRequestContext {
   effectiveModel?: string
   recovery?: UpstreamRecoveryRecord
   offerLocalModelCooldown?: boolean
+  fallbackAttempt?: boolean
 }
 
 export interface QueuedUpstreamResponse {
@@ -165,6 +167,18 @@ export class LocalModelCooldownError extends TerminalUpstreamRecoveryError {
   }
 }
 
+export class FallbackCooldownError extends Error {
+  readonly scope: Exclude<CapacityCooldownScope, 'request'>
+  readonly effectiveModel?: string
+
+  constructor(cooldown: RecoveryCooldownState) {
+    super('Fallback target is locally cooled')
+    this.name = 'FallbackCooldownError'
+    this.scope = cooldown.scope as Exclude<CapacityCooldownScope, 'request'>
+    this.effectiveModel = cooldown.effectiveModel
+  }
+}
+
 export class UpstreamRequestQueue {
   private readonly sleep: (ms: number) => Promise<void>
   private readonly now: () => number
@@ -212,6 +226,9 @@ export class UpstreamRequestQueue {
     const context = { ...inputContext, recovery }
     recovery.sourceModel ??= context.effectiveModel
 
+    signal?.throwIfAborted()
+    this.throwIfFallbackCooled(context)
+
     const localCooldown = this.getActiveCooldown(context.effectiveModel)
     if (
       context.offerLocalModelCooldown
@@ -238,6 +255,9 @@ export class UpstreamRequestQueue {
       let response: Response
 
       try {
+        this.throwIfRecoveryExpired(recovery, lastConnectionError)
+        if (context.fallbackAttempt)
+          recovery.fallbackFetchStarted = true
         response = await this.fetchBeforeDeadline(fetcher, signal, recovery, lastConnectionError)
         lastConnectionError = undefined
       }
@@ -342,6 +362,7 @@ export class UpstreamRequestQueue {
     causalError?: unknown,
   ): Promise<QueueLease> {
     signal?.throwIfAborted()
+    this.throwIfFallbackCooled(context)
     this.prepareCooldownWait(context)
     this.throwIfRecoveryExpired(context.recovery, causalError)
     this.drain()
@@ -407,6 +428,19 @@ export class UpstreamRequestQueue {
 
     for (let index = this.waiters.length - 1; index >= 0; index--) {
       const waiter = this.waiters[index]!
+      const fallbackCooldown = waiter.context.fallbackAttempt
+        ? this.getActiveCooldown(waiter.context.effectiveModel)
+        : undefined
+      if (fallbackCooldown) {
+        this.waiters.splice(index, 1)
+        this.cleanupWaiter(waiter)
+        this.emit('admission', waiter.context, {
+          scope: fallbackCooldown.scope,
+          decision: 'fallback-cooldown',
+        })
+        waiter.reject(new FallbackCooldownError(fallbackCooldown))
+        continue
+      }
       const deadline = waiter.context.recovery.deadlineMonotonicMs
       if (deadline !== undefined && this.now() >= deadline) {
         this.waiters.splice(index, 1)
@@ -478,6 +512,14 @@ export class UpstreamRequestQueue {
 
   private isEligible(context: UpstreamRequestContext): boolean {
     return this.getActiveCooldown(context.effectiveModel) === undefined
+  }
+
+  private throwIfFallbackCooled(context: UpstreamRequestContext): void {
+    if (!context.fallbackAttempt)
+      return
+    const cooldown = this.getActiveCooldown(context.effectiveModel)
+    if (cooldown)
+      throw new FallbackCooldownError(cooldown)
   }
 
   private getActiveCooldown(effectiveModel?: string): RecoveryCooldownState | undefined {

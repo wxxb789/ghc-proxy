@@ -28,7 +28,10 @@ export function getClientConfig(): ClientConfig {
 
 export function createCopilotClient(
   recovery?: UpstreamRecoveryRecord,
-  options: { offerLocalModelCooldown?: boolean } = {},
+  options: {
+    offerLocalModelCooldown?: (effectiveModel: string) => boolean
+    fallbackAttempt?: boolean
+  } = {},
 ): CopilotClient {
   return new CopilotClient(authStore, getClientConfig(), {
     requestQueue: upstreamRequestQueue,

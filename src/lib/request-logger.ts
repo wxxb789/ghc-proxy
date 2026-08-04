@@ -10,6 +10,7 @@ export type ModelTransformTag
     | 'CONFIG_REWRITE'
     | 'COMPACT'
     | 'MODEL_RESOLVE'
+    | 'OVERLOAD_FALLBACK'
 
 export interface ModelTransformStep {
   tag: ModelTransformTag
