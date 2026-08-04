@@ -50,7 +50,7 @@ There is no default mapping. A target must differ from the source, exist in the 
 
 The pipeline rebuilds the fallback attempt from pristine post-ingest input, reapplies target-dependent transforms and capability checks, and appends `OVERLOAD_FALLBACK` as the last model trace step. It dispatches once without a new retry allowance. Successful JSON/SSE output and persisted Responses emulator records disclose the actual target model. Preflight rejection preserves the source `529`; once target fetch starts, any target failure is final.
 
-Mappings are exact one-hop choices, not a fallback graph. Reciprocal mappings are valid because a request never follows a second edge. Fallback does not run for account `429`, connection failures, timeouts, cancellation, other HTTP statuses, validation failures, or failures after any upstream `Response` has committed.
+Mappings are exact one-hop choices, not a fallback graph. Blank, same-model, and reciprocal two-node mappings are rejected at configuration load. Fallback does not run for account `429`, connection failures, timeouts, cancellation, other HTTP statuses, validation failures, or failures after any upstream `Response` has committed.
 
 ## Model Capabilities
 

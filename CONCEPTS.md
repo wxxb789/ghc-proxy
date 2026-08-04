@@ -56,7 +56,7 @@ A conversation-summarization request, identified by a recognizable system-prompt
 Resolution of a requested model family prefix (e.g. `claude-opus-*`) to a concrete Copilot model when no exact match exists. Distinct from a model rewrite, which substitutes a specific configured `from` pattern for a `to` model across all endpoints.
 
 ### Overload fallback
-An opt-in, exact effective-model mapping used only after a terminal model-scoped `529` or a pre-existing local cooldown for that source model. It is not missing-model resolution: the source was valid, but temporarily overloaded. The pipeline may rebuild and dispatch one compatible advertised target with no fresh retry allowance, then discloses the actual served model. Mappings are one-hop choices rather than a traversed graph, so reciprocal entries are valid and cannot create a per-request fallback loop.
+An opt-in, exact effective-model mapping used only after a terminal model-scoped `529` or a pre-existing local cooldown for that source model. It is not missing-model resolution: the source was valid, but temporarily overloaded. The pipeline may rebuild and dispatch one compatible advertised target with no fresh retry allowance, then discloses the actual served model. Mappings are one-hop choices rather than a traversed graph; blank, same-model, and reciprocal two-node entries are rejected at configuration load.
 
 ## Upstream Recovery
 

@@ -315,7 +315,7 @@ Rewrites run **before** any other model policy — small-model routing and strat
 
 Fallback is considered only after a terminal source-model `529` or a pre-existing local cooldown for that source. It never runs for account `429`, connection failures, timeouts, cancellation, validation failures, other statuses, or failures after an upstream `Response` exists. The target must be distinct, advertised, not locally cooled, and compatible with the request's endpoint, tools, parallel tools, streaming, vision, reasoning/thinking, and structured-output needs. The pipeline rebuilds target-dependent transforms and strategy selection from pristine input, dispatches once with no fresh retry allowance, and reports the actual served target in response model fields and the `OVERLOAD_FALLBACK` model trace.
 
-Mappings are exact one-hop choices, not a traversed graph. Reciprocal entries such as `A -> B` and `B -> A` are valid because one inbound request can take at most one hop. Blank and same-model entries are ignored; an unknown or incompatible runtime target preserves the source `529`.
+Mappings are exact one-hop choices, not a traversed graph. Blank, same-model, and reciprocal two-node entries such as `A -> B` plus `B -> A` are ignored with a configuration warning. An unknown or incompatible runtime target preserves the source `529`.
 
 ## Upstream Capacity Recovery
 
