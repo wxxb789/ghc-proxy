@@ -555,6 +555,7 @@ bun scripts/probes/tool-support.ts --json                # JSON snapshot to stdo
 bun scripts/probes/tool-support.ts --model=claude-opus-5 # single model
 bun scripts/probes/tool-support.ts --boundary=responses  # or: messages
 bun scripts/probes/tool-support.ts --accept-only         # skip the functional pass (half the quota)
+bun scripts/probes/tool-support.ts --names               # also probe client tool NAMES (WebSearch, shell, ...)
 ```
 
 Latest results: [docs/research/builtin-tool-support.md](docs/research/builtin-tool-support.md).

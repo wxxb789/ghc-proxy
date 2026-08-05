@@ -27,6 +27,7 @@
  *   bun scripts/probes/tool-support.ts --model=claude-opus-5
  *   bun scripts/probes/tool-support.ts --boundary=responses  # or: messages
  *   bun scripts/probes/tool-support.ts --accept-only        # skip level 2 (cheap)
+ *   bun scripts/probes/tool-support.ts --names              # name-filter cases too
  *
  * WARNING: uses real Copilot quota, up to two requests per (model × tool).
  * Sequential by design — the upstream is shared and rate-limited.
@@ -49,12 +50,19 @@ import {
   sendRawWithRetry,
 } from '../lib/probe-harness'
 import { printBanner, writeJsonSnapshot } from '../lib/probe-report'
-import { MESSAGES_TOOL_CASES, RESPONSES_TOOL_CASES } from '../lib/tool-cases'
+import {
+  anthropicFunctionTool,
+  MESSAGES_TOOL_CASES,
+  nameFilterCases,
+  RESPONSES_TOOL_CASES,
+  responsesFunctionTool,
+} from '../lib/tool-cases'
 
 const REQUEST_TIMEOUT_MS = 120_000
 
 const { jsonMode, requestedModelId } = parseProbeArgs()
 const acceptOnly = hasFlag('--accept-only')
+const withNames = hasFlag('--names')
 const boundaryFilter = getFlagValue('--boundary')
 
 // ── Verdict ──
@@ -226,7 +234,9 @@ function buildBoundaries(models: Array<Model>): Array<Boundary> {
       name: '/responses',
       slug: 'responses',
       endpoint: RESPONSES_ENDPOINT,
-      cases: RESPONSES_TOOL_CASES,
+      cases: withNames
+        ? [...RESPONSES_TOOL_CASES, ...nameFilterCases(responsesFunctionTool, ['function_call'])]
+        : RESPONSES_TOOL_CASES,
       models: pickResponsesModels(models),
       accept: (model, tools) => ({
         model,
@@ -249,7 +259,9 @@ function buildBoundaries(models: Array<Model>): Array<Boundary> {
       name: '/v1/messages',
       slug: 'messages',
       endpoint: MESSAGES_ENDPOINT,
-      cases: MESSAGES_TOOL_CASES,
+      cases: withNames
+        ? [...MESSAGES_TOOL_CASES, ...nameFilterCases(anthropicFunctionTool, ['tool_use'])]
+        : MESSAGES_TOOL_CASES,
       models: pickMessagesModels(models),
       accept: (model, tools) => ({
         model,

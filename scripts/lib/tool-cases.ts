@@ -2,14 +2,19 @@
  * The tool catalogue both boundaries are probed against.
  *
  * Kept as data, separate from the probing logic, so adding a tool is a
- * literal — no control flow to touch. `scripts/probes/tool-support.ts` is the
- * only consumer today.
+ * literal — no control flow to touch.
  *
  * Each case has to carry enough to *prove* the tool worked, not just that it
  * was accepted, so alongside the declaration it names:
  *   - `prompt` — a request the model cannot satisfy without the tool
  *   - `proof`  — the item/block types that appear when it does
  *   - `kind`   — who executes it, which decides what proof means
+ *
+ * **The prompt is load-bearing.** A probe that declares a tool and then asks
+ * "Reply with the single word OK." records `silent` for every tool on earth,
+ * because nothing in the request called for one. "The model chose not to" and
+ * "the model cannot" are indistinguishable unless the prompt demands the tool.
+ * Cost one probe round on 2026-08-05 (`docs/research/claude-5-tool-schemas.md`).
  */
 
 /** Who runs the tool once the model decides to use it. */
@@ -32,6 +37,82 @@ export interface ToolCase {
   proof: Array<string>
   /** Expected tool name on the emitted call, when it differs from the type. */
   callName?: string
+}
+
+/**
+ * Client tool *names*, declared as ordinary function tools.
+ *
+ * Nothing about these is builtin — the only notable property is that the name
+ * collides with a Claude Code or Codex builtin. They exist to separate two
+ * upstream behaviours that produce the same symptom:
+ *
+ *   - a blocked builtin **type tag** (narrow; a client can rename around it)
+ *   - a filtered tool **name** (broad; every Claude Code client silently loses
+ *     `WebSearch` and there is no workaround)
+ *
+ * Probed 2026-08-05 on `claude-opus-5` / `claude-sonnet-5`: all 8 accepted and
+ * invoked on both `/v1/messages` and `/chat/completions` — including
+ * `web_search` on the boundary whose *builtin* `web_search` is refused. So the
+ * gate is on the tag, not the word. Re-run if a client ever reports a named
+ * tool going missing (`docs/research/claude-5-tool-schemas.md`).
+ */
+
+/**
+ * The client tool names most likely to trip a name-based filter, if one
+ * existed — the web/shell/computer verbs that upstream gates as builtins.
+ */
+const NAME_FILTER_SUSPECTS = [
+  { name: 'WebSearch', task: 'search for the latest Bun release version' },
+  { name: 'WebFetch', task: 'fetch https://bun.sh/ and summarize it' },
+  { name: 'web_search', task: 'search for the latest Bun release version' },
+  { name: 'web_fetch', task: 'fetch https://bun.sh/ and summarize it' },
+  { name: 'Bash', task: 'run `uname -a`' },
+  { name: 'shell', task: 'run `uname -a`' },
+  { name: 'computer', task: 'take a screenshot' },
+  { name: 'Read', task: 'read /tmp/notes.txt' },
+] as const
+
+/**
+ * Name-filter cases for a boundary, as ordinary function tools.
+ *
+ * Every case is `kind: 'client'` — a plain function declaration whose only
+ * notable property is its name. If upstream filtered names rather than builtin
+ * type tags, these would fail while the equivalent unnamed tool passed.
+ *
+ * @param shape wraps a name in the boundary's function-tool schema.
+ * @param proof the item/block type that boundary emits for a tool call.
+ */
+export function nameFilterCases(
+  shape: (name: string) => Record<string, unknown>,
+  proof: Array<string>,
+): Array<ToolCase> {
+  return NAME_FILTER_SUSPECTS.map(({ name, task }) => ({
+    name: `name:${name}`,
+    kind: 'client',
+    tool: shape(name),
+    prompt: `Use the ${name} tool to ${task}. Call the tool.`,
+    proof,
+    callName: name,
+  }))
+}
+
+/** Anthropic `/v1/messages` function-tool shape. */
+export function anthropicFunctionTool(name: string): Record<string, unknown> {
+  return {
+    name,
+    description: `The ${name} tool`,
+    input_schema: { type: 'object', properties: { input: { type: 'string' } }, required: ['input'] },
+  }
+}
+
+/** Responses function-tool shape. */
+export function responsesFunctionTool(name: string): Record<string, unknown> {
+  return {
+    type: 'function',
+    name,
+    description: `The ${name} tool`,
+    parameters: { type: 'object', properties: { input: { type: 'string' } }, required: ['input'] },
+  }
 }
 
 // ── /responses — OpenAI Responses builtin surface ──
