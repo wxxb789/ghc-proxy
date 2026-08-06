@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { CopilotClient } from '~/clients'
 import { HTTPError } from '~/lib/error'
 import { getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
-import { createServer } from '~/server'
+import { createServer, handleRouteError } from '~/server'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { createApp } from './helpers'
 
 // ── retryWithBackoff: mock the sleep module before importing retry so backoff
@@ -296,6 +297,119 @@ describe('Error classification in onError handler', () => {
         type: 'error',
       },
     })
+  })
+})
+
+// ── Errors carry their own status ──
+//
+// `handleRouteError` used to flatten every non-HTTPError to 500. On an
+// OpenAI-compatible surface that turned an unknown path into a 500 (the
+// reported `500 NaNs` lines) where the client is owed a 404, and it hid
+// `TranslationFailure`'s 502 behind a generic 500. The cases below exercise the
+// exported seam directly for shapes no live route in this repo can produce.
+
+describe('handleRouteError honors an error that carries its own status', () => {
+  function mapError(code: string, error: unknown) {
+    const set: { status?: number | string } = {}
+    const response = handleRouteError({ code, error, set })
+    return { set, response }
+  }
+
+  /**
+   * `onAfterResponse` fires after `handle()` resolves, so a real-server request
+   * writes its access-log line asynchronously. Without this, that line lands
+   * inside a later test's `console.log` capture window and trips its
+   * single-line assertion.
+   */
+  async function drainAccessLog() {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+
+  test('an unmatched route returns 404 through the real server', async () => {
+    const response = await createServer().handle(
+      new Request('http://localhost/api/tags'),
+    )
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({
+      error: { message: 'NOT_FOUND', type: 'error' },
+    })
+    await drainAccessLog()
+  })
+
+  test('a malformed JSON body returns 400 through the real server', async () => {
+    const response = await createServer().handle(
+      new Request('http://localhost/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{ not valid json',
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    await drainAccessLog()
+  })
+
+  test('a ValidationError-shaped throw maps to 422', () => {
+    // No route here declares a TypeBox body schema — ingest validates with Zod
+    // and throws HTTPError(400) — so Elysia never builds one on a live path.
+    // The generic status read covers it for free if a validator is ever added.
+    const { set, response } = mapError('VALIDATION', { status: 422, message: 'bad' })
+
+    expect(set.status).toBe(422)
+    expect(response?.status).toBe(422)
+  })
+
+  test('an unwrapped TranslationFailure surfaces its own 502, not 500', () => {
+    const { set, response } = mapError(
+      'UNKNOWN',
+      new TranslationFailure('Upstream response contained no choices', { status: 502 }),
+    )
+
+    expect(set.status).toBe(502)
+    expect(response?.status).toBe(502)
+  })
+
+  test('a plain Error with no status still returns 500', () => {
+    const { set, response } = mapError('UNKNOWN', new Error('Something went wrong'))
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  test('a thrown non-Error value returns 500, never undefined', () => {
+    const { set, response } = mapError('UNKNOWN', 'boom')
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  test('an out-of-range or non-integer status never reaches the client', () => {
+    // An error must not be able to report success, or a nonsense number.
+    for (const status of [200, 302, 99, 600, 404.5, Number.NaN]) {
+      const { set, response } = mapError('UNKNOWN', { status, message: 'nope' })
+
+      expect(set.status).toBe(500)
+      expect(response?.status).toBe(500)
+    }
+  })
+
+  test('a non-numeric status is ignored', () => {
+    const { set, response } = mapError('UNKNOWN', { status: '404', message: 'nope' })
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  test('code === HTTP still passes through untouched', () => {
+    const { set, response } = mapError(
+      'HTTP',
+      new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
+    )
+
+    // HTTPError carries its own toResponse(); the handler must not intercept it.
+    expect(response).toBeUndefined()
+    expect(set.status).toBeUndefined()
   })
 })
 

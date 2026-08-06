@@ -22,6 +22,38 @@ export interface ServerOptions {
 }
 
 /**
+ * Smallest and largest status an error may claim for itself.
+ *
+ * An error that reports a 2xx/3xx — or a nonsense number — is not describing a
+ * failure the client can act on, so it falls through to 500 rather than turning
+ * a thrown exception into an apparent success.
+ */
+const MIN_ERROR_STATUS = 400
+const MAX_ERROR_STATUS = 599
+
+/**
+ * The status a thrown value claims for itself, when it claims a plausible one.
+ *
+ * Elysia's built-in error classes (`NotFoundError`, `ParseError`,
+ * `ValidationError`, `InternalServerError`) each declare `status: number` as
+ * part of their public class contract, and this repo's own `TranslationFailure`
+ * declares `status: 400 | 502`. Reading the property instead of mapping
+ * `code` covers all of them, and covers whatever Elysia adds next.
+ */
+function claimedErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('status' in error))
+    return undefined
+
+  const { status } = error as { status: unknown }
+  return typeof status === 'number'
+    && Number.isInteger(status)
+    && status >= MIN_ERROR_STATUS
+    && status <= MAX_ERROR_STATUS
+    ? status
+    : undefined
+}
+
+/**
  * Maps a thrown error to a client response.
  *
  * `set.status` is written on every branch because `onError` returns a fresh
@@ -29,6 +61,11 @@ export interface ServerOptions {
  * would otherwise still hold whatever it was before the throw, and the access
  * log in `onAfterResponse` reads it. Without the write-back, a 504 is logged
  * as a 500.
+ *
+ * Errors that carry their own plausible status keep it. Flattening every
+ * non-HTTPError to 500 turned an unmatched route into `500 NaNs` on an
+ * OpenAI-compatible surface where an unknown path owes the client a 404, and
+ * hid `TranslationFailure`'s 502 behind a generic 500.
  *
  * Exported so tests exercise this mapping rather than a copy of it.
  */
@@ -57,10 +94,11 @@ export function handleRouteError(
   }
 
   const message = error instanceof Error ? error.message : String(error)
-  set.status = 500
+  const status = claimedErrorStatus(error) ?? 500
+  set.status = status
   return Response.json(
     { error: { message, type: 'error' } },
-    { status: 500 },
+    { status },
   )
 }
 
