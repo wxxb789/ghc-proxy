@@ -44,7 +44,7 @@ When a model supports `/responses` but not native `/v1/messages`, the proxy tran
 | Assistant `tool_use` | `function_call` | Preserved as call ID, name, and JSON arguments. |
 | Assistant reasoning with signature | `reasoning` | Signature is split into encrypted content and item ID. |
 | Encoded compaction carrier | `compaction` | Preserved as opaque encrypted content. |
-| Anthropic tools | Responses function tools | Tool schemas stay object-shaped. |
+| Anthropic tools | Responses function tools | Tool schemas stay object-shaped and otherwise unmodified — `required` and `additionalProperties` are the caller's. No `strict` key is sent. See [research/responses-tool-strict.md](research/responses-tool-strict.md). |
 
 ### Intentional Policy Decisions
 
@@ -79,6 +79,7 @@ They are rejected because the current Responses execution path cannot preserve t
 - Automatic `context_management` injection is disabled by default and only applies when explicitly enabled in config.
 - Automatic prompt slicing to the latest `compaction` item is disabled by default and only applies when explicitly enabled in config.
 - Built-in web-search tools (`web_search`, `web_search_preview`, and their dated variants) are forwarded, not blocked. Every `/responses` model probed accepts them and actually runs the search. See [research/responses-web-search.md](research/responses-web-search.md).
+- Function-tool `strict` is forwarded when the caller sends it and omitted entirely when they do not. The proxy previously defaulted it to `true` and rewrote each schema's `required` to every declared property plus `additionalProperties: false` to make that default survivable, which silently promoted optional parameters to required. Omission is measurably safer than `strict: false`: upstream runs a different validator when the key is present at all. See [research/responses-tool-strict.md](research/responses-tool-strict.md).
 - External `input_image.image_url` values that point at remote HTTP(S) URLs fail explicitly with `400`.
 - `max_output_tokens` below Copilot's enforced minimum of 16 is raised to 16 rather than leaking a `400`. The client-facing schema still accepts `0..15` because those are valid OpenAI input; the floor is a Copilot quirk the proxy absorbs. See [research/sampling-parameters.md](research/sampling-parameters.md).
 - Explicit prompt-caching controls (`prompt_cache_options`, and `prompt_cache_breakpoint` on content blocks) are modeled and forwarded. `ttl` is constrained to the single value upstream accepts (`30m`) and an unknown `mode` is rejected locally, turning a wasted round-trip into an immediate `400`. Only gpt-5.6 and later accept these — earlier models return `400 ... is not supported on this model` — so the proxy forwards rather than injects them. See [research/prompt-caching.md](research/prompt-caching.md).

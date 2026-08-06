@@ -520,6 +520,11 @@ distinguishes it from a bias toward deleting guards.
   `/chat/completions` type-validation finding, the whole-toolset bundles, both
   round-1 defects, the README non-change, and an explicit not-covered list whose
   top entry is the one open question.
+- `docs/solutions/conventions/a-proxy-default-is-a-decision-made-for-the-caller.md`
+  — the entry one step *past* this taxonomy. There the belief was not wrong at
+  all: no verdict was misread, because the proxy was not reporting on upstream —
+  it defaulted a field the caller left unset and rewrote their payload to make
+  that default work. This doc's discipline is what its probe follows.
 - `docs/research/builtin-tool-support.md` — the per-tool matrix this extends, and
   the three-layer split of `/v1/messages` rejection text that finding B adds a
   fourth bucket to.
