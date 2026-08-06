@@ -67,8 +67,8 @@ const boundaryFilter = getFlagValue('--boundary')
 
 // ── Verdict ──
 
-type Accept = 'accepted' | 'rejected' | 'unmeasured'
-type Functional = 'ran' | 'called' | 'silent' | 'unmeasured' | 'skipped'
+type Accept = 'accepted' | 'rejected' | 'unmeasured' | 'error'
+type Functional = 'ran' | 'called' | 'silent' | 'rejected' | 'unmeasured' | 'error' | 'skipped'
 
 interface Verdict {
   /** Did upstream accept the tool declaration? */
@@ -89,17 +89,25 @@ interface Verdict {
  *
  * `ran`/`called` are the only two that mean supported. `silent` is a distinct
  * negative — the field is tolerated but inert — and must not read as either
- * support or rejection.
+ * support or rejection. `unmeasured` (capacity blip) and `error` (transport
+ * failure) are both absence of evidence and must never read as support;
+ * `rejected` is a real negative verdict upstream gave firmly.
  */
 export function summarize(v: Verdict): string {
   if (v.accept === 'unmeasured')
     return 'unmeasured'
+  if (v.accept === 'error')
+    return 'error'
   if (v.accept === 'rejected')
     return 'unsupported'
   if (!v.functional || v.functional === 'skipped')
     return 'accepted'
   if (v.functional === 'unmeasured')
     return 'unmeasured'
+  if (v.functional === 'error')
+    return 'error'
+  if (v.functional === 'rejected')
+    return 'unsupported'
   return v.functional === 'silent' ? 'inert' : 'supported'
 }
 
@@ -182,6 +190,23 @@ interface Boundary {
 }
 
 async function probeCase(boundary: Boundary, modelId: string, kase: ToolCase): Promise<Verdict> {
+  try {
+    return await probeCaseInner(boundary, modelId, kase)
+  }
+  catch (error) {
+    // A transport failure — an expired `AbortSignal`, a reset connection — says
+    // nothing about capability, and this matrix is quota-expensive. Record the
+    // cell and keep going rather than letting one rejected fetch discard every
+    // remaining measurement.
+    return {
+      accept: 'error',
+      acceptHttp: 0,
+      acceptError: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+async function probeCaseInner(boundary: Boundary, modelId: string, kase: ToolCase): Promise<Verdict> {
   const accept = await sendRawWithRetry(
     boundary.accept(modelId, [kase.tool]),
     { endpoint: boundary.endpoint, timeoutMs: REQUEST_TIMEOUT_MS },
@@ -213,8 +238,17 @@ async function probeCase(boundary: Boundary, modelId: string, kase: ToolCase): P
     { endpoint: boundary.endpoint, timeoutMs: REQUEST_TIMEOUT_MS },
   )
 
-  if (isUnmeasuredStatus(run.httpStatus) || run.httpStatus < 200 || run.httpStatus >= 300) {
+  // Same split the accept phase makes above: a capacity blip is no verdict, but
+  // a deterministic 4xx is a stable negative one. Folding both into
+  // `unmeasured` would report "no verdict, rerun it" for a result upstream
+  // already gave firmly.
+  if (isUnmeasuredStatus(run.httpStatus)) {
     verdict.functional = 'unmeasured'
+    verdict.functionalError = extractErrorMessage(run.parsed)
+    return verdict
+  }
+  if (run.httpStatus < 200 || run.httpStatus >= 300) {
+    verdict.functional = 'rejected'
     verdict.functionalError = extractErrorMessage(run.parsed)
     return verdict
   }
@@ -354,7 +388,10 @@ runMain(async () => {
       for (const kase of boundary.cases) {
         const verdict = await probeCase(boundary, model.id, kase)
         verdicts[kase.name] = verdict
-        if (summarize(verdict) === 'unmeasured') {
+        // Both mean the cell produced no verdict — a capacity blip or a
+        // transport failure — so both belong in the rerun list.
+        const summary = summarize(verdict)
+        if (summary === 'unmeasured' || summary === 'error') {
           holes.push(`${boundary.name} ${model.id} × ${kase.name} (${verdict.acceptHttp})`)
         }
       }
