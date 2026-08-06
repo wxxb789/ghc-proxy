@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
 import { HTTPError } from '~/lib/error'
-import { getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
-import { createServer } from '~/server'
+import { formatElapsed, getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
+import { createServer, handleRouteError } from '~/server'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { createApp } from './helpers'
 
 // ── retryWithBackoff: mock the sleep module before importing retry so backoff
@@ -299,6 +300,178 @@ describe('Error classification in onError handler', () => {
   })
 })
 
+// ── Errors carry their own status ──
+//
+// `handleRouteError` used to flatten every non-HTTPError to 500. On an
+// OpenAI-compatible surface that turned an unknown path into a 500 (the
+// reported `500 NaNs` lines) where the client is owed a 404, and it hid
+// `TranslationFailure`'s 502 behind a generic 500. The cases below exercise the
+// exported seam directly for shapes no live route in this repo can produce.
+
+/**
+ * `onAfterResponse` fires after `handle()` resolves, so a real-server request
+ * writes its access-log line asynchronously. Without waiting, that line lands
+ * inside a later test's `console.log` capture window and trips its single-line
+ * assertion.
+ */
+async function drainAccessLog() {
+  await new Promise(resolve => setTimeout(resolve, 50))
+}
+
+describe('handleRouteError honors an error that carries its own status', () => {
+  function mapError(code: string, error: unknown) {
+    const set: { status?: number | string } = {}
+    const response = handleRouteError({ code, error, set })
+    return { set, response }
+  }
+
+  test('an unmatched route returns 404 through the real server', async () => {
+    const response = await createServer().handle(
+      new Request('http://localhost/api/tags'),
+    )
+
+    expect(response.status).toBe(404)
+    // Elysia's own message is the bare token `NOT_FOUND`, and `type: 'error'`
+    // is not in OpenAI's taxonomy. Neither belongs at a boundary this repo
+    // promises stays OpenAI-compatible.
+    expect(await response.json()).toEqual({
+      error: {
+        message: 'Unknown endpoint. Check the request path.',
+        type: 'not_found_error',
+      },
+    })
+    await drainAccessLog()
+  })
+
+  test('a 4xx from a thrown error is classified as invalid_request_error', () => {
+    const { response } = mapError('PARSE', { status: 400, message: 'bad json' })
+
+    expect(response?.status).toBe(400)
+    return response?.json().then((body) => {
+      expect(body).toMatchObject({ error: { type: 'invalid_request_error' } })
+    })
+  })
+
+  test('a 5xx keeps the generic error type', () => {
+    const { response } = mapError('UNKNOWN', new Error('Something went wrong'))
+
+    expect(response?.status).toBe(500)
+    return response?.json().then((body) => {
+      expect(body).toMatchObject({ error: { message: 'Something went wrong', type: 'error' } })
+    })
+  })
+
+  test('a malformed JSON body returns 400 through the real server', async () => {
+    const response = await createServer().handle(
+      new Request('http://localhost/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{ not valid json',
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    await drainAccessLog()
+  })
+
+  test('a ValidationError-shaped throw maps to 422', () => {
+    // No route here declares a TypeBox body schema — ingest validates with Zod
+    // and throws HTTPError(400) — so Elysia never builds one on a live path.
+    // The generic status read covers it for free if a validator is ever added.
+    const { set, response } = mapError('VALIDATION', { status: 422, message: 'bad' })
+
+    expect(set.status).toBe(422)
+    expect(response?.status).toBe(422)
+  })
+
+  test('an unwrapped TranslationFailure surfaces its own 502, not 500', () => {
+    const { set, response } = mapError(
+      'UNKNOWN',
+      new TranslationFailure('Upstream response contained no choices', {
+        status: 502,
+        kind: 'upstream_no_choices',
+      }),
+    )
+
+    expect(set.status).toBe(502)
+    expect(response?.status).toBe(502)
+  })
+
+  test('a plain Error with no status still returns 500', () => {
+    const { set, response } = mapError('UNKNOWN', new Error('Something went wrong'))
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  test('a thrown non-Error value returns 500, never undefined', () => {
+    const { set, response } = mapError('UNKNOWN', 'boom')
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  test('an out-of-range or non-integer status never reaches the client', () => {
+    // An error must not be able to report success, or a nonsense number.
+    for (const status of [200, 302, 99, 600, 404.5, Number.NaN]) {
+      const { set, response } = mapError('UNKNOWN', { status, message: 'nope' })
+
+      expect(set.status).toBe(500)
+      expect(response?.status).toBe(500)
+    }
+  })
+
+  test('a non-numeric status is ignored', () => {
+    const { set, response } = mapError('UNKNOWN', { status: '404', message: 'nope' })
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  // Reading `status` runs inside the error handler, so this repo's own read
+  // must not be the thing that throws. Note this hardens `handleRouteError`
+  // only: Elysia itself does `set.status = error.status` after `onError`
+  // returns (`elysia/dist/compose.mjs`), so a hostile getter still escapes
+  // `app.handle()` end-to-end. Measured on the pre-fix tree too — that escape
+  // predates this change and is not ours to fix here.
+  test('a status getter that throws degrades to 500 instead of escaping', () => {
+    class ThrowingStatusError extends Error {
+      get status(): number {
+        throw new TypeError('status getter blew up')
+      }
+    }
+
+    const { set, response } = mapError('UNKNOWN', new ThrowingStatusError('boom'))
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  test('a Proxy whose has-trap throws degrades to 500 instead of escaping', () => {
+    const hostile = new Proxy({}, {
+      has() {
+        throw new TypeError('has trap blew up')
+      },
+    })
+
+    const { set, response } = mapError('UNKNOWN', hostile)
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  test('code === HTTP still passes through untouched', () => {
+    const { set, response } = mapError(
+      'HTTP',
+      new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
+    )
+
+    // HTTPError carries its own toResponse(); the handler must not intercept it.
+    expect(response).toBeUndefined()
+    expect(set.status).toBeUndefined()
+  })
+})
+
 describe('Streaming error handling', () => {
   useCreateChatCompletionsSnapshot()
 
@@ -389,9 +562,33 @@ describe('Streaming error handling', () => {
 // Built from a char code so the source carries no literal control character.
 const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, 'g')
 
+function buildMessagesRequest(callerRequestId?: string): Request {
+  return new Request('http://localhost/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(callerRequestId ? { 'x-request-id': callerRequestId } : {}),
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4.5',
+      max_tokens: 64,
+      messages: [{ role: 'user', content: 'Hello!' }],
+    }),
+  })
+}
+
+/**
+ * Drive one request through the real server and return its access-log line.
+ *
+ * `reject` is optional because an unmatched route never reaches upstream —
+ * there is nothing to stub for it.
+ */
 async function captureAccessLogLine(
-  reject: () => Promise<never>,
-  callerRequestId?: string,
+  options: {
+    request?: Request
+    reject?: () => Promise<never>
+    callerRequestId?: string
+  } = {},
 ): Promise<string> {
   const lines: Array<string> = []
   // eslint-disable-next-line no-console
@@ -402,21 +599,13 @@ async function captureAccessLogLine(
   }) as typeof console.log
 
   try {
-    CopilotClient.prototype.createChatCompletions = reject as never
-    await createServer().handle(new Request('http://localhost/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(callerRequestId ? { 'x-request-id': callerRequestId } : {}),
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4.5',
-        max_tokens: 64,
-        messages: [{ role: 'user', content: 'Hello!' }],
-      }),
-    }))
-    // onAfterResponse runs after handle() resolves.
-    await new Promise(resolve => setTimeout(resolve, 50))
+    if (options.reject) {
+      CopilotClient.prototype.createChatCompletions = options.reject as never
+    }
+    await createServer().handle(
+      options.request ?? buildMessagesRequest(options.callerRequestId),
+    )
+    await drainAccessLog()
   }
   finally {
     // eslint-disable-next-line no-console
@@ -432,46 +621,113 @@ function accessLogStatus(line: string): string | undefined {
   return line.split(' ')[3]
 }
 
+/** Same line shape — index 4 is the elapsed duration. */
+function accessLogElapsed(line: string): string | undefined {
+  return line.split(' ')[4]
+}
+
 describe('Access-log status code matches the client response', () => {
   useCreateChatCompletionsSnapshot()
 
   test('logs 504 for a timeout, not 500', async () => {
-    const line = await captureAccessLogLine(() =>
-      Promise.reject(createBunFetchTimeoutError()))
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(createBunFetchTimeoutError()),
+    })
 
     expect(accessLogStatus(line)).toBe('504')
   })
 
   test('logs 504 for a Node-shaped timeout', async () => {
-    const line = await captureAccessLogLine(() =>
-      Promise.reject(createNodeHeadersTimeoutError()))
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(createNodeHeadersTimeoutError()),
+    })
 
     expect(accessLogStatus(line)).toBe('504')
   })
 
   test('logs 500 for a generic error', async () => {
-    const line = await captureAccessLogLine(() =>
-      Promise.reject(new Error('Something went wrong')))
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(new Error('Something went wrong')),
+    })
 
     expect(accessLogStatus(line)).toBe('500')
   })
 
   test('logs the upstream status for an HTTPError', async () => {
-    const line = await captureAccessLogLine(() => Promise.reject(
-      new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
-    ))
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(
+        new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
+      ),
+    })
 
     expect(accessLogStatus(line)).toBe('429')
   })
 
   test('logs the caller request id alongside the unique internal id', async () => {
-    const line = await captureAccessLogLine(
-      () => Promise.reject(new Error('Something went wrong')),
-      'caller request/id',
-    )
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(new Error('Something went wrong')),
+      callerRequestId: 'caller request/id',
+    })
 
     expect(line).toContain('callerRid=caller_request/id')
     expect(line).toMatch(/\brid=[\da-f]{8}\b/)
+  })
+})
+
+// ── Access-log elapsed duration ──
+//
+// `derive` never runs on a route Elysia did not match, so reading the start
+// timestamp from there produced `Date.now() - undefined` = NaN and logged the
+// literal string `NaNs` on every unmatched path. The start is now recorded in
+// `onRequest`, which does fire everywhere.
+
+describe('Access-log elapsed duration is real on every path', () => {
+  const DURATION_RE = /^\d+(?:ms|s)$/
+
+  test('an unmatched route logs a real duration, not NaNs', async () => {
+    const line = await captureAccessLogLine({
+      request: new Request('http://localhost/api/tags'),
+    })
+
+    expect(line).not.toContain('NaN')
+    expect(accessLogStatus(line)).toBe('404')
+    expect(accessLogElapsed(line)).toMatch(DURATION_RE)
+  })
+
+  test('a matched route still logs a real duration', async () => {
+    const line = await captureAccessLogLine({
+      request: new Request('http://localhost/health'),
+    })
+
+    expect(line).not.toContain('NaN')
+    expect(accessLogStatus(line)).toBe('200')
+    expect(accessLogElapsed(line)).toMatch(DURATION_RE)
+  })
+
+  // The `onRequest` hook must discard its return value: `WeakMap.set` returns
+  // the WeakMap, and Elysia turns any non-undefined `onRequest` return into the
+  // response. Without this assertion a setter refactored to a concise arrow
+  // would make every response in the proxy `[object WeakMap]` with the suite
+  // still green — no other test reads a matched route's body through the real
+  // server. `tsc` does not catch it either.
+  test('a matched route returns its real body, not a leaked hook return', async () => {
+    const response = await createServer().handle(
+      new Request('http://localhost/health'),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ status: 'ok' })
+    await drainAccessLog()
+  })
+
+  test('formatElapsed renders - rather than NaNs when the start is missing', () => {
+    expect(formatElapsed(undefined)).toBe('-')
+    expect(formatElapsed(Number.NaN)).toBe('-')
+  })
+
+  test('formatElapsed still formats a real duration', () => {
+    expect(formatElapsed(Date.now())).toMatch(DURATION_RE)
+    expect(formatElapsed(Date.now() - 2_000)).toMatch(/^\ds$/)
   })
 })
 

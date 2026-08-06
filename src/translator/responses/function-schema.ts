@@ -50,16 +50,20 @@ function normalizeSchemaNode(node: unknown): unknown {
     normalized[key] = normalizeSchemaNode(value)
   }
 
-  if (node.type === 'object' || isRecord(normalized.properties)) {
-    normalized.required = isRecord(normalized.properties)
-      ? Object.keys(normalized.properties)
-      : []
-    normalized.additionalProperties = false
-  }
-
   return normalized
 }
 
+/**
+ * Strip JSON Schema / OpenAPI annotations Copilot's function-schema validator
+ * rejects, leaving the structural schema — including the caller's own
+ * `required` array and `additionalProperties` — untouched.
+ *
+ * The annotation stripping is currently inert: probed 2026-08-06
+ * (`scripts/probes/tool-strict.ts`), upstream accepts every annotation in the
+ * list on every `/responses` model with `strict` omitted. It stays anyway — the
+ * list was written against the upstream of 2026-04, and a probe result is a
+ * dated snapshot rather than a permanent fact.
+ */
 export function normalizeFunctionParametersSchemaForCopilot<T extends Record<string, unknown> | null | undefined>(
   schema: T,
 ): T {

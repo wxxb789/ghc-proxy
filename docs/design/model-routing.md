@@ -90,6 +90,8 @@ Claude `/v1/messages` rows re-probed **2026-07-25** (enterprise endpoint `api.en
 
 **Official tool support** (`/v1/messages`, `opus-5` / `sonnet-5`, 2026-07-25): supported — `standard_function`, `bash_20250124`, `text_editor_20250728`, `memory_20250818`, `custom`, `tool_search_tool_bm25`(+`_20251119`), `tool_search_tool_regex`(+`_20251119`), `code_execution_20250522`/`20250825`/`20260120`. Rejected — older `text_editor` dates, `web_search_*`, `web_fetch_*`, `mcp_*`, `computer_*`. (`code_execution` was `opus-4.8`-only in June; now broadly advertised. `sonnet-4.6` rejected bm25 as Bedrock-served — `sonnet-5` accepts it.)
 
+The web-search verdict above is **`/v1/messages`-only** and does not transfer: on `/responses`, every model probed accepts `web_search` / `web_search_preview` and actually runs the search (2026-08-04, `docs/research/responses-web-search.md`). A tool's support is a property of the boundary, not of the proxy.
+
 ## Execution Path Selection
 
 For `POST /v1/messages`, the handler selects a strategy based on the model's `supported_endpoints`:

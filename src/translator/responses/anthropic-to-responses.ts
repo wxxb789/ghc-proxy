@@ -245,11 +245,15 @@ function convertAnthropicTools(
   if (!tools || tools.length === 0) {
     return null
   }
+  // No `strict` key. Anthropic's tool schema has no `strict` concept, so there
+  // is nothing to forward, and omitting it is measurably safer than sending
+  // `false`: probed 2026-08-06 (`scripts/probes/tool-strict.ts`), a schema
+  // whose `required` names an undeclared key returns 200 with the key absent
+  // and 400 with `strict: false`.
   return tools.map(tool => ({
     type: 'function',
     name: tool.name,
     parameters: normalizeFunctionParametersSchemaForCopilot(tool.input_schema),
-    strict: false,
     ...(tool.description ? { description: tool.description } : {}),
   }))
 }

@@ -4,6 +4,36 @@ This document describes the error handling strategy and validation architecture.
 
 ## Error Classification
 
+### Routing and Request-Shape Errors (404 / 400 / 422)
+
+Raised by Elysia before or around a route handler, and mapped by
+`handleRouteError` (`src/server.ts`):
+
+| Condition | Elysia `code` | Status | Client `type` |
+|---|---|---|---|
+| No route matches the path | `NOT_FOUND` | 404 | `not_found_error` |
+| Request body is not parseable | `PARSE` | 400 | `invalid_request_error` |
+| A route's own schema rejects the body | `VALIDATION` | 422 | `invalid_request_error` |
+
+`handleRouteError` reads the `status` the thrown error declares rather than
+mapping Elysia's `code`: every built-in Elysia error class carries `status` as a
+public class contract, so the property covers these cases and whatever Elysia
+adds later. The read is guarded to an integer in 400-599, so a thrown value can
+never report success or a nonsense status; anything else falls back to 500.
+
+The same read means an in-repo error carrying its own status keeps it —
+`TranslationFailure` (`status: 400 | 502`) surfaces 502 on the response-direction
+path instead of being flattened to 500.
+
+The `type` is derived from the resolved status rather than hardcoded, for the
+reason `upstreamErrorType` already states: a non-standard `type` at the proxy
+boundary breaks client error handling. Elysia's own `NOT_FOUND` message is an
+internal token and is replaced with a client-facing sentence.
+
+No route in this repo declares an Elysia/TypeBox body schema today — ingest
+validates with Zod and throws `HTTPError(400)` — so the 422 row is reachable only
+if a schema-bearing route is added later.
+
 ### Validation Errors (400)
 
 Caught at request ingress via Zod schemas:
@@ -174,6 +204,12 @@ Throws an `HTTPError` that Elysia converts to:
 Request arrives
     |
     v
+[Route match] ──no match──> 404 { type: not_found_error }
+    |
+    v (matched)
+[Body parse] ──fail──> 400 { type: invalid_request_error }
+    |
+    v (parsed)
 [Zod Validation] ──fail──> 400 { type: invalid_request_error }
     |
     v (valid)
@@ -198,6 +234,9 @@ Request arrives
     v
 Client Response
 ```
+
+Any error escaping the above with its own plausible status (400-599) keeps that
+status; everything else becomes 500.
 
 ## Health Check
 

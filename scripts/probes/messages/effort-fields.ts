@@ -121,6 +121,9 @@ runMain(async () => {
     process.stdout.write('\n=== Summary ===\n')
     const accepted = results.filter(r => r.status === 'accepted')
     const rejected = results.filter(r => r.status === 'rejected')
+    // Neither list — a capacity fault is not a verdict, and dropping it from
+    // both would make the field look like it was never probed.
+    const unmeasured = results.filter(r => r.status === 'unmeasured' || r.status === 'error')
 
     process.stdout.write(`\nAccepted fields (${accepted.length}):\n`)
     for (const r of accepted) {
@@ -129,6 +132,12 @@ runMain(async () => {
     process.stdout.write(`\nRejected fields (${rejected.length}):\n`)
     for (const r of rejected) {
       process.stdout.write(`  ✗ ${r.name}: ${r.errorMessage}\n`)
+    }
+    if (unmeasured.length > 0) {
+      process.stdout.write(`\n⚠  No verdict (${unmeasured.length}) — do NOT record as unsupported:\n`)
+      for (const r of unmeasured) {
+        process.stdout.write(`  ? ${r.name}: ${r.errorMessage}\n`)
+      }
     }
   }
 })

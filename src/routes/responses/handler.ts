@@ -118,7 +118,6 @@ export async function handleResponsesCore(
 function applyResponsesToolTransforms(payload: ResponsesPayload): void {
   applyFunctionApplyPatch(payload)
   applyFunctionToolCompatibilityDefaults(payload)
-  rejectUnsupportedBuiltinTools(payload)
 }
 
 function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): void {
@@ -131,10 +130,22 @@ function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): void
       return tool
     }
 
+    // Forward the caller's `strict`; omit the key entirely when they sent none.
+    //
+    // `strict` has three states, not two: probed 2026-08-06
+    // (`scripts/probes/tool-strict.ts`), a schema whose `required` names a key
+    // absent from `properties` returns 200 with the key omitted and 400 with
+    // `strict: false` — upstream runs a different validator when the key is
+    // present at all. `null` is folded into omission rather than forwarded,
+    // since the type permits it and forwarding it would trip that validator.
+    //
+    // `strict` is destructured out of the spread so a caller-sent `null` is
+    // dropped rather than carried through by `...rest`.
+    const { strict, ...rest } = tool
     return {
-      ...tool,
+      ...rest,
       parameters: normalizeFunctionParametersSchemaForCopilot(tool.parameters),
-      strict: tool.strict ?? true,
+      ...(strict != null ? { strict } : {}),
     }
   })
 }
@@ -174,36 +185,6 @@ function applyFunctionApplyPatch(payload: ResponsesPayload): void {
 
     return tool
   })
-}
-
-function rejectUnsupportedBuiltinTools(payload: ResponsesPayload): void {
-  if (
-    payload.tool_choice
-    && typeof payload.tool_choice === 'object'
-    && 'type' in payload.tool_choice
-    && (payload.tool_choice.type === 'web_search_preview'
-      || payload.tool_choice.type === 'web_search_preview_2025_03_11')
-  ) {
-    throwInvalidRequestError(
-      'The selected Copilot endpoint does not support the Responses web_search tool.',
-      'tool_choice',
-      'unsupported_tool_web_search',
-    )
-  }
-
-  if (!Array.isArray(payload.tools)) {
-    return
-  }
-
-  for (const tool of payload.tools) {
-    if (tool.type === 'web_search') {
-      throwInvalidRequestError(
-        'The selected Copilot endpoint does not support the Responses web_search tool.',
-        'tools',
-        'unsupported_tool_web_search',
-      )
-    }
-  }
 }
 
 function applyResponsesInputPolicies(payload: ResponsesPayload): void {

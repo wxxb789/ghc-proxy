@@ -20,6 +20,9 @@ export function printBanner(title: string): void {
 
 /**
  * Icon for a {@link ProbeResult} status.
+ *
+ * `unmeasured` deliberately reads as a gap (`?`) rather than a failure — a
+ * scan of the output should not let it pass for a rejection.
  */
 export function statusIcon(status: ProbeResult['status']): string {
   switch (status) {
@@ -27,6 +30,8 @@ export function statusIcon(status: ProbeResult['status']): string {
       return '✓'
     case 'rejected':
       return '✗'
+    case 'unmeasured':
+      return '?'
     case 'error':
       return '!'
   }
@@ -43,6 +48,7 @@ export function formatProbeLine(result: ProbeResult): string {
 export interface ProbeCounts {
   accepted: number
   rejected: number
+  unmeasured: number
   error: number
 }
 
@@ -50,7 +56,7 @@ export interface ProbeCounts {
  * Tally probe results by status.
  */
 export function summarizeProbeResults(results: Array<ProbeResult>): ProbeCounts {
-  const counts: ProbeCounts = { accepted: 0, rejected: 0, error: 0 }
+  const counts: ProbeCounts = { accepted: 0, rejected: 0, unmeasured: 0, error: 0 }
   for (const result of results) {
     counts[result.status]++
   }

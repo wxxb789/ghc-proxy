@@ -172,7 +172,7 @@ describe('responses and routing', () => {
     })
   })
 
-  test('/v1/responses defaults function tool strict to true', async () => {
+  test('/v1/responses omits strict when the caller sent none', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
@@ -214,20 +214,95 @@ describe('responses and routing', () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
+    const tool = calls[0]?.payload.tools?.[0]
+    expect(tool).toMatchObject({
       type: 'function',
       name: 'get_weather',
-      strict: true,
     })
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
-      parameters: {
-        type: 'object',
-        required: [],
-      },
-    })
+    // Key absence, not just "not asserted" — `toMatchObject` cannot tell the
+    // two apart, and absence is the whole point: upstream runs a different
+    // validator when `strict` is present at all.
+    expect(tool && 'strict' in tool).toBe(false)
+    // `{ type: 'object' }` with no properties crosses unchanged — no injected
+    // `required: []`, no injected `additionalProperties`.
+    expect(calls[0]?.payload.tools?.[0]?.parameters).toEqual({ type: 'object' })
   })
 
-  test('/v1/responses normalizes function parameter required arrays for Copilot', async () => {
+  test.each([
+    { sent: true, label: 'true' },
+    { sent: false, label: 'false' },
+  ])('/v1/responses forwards a caller-sent strict:$label', async ({ sent }) => {
+    // `strict` has three states, and `false` is not the same request as absent:
+    // upstream runs a different validator when the key is present at all. A
+    // truthy guard would silently drop `false` and this is the only test that
+    // would catch it.
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_1',
+      model: 'gpt-4.1',
+      status: 'completed',
+      usage: null,
+    }), calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4.1',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+        tools: [{
+          type: 'function',
+          name: 'get_weather',
+          parameters: { type: 'object' },
+          strict: sent,
+        }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.tools?.[0]?.strict).toBe(sent)
+  })
+
+  test('/v1/responses folds a caller-sent strict:null into omission', async () => {
+    // `null` means "unset", and forwarding it would trip the same
+    // key-is-present validator upstream that omission avoids. The validator
+    // accepts it (matching ResponseFunctionTool's `boolean | null`) so this
+    // path is reachable end-to-end, not just at the transform.
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_1',
+      model: 'gpt-4.1',
+      status: 'completed',
+      usage: null,
+    }), calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4.1',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+        tools: [{
+          type: 'function',
+          name: 'get_weather',
+          parameters: { type: 'object' },
+          strict: null,
+        }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    const tool = calls[0]?.payload.tools?.[0]
+    expect(tool && 'strict' in tool).toBe(false)
+  })
+
+  test('/v1/responses forwards a function parameter schema unmodified', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
@@ -276,20 +351,26 @@ describe('responses and routing', () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
+    const bashTool = calls[0]?.payload.tools?.[0]
+    expect(bashTool).toMatchObject({
       type: 'function',
       name: 'Bash',
       parameters: {
         type: 'object',
-        additionalProperties: false,
         properties: {
           command: { type: 'string' },
           timeout: { type: 'number' },
         },
-        required: ['command', 'timeout'],
+        // The caller declared `timeout` optional. The proxy used to promote it
+        // to required and inject `additionalProperties: false` to satisfy a
+        // `strict` it forced on. Both are the caller's to decide now.
+        required: ['command'],
       },
-      strict: true,
     })
+    expect(bashTool && 'strict' in bashTool).toBe(false)
+    expect((bashTool?.parameters as Record<string, unknown> | undefined))
+      .not
+      .toHaveProperty('additionalProperties')
   })
 
   test('/v1/responses strips unsupported JSON Schema format annotations from function tools', async () => {
@@ -320,6 +401,14 @@ describe('responses and routing', () => {
                 type: 'string',
                 format: 'uri',
               },
+              // A second, optional property. With one property the caller's
+              // `required` coincidentally equals what the old rewrite derived
+              // (`Object.keys(properties)`), so the fixture could not tell the
+              // two apart.
+              timeout: {
+                type: 'number',
+                format: 'int32',
+              },
             },
             required: ['url'],
           },
@@ -328,19 +417,15 @@ describe('responses and routing', () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
-      type: 'function',
-      name: 'WebFetch',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          url: {
-            type: 'string',
-          },
-        },
-        required: ['url'],
+    // `toEqual`, not `toMatchObject`: the latter ignores extra keys, so an
+    // injected `additionalProperties: false` would be invisible.
+    expect(calls[0]?.payload.tools?.[0]?.parameters).toEqual({
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        timeout: { type: 'number' },
       },
+      required: ['url'],
     })
     expect(JSON.stringify(calls[0]?.payload.tools?.[0])).not.toContain('"format"')
   })
@@ -395,16 +480,16 @@ describe('responses and routing', () => {
       name: 'WebFetch',
       parameters: {
         type: 'object',
-        additionalProperties: false,
         properties: {
           url: {
             type: 'string',
             description: 'Fetch target',
           },
         },
-        required: ['url'],
       },
     })
+    // The caller declared no `required`; the proxy must not invent one.
+    expect(calls[0]?.payload.tools?.[0]?.parameters).not.toHaveProperty('required')
 
     const serialized = JSON.stringify(calls[0]?.payload.tools?.[0])
     expect(serialized).not.toContain('"$schema"')
@@ -419,7 +504,7 @@ describe('responses and routing', () => {
     expect(serialized).not.toContain('"contentMediaType"')
   })
 
-  test('/v1/responses adds additionalProperties false and derives required for nested object tool schemas', async () => {
+  test('/v1/responses leaves nested object tool schemas untouched', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
@@ -457,24 +542,19 @@ describe('responses and routing', () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
-      type: 'function',
-      name: 'plugin--nowledge-mem--nowledge_mem_search',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          query: { type: 'string' },
-          options: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              limit: { type: 'integer' },
-            },
-            required: ['limit'],
+    // A plugin/MCP schema with no `required` anywhere. The proxy used to derive
+    // one at every object node and force `additionalProperties: false`, which
+    // made every declared property mandatory at both levels.
+    expect(calls[0]?.payload.tools?.[0]?.parameters).toEqual({
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        options: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer' },
           },
         },
-        required: ['query', 'options'],
       },
     })
   })
@@ -674,13 +754,13 @@ describe('responses and routing', () => {
     ])
   })
 
-  test('/v1/responses rejects unsupported builtin tools explicitly', async () => {
+  test('/v1/responses forwards builtin web_search tools upstream', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
 
     CopilotClient.prototype.createResponses = mockResponses({
-      id: 'resp_unused',
+      id: 'resp_web_search',
       object: 'response',
       created_at: 1,
       model: 'gpt-4.1',
@@ -706,27 +786,27 @@ describe('responses and routing', () => {
         model: 'gpt-4.1',
         input: [{ type: 'message', role: 'user', content: 'hello' }],
         tools: [
-          { type: 'web_search', name: 'web_search_preview' },
+          { type: 'web_search' },
+          { type: 'web_search_preview' },
         ],
       }),
     }))
 
-    const json = await response.json() as {
-      error?: { code?: string, param?: string }
-    }
-    expect(response.status).toBe(400)
-    expect(json.error?.code).toBe('unsupported_tool_web_search')
-    expect(json.error?.param).toBe('tools')
-    expect(calls).toHaveLength(0)
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.payload.tools).toEqual([
+      { type: 'web_search' },
+      { type: 'web_search_preview' },
+    ])
   })
 
-  test('/v1/responses rejects unsupported web_search tool_choice explicitly', async () => {
+  test('/v1/responses forwards a web_search tool_choice upstream', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
 
     CopilotClient.prototype.createResponses = mockResponses({
-      id: 'resp_unused',
+      id: 'resp_web_search_choice',
       object: 'response',
       created_at: 1,
       model: 'gpt-4.1',
@@ -751,17 +831,14 @@ describe('responses and routing', () => {
       body: JSON.stringify({
         model: 'gpt-4.1',
         input: [{ type: 'message', role: 'user', content: 'hello' }],
-        tool_choice: { type: 'web_search_preview' },
+        tools: [{ type: 'web_search' }],
+        tool_choice: { type: 'web_search' },
       }),
     }))
 
-    const json = await response.json() as {
-      error?: { code?: string, param?: string }
-    }
-    expect(response.status).toBe(400)
-    expect(json.error?.code).toBe('unsupported_tool_web_search')
-    expect(json.error?.param).toBe('tool_choice')
-    expect(calls).toHaveLength(0)
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.payload.tool_choice).toEqual({ type: 'web_search' })
   })
 
   test('/v1/responses rejects external image URLs explicitly', async () => {

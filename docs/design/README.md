@@ -33,5 +33,5 @@ Proposed designs that are **not yet implemented**. They record deferred refactor
 | [Messages Routing and Translation](../messages-routing-and-translation.md) | Per-model routing decision logic and Responses API compatibility policies |
 | [Responses Stream Compatibility](../responses-stream-compatibility.md) | Streaming identity normalization contract for the `/v1/responses` passthrough path |
 | [Copilot Token Usage](../research/copilot-token-usage.md) | How Copilot returns token usage across all API paths, and local estimation via gpt-tokenizer |
-| [Tool Support Probe](../../scripts/probes/copilot-tools.ts) | Tests which server-side tool types each Copilot model accepts (`--json` for diffable snapshots) |
+| [Tool Support Probe](../../scripts/probes/tool-support.ts) | Tests whether each builtin tool actually *runs* per model and boundary, not just whether it is accepted (`--json` for diffable snapshots) |
 | [Cache Threshold Probe](../../scripts/probes/cache-threshold.ts) | Tests per-model prompt caching minimum token thresholds |

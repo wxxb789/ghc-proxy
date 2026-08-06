@@ -427,7 +427,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 - automatic trimming of Responses `input` to the latest `compaction` item is disabled by default and only applies when `responsesApiAutoCompactInput` is `true`
 - reasoning defaults for Anthropic -> Responses translation can be tuned with `modelReasoningEfforts`
 - request parameters that a model rejects (e.g. `temperature`/`top_p` on reasoning models) are stripped on the Responses boundary rather than leaked upstream as a `400`; see [Responses Parameter Filters](#responses-parameter-filters)
-- known unsupported builtin tools, such as `web_search`, fail explicitly with `400` instead of being silently removed
+- built-in web search (`web_search`, `web_search_preview`, and their dated variants) is forwarded to Copilot rather than blocked; every `/responses` model probed accepts it and runs a real search, see [docs/research/responses-web-search.md](docs/research/responses-web-search.md)
 - external image URLs on the Responses path fail explicitly with `400`; use `file_id` or data URL image input instead
 - official `input_file` and `item_reference` input items are modeled explicitly and validated before forwarding
 
@@ -545,13 +545,20 @@ bun run matrix:live --stateful-only --json --model=gpt-5.2-codex
 
 ### Tool Support Probe
 
-Tests which server-side tool types (bash, text_editor, web_search, memory, etc.) each Copilot model actually accepts. Useful for tracking backend changes over time.
+Answers whether a tool **works**, not merely whether upstream returns `200` when you mention it. For each (model × tool) it declares the tool, then — unless `--accept-only` — sends a prompt that cannot be answered without it and looks in the response for proof it ran.
+
+Verdicts: `supported` (the tool ran or was called), `inert` (accepted but never invoked), `unsupported` (upstream rejected it), `unmeasured` (capacity/gateway fault — no verdict, re-run before publishing).
 
 ```bash
-bun scripts/probes/copilot-tools.ts              # human-readable table
-bun scripts/probes/copilot-tools.ts --json        # JSON snapshot to stdout
-bun scripts/probes/copilot-tools.ts --model=claude-opus-4.6  # single model
+bun scripts/probes/tool-support.ts                       # both boundaries
+bun scripts/probes/tool-support.ts --json                # JSON snapshot to stdout
+bun scripts/probes/tool-support.ts --model=claude-opus-5 # single model
+bun scripts/probes/tool-support.ts --boundary=responses  # or: messages
+bun scripts/probes/tool-support.ts --accept-only         # skip the functional pass (half the quota)
+bun scripts/probes/tool-support.ts --names               # also probe client tool NAMES (WebSearch, shell, ...)
 ```
+
+Latest results: [docs/research/builtin-tool-support.md](docs/research/builtin-tool-support.md).
 
 The JSON output is designed for weekly diffing — `generatedAt` is the only volatile field:
 

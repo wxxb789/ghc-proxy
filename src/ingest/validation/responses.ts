@@ -186,7 +186,11 @@ const responsesFunctionToolSchema = z.object({
   type: z.literal('function'),
   name: z.string().min(1),
   parameters: jsonObjectSchema.nullable().optional(),
-  strict: z.boolean().optional(),
+  // `.nullable()` to match `ResponseFunctionTool.strict` and its sibling fields
+  // here. A client sending an explicit `null` means "unset", which the handler
+  // folds into omission rather than forwarding — rejecting it at ingress would
+  // 400 a request the proxy knows exactly what to do with.
+  strict: z.boolean().nullable().optional(),
   description: z.string().nullable().optional(),
 }).loose()
 
@@ -218,6 +222,8 @@ const responsesToolChoiceSchema = z.union([
   z.object({
     type: z.enum([
       'file_search',
+      'web_search',
+      'web_search_2025_08_26',
       'web_search_preview',
       'web_search_preview_2025_03_11',
       'computer_use_preview',

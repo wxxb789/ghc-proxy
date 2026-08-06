@@ -33,7 +33,7 @@ tags:
 ## Context
 
 ghc-proxy already has two learnings about beliefs that turn out to be wrong.
-This is a third mode among four, and it is worth naming precisely because the
+This is a third mode among five, and it is worth naming precisely because the
 others do not cover it:
 
 - `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md` — the
@@ -46,6 +46,10 @@ others do not cover it:
   belief was **tested on one of two runtimes**. It was verified, correctly
   attributed, and implemented exactly once; the suite that confirmed it runs
   only on Bun, and the code ships on Node too.
+- `docs/solutions/conventions/capability-verdicts-are-scoped-to-one-boundary.md`
+  — the belief was measured on **one of three endpoints** and enforced on a
+  different one. `/v1/messages` rejects web search; the guard blocking it lived
+  in the `/responses` handler.
 - **This one:** the observation was real, reproducible, and correctly recorded.
   It was **attributed to the wrong layer** — an operational policy read as a
   protocol limit — and then generalized to every model and every future model.

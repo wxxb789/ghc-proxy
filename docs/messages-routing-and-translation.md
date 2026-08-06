@@ -44,7 +44,7 @@ When a model supports `/responses` but not native `/v1/messages`, the proxy tran
 | Assistant `tool_use` | `function_call` | Preserved as call ID, name, and JSON arguments. |
 | Assistant reasoning with signature | `reasoning` | Signature is split into encrypted content and item ID. |
 | Encoded compaction carrier | `compaction` | Preserved as opaque encrypted content. |
-| Anthropic tools | Responses function tools | Tool schemas stay object-shaped. |
+| Anthropic tools | Responses function tools | Tool schemas stay object-shaped and otherwise unmodified — `required` and `additionalProperties` are the caller's. No `strict` key is sent. See [research/responses-tool-strict.md](research/responses-tool-strict.md). |
 
 ### Intentional Policy Decisions
 
@@ -78,7 +78,8 @@ They are rejected because the current Responses execution path cannot preserve t
 - `custom` `apply_patch` can be rewritten into a function tool when enabled.
 - Automatic `context_management` injection is disabled by default and only applies when explicitly enabled in config.
 - Automatic prompt slicing to the latest `compaction` item is disabled by default and only applies when explicitly enabled in config.
-- Known unsupported builtin tools, such as `web_search`, fail explicitly with `400`.
+- Built-in web-search tools (`web_search`, `web_search_preview`, and their dated variants) are forwarded, not blocked. Every `/responses` model probed accepts them and actually runs the search. See [research/responses-web-search.md](research/responses-web-search.md).
+- Function-tool `strict` is forwarded when the caller sends it and omitted entirely when they do not. The proxy previously defaulted it to `true` and rewrote each schema's `required` to every declared property plus `additionalProperties: false` to make that default survivable, which silently promoted optional parameters to required. Omission is measurably safer than `strict: false`: upstream runs a different validator when the key is present at all. See [research/responses-tool-strict.md](research/responses-tool-strict.md).
 - External `input_image.image_url` values that point at remote HTTP(S) URLs fail explicitly with `400`.
 - `max_output_tokens` below Copilot's enforced minimum of 16 is raised to 16 rather than leaking a `400`. The client-facing schema still accepts `0..15` because those are valid OpenAI input; the floor is a Copilot quirk the proxy absorbs. See [research/sampling-parameters.md](research/sampling-parameters.md).
 - Explicit prompt-caching controls (`prompt_cache_options`, and `prompt_cache_breakpoint` on content blocks) are modeled and forwarded. `ttl` is constrained to the single value upstream accepts (`30m`) and an unknown `mode` is rejected locally, turning a wasted round-trip into an immediate `400`. Only gpt-5.6 and later accept these — earlier models return `400 ... is not supported on this model` — so the proxy forwards rather than injects them. See [research/prompt-caching.md](research/prompt-caching.md).
@@ -136,6 +137,20 @@ All Opus 4.7 variants (`claude-opus-4.7`, `claude-opus-4.7-high`, `claude-opus-4
 
 On the `/responses` endpoint (GPT models including `gpt-5.5`), `web_search_preview` and custom tools (`apply_patch`, `shell`) are accepted. `file_search`, `code_interpreter`, `computer_use_preview`, `image_generation`, and `mcp` are rejected. `gpt-5.5` has identical tool support to `gpt-5.4`.
 
+**2026-08-04 update (web search on `/responses`):** the Codex/ChatGPT built-in
+`web_search` type was probed for the first time and is accepted by **every**
+`/responses` model — `gpt-5-mini`, `gpt-5.3-codex`, `gpt-5.4`(`-mini`),
+`gpt-5.5`, all three `gpt-5.6-*`, `grok-4.5`, `mai-code-1-flash-picker` — as is
+`web_search_preview`. Acceptance is not the whole finding: `gpt-5.6-sol` and
+`gpt-5.6-terra` emit real `web_search_call` items with `url_citation`
+annotations, so the tool executes rather than being tolerated. `tool_choice` is
+narrower than `tools` — the dated spellings
+(`web_search_preview_2025_03_11`, `web_search_2025_08_26`) work inside `tools`
+but return `400 Missing required parameter: 'tool_choice.tools'` when forced
+via `tool_choice`. The `/v1/messages` boundary is unaffected and still returns
+`The use of the web search tool is not supported.` for `claude-opus-5` and
+`claude-sonnet-5`. Full results and method: [research/responses-web-search.md](research/responses-web-search.md).
+
 ### Prompt caching
 
 As of April 30, 2026, prompt caching via `cache_control: { type: "ephemeral" }` is supported across all tested models on both `/v1/messages` and `/responses` paths. One notable exception:
@@ -146,7 +161,7 @@ As of April 30, 2026, prompt caching via `cache_control: { type: "ephemeral" }` 
 
 Run `bun scripts/probes/cache-threshold.ts --model=<id>` to probe a specific model's cache threshold.
 
-Run `bun scripts/probes/copilot-tools.ts --json` to get a current snapshot. Weekly diffs detect backend changes.
+Run `bun scripts/probes/tool-support.ts --json` to get a current snapshot. Weekly diffs detect backend changes. Latest results: [research/builtin-tool-support.md](research/builtin-tool-support.md).
 
 ## Streaming Guarantees
 
