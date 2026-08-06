@@ -17,6 +17,8 @@ A script that sends real requests to Copilot to establish what it actually accep
 
 A probe result is a dated snapshot, not a permanent fact: the model set changes, and a policy correct when written can become a capability loss later. Constants that encode a probe result cite the probe and its date, so staleness stays visible. Probes cost real quota and share one rate-limited upstream, so they run sequentially. A probe must also control the state its requests land in — a cached prefix or a warm session makes the measurement describe the leftover state rather than the upstream.
 
+A result is scoped to everything the request varied: the boundary, the request schema, the [[Execution mechanism]] of the thing under test, and what the prompt required. A verdict recorded without naming those reads wider than its evidence. Three failure shapes recur. An upstream error naming a field path in the request describes the payload, not the capability, so it is no verdict at all. A functional check whose prompt could be satisfied without the tool cannot separate "declined to use" from "unable to use". And on a boundary that ignores the field under test, success is returned for anything, so a passing result proves nothing — which is why a probe carries both a control that must pass and one that must fail.
+
 ### Advertised capability
 What a model's own record says it supports, fetched from Copilot's model list at startup. Distinct from an [[Upstream probe]], which measures what the model actually does: an advertised list is free and available for every model including ones that did not exist when the last probe ran, but it is the model's claim rather than a measurement.
 
@@ -25,6 +27,16 @@ The relationship is asymmetric, and the asymmetry is what makes it usable. A mod
 An advertised set is also not an ordered ladder every model implements a prefix of. Two models may advertise overlapping-but-incomparable sets, so "supports the highest tier, therefore supports the one below" is not a valid inference.
 
 The record describes the model, not the deployment serving it. An advertised capability can still be refused by an account-scoped policy on the infrastructure a model happens to run on — so an advertisement is a claim about what the model can do, never a guarantee that this subscriber may do it. A refusal of that kind needs its own bounded, dated exclusion; folding it into the capability check would state it as a property of the model, which it is not.
+
+### Execution mechanism
+Who runs a tool once the model decides to use it: the upstream executes it and returns a result, or the model emits a call and the caller executes it. The distinction decides what counts as proof that the tool works — a result coming back, versus a correctly-named call going out — so a check written for one mechanism reports the other as broken.
+
+Two tools may share a name and differ in mechanism, and their support verdicts are then independent: the upstream can refuse to run its own built-in version of a capability while happily emitting calls to a caller-supplied tool of the same name. A capability claim that identifies a tool only by its word is therefore ambiguous, and the two readings carry very different consequences — a blocked built-in is narrow and a caller can rename around it, whereas a filtered name would affect every client and admit no workaround.
+
+### Builtin tool
+A tool the caller declares by a versioned type tag rather than by supplying its own schema, so the upstream both defines and — for server-mechanism tools — runs it. Gating applies to the tag, not to the tool's name: a caller-defined tool that happens to reuse the name of a blocked builtin is an ordinary tool and is unaffected.
+
+Support for these varies by boundary and does not transfer between them, and a boundary may ignore the type tag entirely, treating the declaration as an ordinary tool. Where that happens the tag is not a capability signal at all, and reading acceptance as support records a capability that boundary does not have.
 
 ## Messages Execution Strategies
 
