@@ -428,6 +428,38 @@ describe('handleRouteError honors an error that carries its own status', () => {
     expect(response?.status).toBe(500)
   })
 
+  // Reading `status` runs inside the error handler, so this repo's own read
+  // must not be the thing that throws. Note this hardens `handleRouteError`
+  // only: Elysia itself does `set.status = error.status` after `onError`
+  // returns (`elysia/dist/compose.mjs`), so a hostile getter still escapes
+  // `app.handle()` end-to-end. Measured on the pre-fix tree too — that escape
+  // predates this change and is not ours to fix here.
+  test('a status getter that throws degrades to 500 instead of escaping', () => {
+    class ThrowingStatusError extends Error {
+      get status(): number {
+        throw new TypeError('status getter blew up')
+      }
+    }
+
+    const { set, response } = mapError('UNKNOWN', new ThrowingStatusError('boom'))
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
+  test('a Proxy whose has-trap throws degrades to 500 instead of escaping', () => {
+    const hostile = new Proxy({}, {
+      has() {
+        throw new TypeError('has trap blew up')
+      },
+    })
+
+    const { set, response } = mapError('UNKNOWN', hostile)
+
+    expect(set.status).toBe(500)
+    expect(response?.status).toBe(500)
+  })
+
   test('code === HTTP still passes through untouched', () => {
     const { set, response } = mapError(
       'HTTP',

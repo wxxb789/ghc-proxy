@@ -39,12 +39,31 @@ const MAX_ERROR_STATUS = 599
  * part of their public class contract, and this repo's own `TranslationFailure`
  * declares `status: 400 | 502`. Reading the property instead of mapping
  * `code` covers all of them, and covers whatever Elysia adds next.
+ *
+ * The read is wrapped because this runs inside the error handler: `status` may
+ * be a getter and `error` may be a Proxy, either of which can throw. This
+ * hardens this function only — Elysia itself does `set.status = error.status`
+ * after `onError` returns (`elysia/dist/compose.mjs`), so a hostile getter
+ * still escapes `app.handle()`. Measured on the pre-fix tree as well, so that
+ * escape is Elysia's, not something reading the property here introduced.
+ * `isTimeoutLikeError` guards its own traversal the same way.
  */
 function claimedErrorStatus(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null || !('status' in error))
+  if (typeof error !== 'object' || error === null)
     return undefined
 
-  const { status } = error as { status: unknown }
+  let status: unknown
+  try {
+    // Both the `in` check and the read can throw: a Proxy may trap `has`, and
+    // `status` may be a getter.
+    if (!('status' in error))
+      return undefined
+    status = (error as { status: unknown }).status
+  }
+  catch {
+    return undefined
+  }
+
   return typeof status === 'number'
     && Number.isInteger(status)
     && status >= MIN_ERROR_STATUS
