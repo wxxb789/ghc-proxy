@@ -130,10 +130,25 @@ function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): void
       return tool
     }
 
+    // Forward the caller's `strict` and omit the key entirely when they sent
+    // none. This used to default to `true`, which opted the caller into a
+    // stricter contract than they asked for and then required their schema to
+    // be rewritten to satisfy it.
+    //
+    // `strict` has three states, not two: probed 2026-08-06
+    // (`scripts/probes/tool-strict.ts`), a schema whose `required` names a key
+    // absent from `properties` returns 200 with the key omitted and 400 with
+    // `strict: false` — upstream runs a different validator when the key is
+    // present at all. `null` is folded into omission rather than forwarded,
+    // since the type permits it and forwarding it would trip that validator.
+    //
+    // `strict` is destructured out of the spread so a caller-sent `null` is
+    // dropped rather than carried through by `...rest`.
+    const { strict, ...rest } = tool
     return {
-      ...tool,
+      ...rest,
       parameters: normalizeFunctionParametersSchemaForCopilot(tool.parameters),
-      strict: tool.strict ?? true,
+      ...(strict != null ? { strict } : {}),
     }
   })
 }
