@@ -482,7 +482,7 @@ describe('responses translation policy', () => {
     expect(reasoningItems).toHaveLength(0)
   })
 
-  test('normalizes Anthropic tool schemas for Copilot Responses compatibility', () => {
+  test('forwards Anthropic tool schemas to the Responses path unmodified', () => {
     const translated = translateAnthropicToResponsesPayload({
       model: 'gpt-5',
       max_tokens: 256,
@@ -506,12 +506,14 @@ describe('responses translation policy', () => {
       }],
     })
 
+    // `timeout` and `options` were declared optional and stay optional, the
+    // nested object keeps its open shape, and no `strict` key is sent —
+    // omitting it is measurably safer than `false`.
     expect(translated.tools).toEqual([{
       type: 'function',
       name: 'Bash',
       parameters: {
         type: 'object',
-        additionalProperties: false,
         properties: {
           command: { type: 'string' },
           timeout: { type: 'number' },
@@ -520,13 +522,10 @@ describe('responses translation policy', () => {
             properties: {
               cwd: { type: 'string' },
             },
-            additionalProperties: false,
-            required: ['cwd'],
           },
         },
-        required: ['command', 'timeout', 'options'],
+        required: ['command'],
       },
-      strict: false,
     }])
   })
 
@@ -555,7 +554,6 @@ describe('responses translation policy', () => {
       name: 'WebFetch',
       parameters: {
         type: 'object',
-        additionalProperties: false,
         properties: {
           url: {
             type: 'string',
@@ -563,7 +561,6 @@ describe('responses translation policy', () => {
         },
         required: ['url'],
       },
-      strict: false,
     }])
   })
 
@@ -592,21 +589,20 @@ describe('responses translation policy', () => {
       }],
     })
 
+    // The metadata annotations are stripped; the schema's own shape — here, no
+    // `required` at all — crosses unchanged.
     expect(translated.tools).toEqual([{
       type: 'function',
       name: 'WebFetch',
       parameters: {
         type: 'object',
-        additionalProperties: false,
         properties: {
           url: {
             type: 'string',
             description: 'Fetch target',
           },
         },
-        required: ['url'],
       },
-      strict: false,
     }])
   })
 })

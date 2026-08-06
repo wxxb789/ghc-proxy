@@ -172,7 +172,7 @@ describe('responses and routing', () => {
     })
   })
 
-  test('/v1/responses defaults function tool strict to true', async () => {
+  test('/v1/responses omits strict when the caller sent none', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
@@ -214,20 +214,21 @@ describe('responses and routing', () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
+    const tool = calls[0]?.payload.tools?.[0]
+    expect(tool).toMatchObject({
       type: 'function',
       name: 'get_weather',
-      strict: true,
     })
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
-      parameters: {
-        type: 'object',
-        required: [],
-      },
-    })
+    // Key absence, not just "not asserted" — `toMatchObject` cannot tell the
+    // two apart, and absence is the whole point: upstream runs a different
+    // validator when `strict` is present at all.
+    expect(tool && 'strict' in tool).toBe(false)
+    // `{ type: 'object' }` with no properties crosses unchanged — no injected
+    // `required: []`, no injected `additionalProperties`.
+    expect(calls[0]?.payload.tools?.[0]?.parameters).toEqual({ type: 'object' })
   })
 
-  test('/v1/responses normalizes function parameter required arrays for Copilot', async () => {
+  test('/v1/responses forwards a function parameter schema unmodified', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
@@ -276,20 +277,26 @@ describe('responses and routing', () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
+    const bashTool = calls[0]?.payload.tools?.[0]
+    expect(bashTool).toMatchObject({
       type: 'function',
       name: 'Bash',
       parameters: {
         type: 'object',
-        additionalProperties: false,
         properties: {
           command: { type: 'string' },
           timeout: { type: 'number' },
         },
-        required: ['command', 'timeout'],
+        // The caller declared `timeout` optional. The proxy used to promote it
+        // to required and inject `additionalProperties: false` to satisfy a
+        // `strict` it forced on. Both are the caller's to decide now.
+        required: ['command'],
       },
-      strict: true,
     })
+    expect(bashTool && 'strict' in bashTool).toBe(false)
+    expect((bashTool?.parameters as Record<string, unknown> | undefined))
+      .not
+      .toHaveProperty('additionalProperties')
   })
 
   test('/v1/responses strips unsupported JSON Schema format annotations from function tools', async () => {
@@ -333,7 +340,6 @@ describe('responses and routing', () => {
       name: 'WebFetch',
       parameters: {
         type: 'object',
-        additionalProperties: false,
         properties: {
           url: {
             type: 'string',
@@ -395,16 +401,16 @@ describe('responses and routing', () => {
       name: 'WebFetch',
       parameters: {
         type: 'object',
-        additionalProperties: false,
         properties: {
           url: {
             type: 'string',
             description: 'Fetch target',
           },
         },
-        required: ['url'],
       },
     })
+    // The caller declared no `required`; the proxy must not invent one.
+    expect(calls[0]?.payload.tools?.[0]?.parameters).not.toHaveProperty('required')
 
     const serialized = JSON.stringify(calls[0]?.payload.tools?.[0])
     expect(serialized).not.toContain('"$schema"')
@@ -419,7 +425,7 @@ describe('responses and routing', () => {
     expect(serialized).not.toContain('"contentMediaType"')
   })
 
-  test('/v1/responses adds additionalProperties false and derives required for nested object tool schemas', async () => {
+  test('/v1/responses leaves nested object tool schemas untouched', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
@@ -457,24 +463,19 @@ describe('responses and routing', () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
-      type: 'function',
-      name: 'plugin--nowledge-mem--nowledge_mem_search',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          query: { type: 'string' },
-          options: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              limit: { type: 'integer' },
-            },
-            required: ['limit'],
+    // A plugin/MCP schema with no `required` anywhere. The proxy used to derive
+    // one at every object node and force `additionalProperties: false`, which
+    // made every declared property mandatory at both levels.
+    expect(calls[0]?.payload.tools?.[0]?.parameters).toEqual({
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        options: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer' },
           },
         },
-        required: ['query', 'options'],
       },
     })
   })

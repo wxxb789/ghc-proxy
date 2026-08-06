@@ -1003,7 +1003,7 @@ describe('buildErrorEvent', () => {
 // ---------------------------------------------------------------------------
 
 describe('normalizeFunctionParametersSchemaForCopilot', () => {
-  test('normalizes plugin and MCP-style object schemas for Copilot Responses validation', () => {
+  test('strips upstream-incompatible metadata at every nesting depth', () => {
     const schema: Record<string, unknown> = {
       type: 'object',
       title: 'nowledge_mem_search arguments',
@@ -1058,18 +1058,71 @@ describe('normalizeFunctionParametersSchemaForCopilot', () => {
                     type: 'string',
                   },
                 },
-                required: ['value'],
-                additionalProperties: false,
               },
             },
           },
-          required: ['limit', 'tags'],
-          additionalProperties: false,
         },
       },
-      required: ['query', 'options'],
-      additionalProperties: false,
     })
+  })
+
+  test('preserves a partial required array rather than promoting optionals', () => {
+    // The load-bearing case. This used to come back as
+    // `required: ['command', 'timeout']`, silently making the caller's optional
+    // parameter mandatory — a change to request semantics the client still
+    // believed were in force.
+    expect(normalizeFunctionParametersSchemaForCopilot({
+      type: 'object',
+      properties: {
+        command: { type: 'string' },
+        timeout: { type: 'number' },
+      },
+      required: ['command'],
+    })).toEqual({
+      type: 'object',
+      properties: {
+        command: { type: 'string' },
+        timeout: { type: 'number' },
+      },
+      required: ['command'],
+    })
+  })
+
+  test('does not invent a required array when the caller declared none', () => {
+    expect(normalizeFunctionParametersSchemaForCopilot({
+      type: 'object',
+      properties: { a: { type: 'string' } },
+    })).toEqual({
+      type: 'object',
+      properties: { a: { type: 'string' } },
+    })
+  })
+
+  test('preserves an explicit additionalProperties rather than forcing false', () => {
+    expect(normalizeFunctionParametersSchemaForCopilot({
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      additionalProperties: true,
+    })).toEqual({
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      additionalProperties: true,
+    })
+  })
+
+  test('leaves a composition root untouched', () => {
+    // `required` beside `$ref` with no sibling `properties` — the shape the
+    // removed rewrite could never reach, which is why it never protected the
+    // case that motivated it.
+    const schema = {
+      $ref: '#/$defs/Invoke',
+      required: ['params'],
+      $defs: {
+        Invoke: { type: 'object', properties: { params: { type: 'string' } } },
+      },
+    }
+
+    expect(normalizeFunctionParametersSchemaForCopilot(schema)).toEqual(schema)
   })
 
   test('passes through nullish schemas unchanged', () => {
