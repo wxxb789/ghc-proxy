@@ -228,6 +228,44 @@ describe('responses and routing', () => {
     expect(calls[0]?.payload.tools?.[0]?.parameters).toEqual({ type: 'object' })
   })
 
+  test.each([
+    { sent: true, label: 'true' },
+    { sent: false, label: 'false' },
+  ])('/v1/responses forwards a caller-sent strict:$label', async ({ sent }) => {
+    // `strict` has three states, and `false` is not the same request as absent:
+    // upstream runs a different validator when the key is present at all. A
+    // truthy guard would silently drop `false` and this is the only test that
+    // would catch it.
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_1',
+      model: 'gpt-4.1',
+      status: 'completed',
+      usage: null,
+    }), calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4.1',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+        tools: [{
+          type: 'function',
+          name: 'get_weather',
+          parameters: { type: 'object' },
+          strict: sent,
+        }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.tools?.[0]?.strict).toBe(sent)
+  })
+
   test('/v1/responses forwards a function parameter schema unmodified', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
@@ -327,6 +365,14 @@ describe('responses and routing', () => {
                 type: 'string',
                 format: 'uri',
               },
+              // A second, optional property. With one property the caller's
+              // `required` coincidentally equals what the old rewrite derived
+              // (`Object.keys(properties)`), so the fixture could not tell the
+              // two apart.
+              timeout: {
+                type: 'number',
+                format: 'int32',
+              },
             },
             required: ['url'],
           },
@@ -335,18 +381,15 @@ describe('responses and routing', () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
-      type: 'function',
-      name: 'WebFetch',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: {
-            type: 'string',
-          },
-        },
-        required: ['url'],
+    // `toEqual`, not `toMatchObject`: the latter ignores extra keys, so an
+    // injected `additionalProperties: false` would be invisible.
+    expect(calls[0]?.payload.tools?.[0]?.parameters).toEqual({
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        timeout: { type: 'number' },
       },
+      required: ['url'],
     })
     expect(JSON.stringify(calls[0]?.payload.tools?.[0])).not.toContain('"format"')
   })
