@@ -308,21 +308,21 @@ describe('Error classification in onError handler', () => {
 // `TranslationFailure`'s 502 behind a generic 500. The cases below exercise the
 // exported seam directly for shapes no live route in this repo can produce.
 
+/**
+ * `onAfterResponse` fires after `handle()` resolves, so a real-server request
+ * writes its access-log line asynchronously. Without waiting, that line lands
+ * inside a later test's `console.log` capture window and trips its single-line
+ * assertion.
+ */
+async function drainAccessLog() {
+  await new Promise(resolve => setTimeout(resolve, 50))
+}
+
 describe('handleRouteError honors an error that carries its own status', () => {
   function mapError(code: string, error: unknown) {
     const set: { status?: number | string } = {}
     const response = handleRouteError({ code, error, set })
     return { set, response }
-  }
-
-  /**
-   * `onAfterResponse` fires after `handle()` resolves, so a real-server request
-   * writes its access-log line asynchronously. Without this, that line lands
-   * inside a later test's `console.log` capture window and trips its
-   * single-line assertion.
-   */
-  async function drainAccessLog() {
-    await new Promise(resolve => setTimeout(resolve, 50))
   }
 
   test('an unmatched route returns 404 through the real server', async () => {
@@ -549,8 +549,7 @@ async function captureAccessLogLine(
     await createServer().handle(
       options.request ?? buildMessagesRequest(options.callerRequestId),
     )
-    // onAfterResponse runs after handle() resolves.
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await drainAccessLog()
   }
   finally {
     // eslint-disable-next-line no-console
@@ -662,7 +661,7 @@ describe('Access-log elapsed duration is real on every path', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ status: 'ok' })
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await drainAccessLog()
   })
 
   test('formatElapsed renders - rather than NaNs when the start is missing', () => {

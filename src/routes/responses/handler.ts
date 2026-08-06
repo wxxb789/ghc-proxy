@@ -130,10 +130,7 @@ function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): void
       return tool
     }
 
-    // Forward the caller's `strict` and omit the key entirely when they sent
-    // none. This used to default to `true`, which opted the caller into a
-    // stricter contract than they asked for and then required their schema to
-    // be rewritten to satisfy it.
+    // Forward the caller's `strict`; omit the key entirely when they sent none.
     //
     // `strict` has three states, not two: probed 2026-08-06
     // (`scripts/probes/tool-strict.ts`), a schema whose `required` names a key
