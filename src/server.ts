@@ -54,6 +54,32 @@ function claimedErrorStatus(error: unknown): number | undefined {
 }
 
 /**
+ * Client-facing error `type` for a locally generated failure.
+ *
+ * The proxy's other error paths already classify by meaning
+ * (`invalid_request_error`, `upstream_error`, `rate_limit_error`,
+ * `timeout_error`), and `upstreamErrorType` in `src/lib/error.ts` states the
+ * rule: a non-standard `type` at the proxy boundary breaks client error
+ * handling. Honoring the thrown error's status made this branch reachable at
+ * 404/400/422 rather than only 500, so it classifies too instead of labelling
+ * every one of them `error`.
+ */
+function localErrorType(status: number): string {
+  if (status === 404)
+    return 'not_found_error'
+  if (status >= 400 && status < 500)
+    return 'invalid_request_error'
+  return 'error'
+}
+
+/**
+ * Elysia's `NotFoundError` carries the bare string `NOT_FOUND` as its message.
+ * That is an internal token, not something a client should be shown, so an
+ * unmatched route gets a sentence instead.
+ */
+const NOT_FOUND_MESSAGE = 'Unknown endpoint. Check the request path.'
+
+/**
  * Maps a thrown error to a client response.
  *
  * `set.status` is written on every branch because `onError` returns a fresh
@@ -93,11 +119,12 @@ export function handleRouteError(
     )
   }
 
-  const message = error instanceof Error ? error.message : String(error)
   const status = claimedErrorStatus(error) ?? 500
+  const rawMessage = error instanceof Error ? error.message : String(error)
+  const message = code === 'NOT_FOUND' ? NOT_FOUND_MESSAGE : rawMessage
   set.status = status
   return Response.json(
-    { error: { message, type: 'error' } },
+    { error: { message, type: localErrorType(status) } },
     { status },
   )
 }

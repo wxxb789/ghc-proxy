@@ -266,6 +266,42 @@ describe('responses and routing', () => {
     expect(calls[0]?.payload.tools?.[0]?.strict).toBe(sent)
   })
 
+  test('/v1/responses folds a caller-sent strict:null into omission', async () => {
+    // `null` means "unset", and forwarding it would trip the same
+    // key-is-present validator upstream that omission avoids. The validator
+    // accepts it (matching ResponseFunctionTool's `boolean | null`) so this
+    // path is reachable end-to-end, not just at the transform.
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_1',
+      model: 'gpt-4.1',
+      status: 'completed',
+      usage: null,
+    }), calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4.1',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+        tools: [{
+          type: 'function',
+          name: 'get_weather',
+          parameters: { type: 'object' },
+          strict: null,
+        }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    const tool = calls[0]?.payload.tools?.[0]
+    expect(tool && 'strict' in tool).toBe(false)
+  })
+
   test('/v1/responses forwards a function parameter schema unmodified', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []

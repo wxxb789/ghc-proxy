@@ -43,11 +43,18 @@ const requestCorrelation = new WeakMap<Request, RequestCorrelation>()
  *
  * Keyed on the `Request` the same way `requestCorrelation` is, so entries are
  * GC'd with it. This lives here rather than in `derive()` because `derive` does
- * not run on a route Elysia never matched — measured on Bun 1.3.14 and Node
- * 24.18 via `@elysiajs/node`, both of which do fire `onRequest` on an unmatched
- * path and preserve `Request` identity through to `onAfterResponse`. Reading a
- * missing `derive` value is what rendered every unmatched route's duration as
- * the literal string `NaNs`.
+ * not run on a route Elysia never matched — `onRequest` does, and it preserves
+ * `Request` identity through to `onAfterResponse`. Reading a missing `derive`
+ * value is what rendered every unmatched route's duration as the literal string
+ * `NaNs`.
+ *
+ * That lifecycle behavior was measured once by hand on Bun 1.3.14 and on Node
+ * 24.18 via `@elysiajs/node`. **The automated suite runs only under Bun**, so
+ * the Node half is a point-in-time observation rather than standing coverage —
+ * see `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md`. If
+ * the Node adapter ever stops firing `onRequest` on an unmatched path, or
+ * re-wraps the `Request` between hooks, the lookup misses and the duration
+ * silently degrades to `-` on that runtime with a green suite.
  */
 const requestStartTimes = new WeakMap<Request, number>()
 

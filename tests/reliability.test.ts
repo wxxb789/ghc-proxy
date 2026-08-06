@@ -331,10 +331,34 @@ describe('handleRouteError honors an error that carries its own status', () => {
     )
 
     expect(response.status).toBe(404)
+    // Elysia's own message is the bare token `NOT_FOUND`, and `type: 'error'`
+    // is not in OpenAI's taxonomy. Neither belongs at a boundary this repo
+    // promises stays OpenAI-compatible.
     expect(await response.json()).toEqual({
-      error: { message: 'NOT_FOUND', type: 'error' },
+      error: {
+        message: 'Unknown endpoint. Check the request path.',
+        type: 'not_found_error',
+      },
     })
     await drainAccessLog()
+  })
+
+  test('a 4xx from a thrown error is classified as invalid_request_error', () => {
+    const { response } = mapError('PARSE', { status: 400, message: 'bad json' })
+
+    expect(response?.status).toBe(400)
+    return response?.json().then((body) => {
+      expect(body).toMatchObject({ error: { type: 'invalid_request_error' } })
+    })
+  })
+
+  test('a 5xx keeps the generic error type', () => {
+    const { response } = mapError('UNKNOWN', new Error('Something went wrong'))
+
+    expect(response?.status).toBe(500)
+    return response?.json().then((body) => {
+      expect(body).toMatchObject({ error: { message: 'Something went wrong', type: 'error' } })
+    })
   })
 
   test('a malformed JSON body returns 400 through the real server', async () => {
