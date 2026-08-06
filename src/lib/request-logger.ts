@@ -38,6 +38,36 @@ export interface RequestCorrelation {
 
 const requestCorrelation = new WeakMap<Request, RequestCorrelation>()
 
+/**
+ * Per-request start timestamp for the access log.
+ *
+ * Keyed on the `Request` the same way `requestCorrelation` is, so entries are
+ * GC'd with it. This lives here rather than in `derive()` because `derive` does
+ * not run on a route Elysia never matched — measured on Bun 1.3.14 and Node
+ * 24.18 via `@elysiajs/node`, both of which do fire `onRequest` on an unmatched
+ * path and preserve `Request` identity through to `onAfterResponse`. Reading a
+ * missing `derive` value is what rendered every unmatched route's duration as
+ * the literal string `NaNs`.
+ */
+const requestStartTimes = new WeakMap<Request, number>()
+
+/**
+ * Record when a request arrived. Called from `onRequest`, which fires on every
+ * path including ones no route matches.
+ *
+ * The `void` return type is load-bearing, not decoration. `WeakMap.set` returns
+ * the WeakMap, and Elysia turns any non-undefined `onRequest` return into the
+ * response body — a setter written as a concise arrow over `.set()` makes every
+ * response in the proxy the string `[object WeakMap]`. `tsc` does not catch it.
+ */
+export function markRequestStart(request: Request): void {
+  requestStartTimes.set(request, Date.now())
+}
+
+export function getRequestStart(request: Request): number | undefined {
+  return requestStartTimes.get(request)
+}
+
 export function getOrCreateRequestCorrelation(request: Request): RequestCorrelation {
   const existing = requestCorrelation.get(request)
   if (existing) {
@@ -142,8 +172,21 @@ export function getRequestModelMapping(request: Request): ModelMappingInfo | und
   return requestModelMapping.get(request)
 }
 
-export function formatElapsed(start: number) {
-  return formatDurationMs(Date.now() - start)
+/**
+ * Format how long a request took, given the timestamp recorded at arrival.
+ *
+ * Renders `-` rather than a number when the start is missing or the arithmetic
+ * is not finite. The caller is expected to supply a real start (see
+ * {@link markRequestStart}); this is the shared-formatter backstop, so a future
+ * code path that skips the `onRequest` hook degrades to an honest `-` instead
+ * of printing `NaNs`.
+ */
+export function formatElapsed(start: number | undefined) {
+  if (start === undefined)
+    return '-'
+
+  const elapsed = Date.now() - start
+  return Number.isFinite(elapsed) ? formatDurationMs(elapsed) : '-'
 }
 
 function formatPath(rawUrl: string) {

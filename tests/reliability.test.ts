@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
 import { HTTPError } from '~/lib/error'
-import { getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
+import { formatElapsed, getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
 import { createServer, handleRouteError } from '~/server'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { createApp } from './helpers'
@@ -363,7 +363,10 @@ describe('handleRouteError honors an error that carries its own status', () => {
   test('an unwrapped TranslationFailure surfaces its own 502, not 500', () => {
     const { set, response } = mapError(
       'UNKNOWN',
-      new TranslationFailure('Upstream response contained no choices', { status: 502 }),
+      new TranslationFailure('Upstream response contained no choices', {
+        status: 502,
+        kind: 'upstream_no_choices',
+      }),
     )
 
     expect(set.status).toBe(502)
@@ -503,9 +506,33 @@ describe('Streaming error handling', () => {
 // Built from a char code so the source carries no literal control character.
 const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, 'g')
 
+function buildMessagesRequest(callerRequestId?: string): Request {
+  return new Request('http://localhost/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(callerRequestId ? { 'x-request-id': callerRequestId } : {}),
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4.5',
+      max_tokens: 64,
+      messages: [{ role: 'user', content: 'Hello!' }],
+    }),
+  })
+}
+
+/**
+ * Drive one request through the real server and return its access-log line.
+ *
+ * `reject` is optional because an unmatched route never reaches upstream —
+ * there is nothing to stub for it.
+ */
 async function captureAccessLogLine(
-  reject: () => Promise<never>,
-  callerRequestId?: string,
+  options: {
+    request?: Request
+    reject?: () => Promise<never>
+    callerRequestId?: string
+  } = {},
 ): Promise<string> {
   const lines: Array<string> = []
   // eslint-disable-next-line no-console
@@ -516,19 +543,12 @@ async function captureAccessLogLine(
   }) as typeof console.log
 
   try {
-    CopilotClient.prototype.createChatCompletions = reject as never
-    await createServer().handle(new Request('http://localhost/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(callerRequestId ? { 'x-request-id': callerRequestId } : {}),
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4.5',
-        max_tokens: 64,
-        messages: [{ role: 'user', content: 'Hello!' }],
-      }),
-    }))
+    if (options.reject) {
+      CopilotClient.prototype.createChatCompletions = options.reject as never
+    }
+    await createServer().handle(
+      options.request ?? buildMessagesRequest(options.callerRequestId),
+    )
     // onAfterResponse runs after handle() resolves.
     await new Promise(resolve => setTimeout(resolve, 50))
   }
@@ -546,46 +566,113 @@ function accessLogStatus(line: string): string | undefined {
   return line.split(' ')[3]
 }
 
+/** Same line shape — index 4 is the elapsed duration. */
+function accessLogElapsed(line: string): string | undefined {
+  return line.split(' ')[4]
+}
+
 describe('Access-log status code matches the client response', () => {
   useCreateChatCompletionsSnapshot()
 
   test('logs 504 for a timeout, not 500', async () => {
-    const line = await captureAccessLogLine(() =>
-      Promise.reject(createBunFetchTimeoutError()))
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(createBunFetchTimeoutError()),
+    })
 
     expect(accessLogStatus(line)).toBe('504')
   })
 
   test('logs 504 for a Node-shaped timeout', async () => {
-    const line = await captureAccessLogLine(() =>
-      Promise.reject(createNodeHeadersTimeoutError()))
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(createNodeHeadersTimeoutError()),
+    })
 
     expect(accessLogStatus(line)).toBe('504')
   })
 
   test('logs 500 for a generic error', async () => {
-    const line = await captureAccessLogLine(() =>
-      Promise.reject(new Error('Something went wrong')))
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(new Error('Something went wrong')),
+    })
 
     expect(accessLogStatus(line)).toBe('500')
   })
 
   test('logs the upstream status for an HTTPError', async () => {
-    const line = await captureAccessLogLine(() => Promise.reject(
-      new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
-    ))
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(
+        new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
+      ),
+    })
 
     expect(accessLogStatus(line)).toBe('429')
   })
 
   test('logs the caller request id alongside the unique internal id', async () => {
-    const line = await captureAccessLogLine(
-      () => Promise.reject(new Error('Something went wrong')),
-      'caller request/id',
-    )
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(new Error('Something went wrong')),
+      callerRequestId: 'caller request/id',
+    })
 
     expect(line).toContain('callerRid=caller_request/id')
     expect(line).toMatch(/\brid=[\da-f]{8}\b/)
+  })
+})
+
+// ── Access-log elapsed duration ──
+//
+// `derive` never runs on a route Elysia did not match, so reading the start
+// timestamp from there produced `Date.now() - undefined` = NaN and logged the
+// literal string `NaNs` on every unmatched path. The start is now recorded in
+// `onRequest`, which does fire everywhere.
+
+describe('Access-log elapsed duration is real on every path', () => {
+  const DURATION_RE = /^\d+(?:ms|s)$/
+
+  test('an unmatched route logs a real duration, not NaNs', async () => {
+    const line = await captureAccessLogLine({
+      request: new Request('http://localhost/api/tags'),
+    })
+
+    expect(line).not.toContain('NaN')
+    expect(accessLogStatus(line)).toBe('404')
+    expect(accessLogElapsed(line)).toMatch(DURATION_RE)
+  })
+
+  test('a matched route still logs a real duration', async () => {
+    const line = await captureAccessLogLine({
+      request: new Request('http://localhost/health'),
+    })
+
+    expect(line).not.toContain('NaN')
+    expect(accessLogStatus(line)).toBe('200')
+    expect(accessLogElapsed(line)).toMatch(DURATION_RE)
+  })
+
+  // The `onRequest` hook must discard its return value: `WeakMap.set` returns
+  // the WeakMap, and Elysia turns any non-undefined `onRequest` return into the
+  // response. Without this assertion a setter refactored to a concise arrow
+  // would make every response in the proxy `[object WeakMap]` with the suite
+  // still green — no other test reads a matched route's body through the real
+  // server. `tsc` does not catch it either.
+  test('a matched route returns its real body, not a leaked hook return', async () => {
+    const response = await createServer().handle(
+      new Request('http://localhost/health'),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ status: 'ok' })
+    await new Promise(resolve => setTimeout(resolve, 50))
+  })
+
+  test('formatElapsed renders - rather than NaNs when the start is missing', () => {
+    expect(formatElapsed(undefined)).toBe('-')
+    expect(formatElapsed(Number.NaN)).toBe('-')
+  })
+
+  test('formatElapsed still formats a real duration', () => {
+    expect(formatElapsed(Date.now())).toMatch(DURATION_RE)
+    expect(formatElapsed(Date.now() - 2_000)).toMatch(/^\ds$/)
   })
 })
 

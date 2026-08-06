@@ -3,7 +3,7 @@ import { node } from '@elysiajs/node'
 import { Elysia } from 'elysia'
 
 import { HTTPError } from './lib/error'
-import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, logRequest, setRequestModelMapping } from './lib/request-logger'
+import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
 import { isTimeoutLikeError } from './lib/timeout-error'
 import { createCompletionRoutes } from './routes/chat-completions/route'
 import { createEmbeddingRoutes } from './routes/embeddings/route'
@@ -111,8 +111,13 @@ export function createServer(options?: ServerOptions) {
   })
     .use(cors())
     .error({ HTTP: HTTPError })
+    // Block body, not a concise arrow: Elysia turns any non-undefined
+    // `onRequest` return into the response, and a WeakMap setter returns the
+    // WeakMap. `markRequestStart` is typed `: void` for the same reason.
+    .onRequest(({ request }) => {
+      markRequestStart(request)
+    })
     .derive(({ request }) => ({
-      requestStart: Date.now(),
       ...getOrCreateRequestCorrelation(request),
     }))
     .onBeforeHandle(({ body, request, responseRequestId, set }) => {
@@ -126,8 +131,8 @@ export function createServer(options?: ServerOptions) {
         setRequestModelMapping(request, { originalModel: model, steps: [] })
       }
     })
-    .onAfterResponse(({ callerRequestId, request, requestStart, requestId, set }) => {
-      const elapsed = formatElapsed(requestStart)
+    .onAfterResponse(({ callerRequestId, request, requestId, set }) => {
+      const elapsed = formatElapsed(getRequestStart(request))
       const status = typeof set.status === 'number' ? set.status : 200
       logRequest(request.method, request.url, status, elapsed, getRequestModelMapping(request), requestId, callerRequestId)
     })
