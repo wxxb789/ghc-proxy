@@ -1,7 +1,6 @@
 import type { StateSnapshot } from './helpers'
 import type { StrategyEntry } from '~/dispatch'
 import type { ExecutionResult } from '~/lib/execution-strategy'
-import type { RecoveryEvent } from '~/lib/request-logger'
 import type { IngestContext, PipelineConfig, TransformContext } from '~/pipeline/runner'
 
 import type { ChatCompletionsPayload, Model } from '~/types'
@@ -1047,13 +1046,13 @@ describe('runPipeline', () => {
     expect(listeners.size).toBe(0)
   })
 
-  test('fallback events retain production queue metrics for every decision', async () => {
+  test('fallback events render concise selection and result lines', async () => {
     const originalInfo = consola.info
-    const events: RecoveryEvent[] = []
-    consola.info = ((message: unknown, fields: unknown) => {
-      if (message === 'Upstream recovery')
-        events.push(fields as RecoveryEvent)
-    }) as typeof consola.info
+    const events: string[] = []
+    consola.info = ((message: unknown) => {
+      if (typeof message === 'string' && message.startsWith('Upstream '))
+        events.push(message)
+    }) as unknown as typeof consola.info
 
     const config_ = getCachedConfig() as Record<string, unknown>
     config_.overloadFallbacks = { source: 'target' }
@@ -1161,15 +1160,14 @@ describe('runPipeline', () => {
         else
           expect(thrown).toBe(sourceError)
 
-        const fallbackEvents = events.filter(event => event.event === 'fallback')
-        expect(fallbackEvents.map(event => event.decision)).toEqual(['selected', outcome])
+        const fallbackEvents = events.filter(event => event.includes('model=target'))
+        expect(fallbackEvents).toHaveLength(2)
+        expect(fallbackEvents[0]).toContain(' selected ')
+        expect(fallbackEvents[1]).toContain(` ${outcome} `)
         for (const event of fallbackEvents) {
-          expect(event).toMatchObject({
-            activeSlots: expect.any(Number),
-            maxSlots: 2,
-            pendingDepth: expect.any(Number),
-            maxPendingDepth: 1_000,
-          })
+          expect(event).not.toContain('\n')
+          expect(event).not.toContain('{')
+          expect(event).toContain('rid=')
         }
       }
     }

@@ -76,6 +76,6 @@ CLI values override the corresponding config fields for that process. Migrating 
 
 ## Diagnostics and Public Errors
 
-Recovery events use the existing request ID and the allowlisted fields in `src/lib/request-logger.ts`: `event`, `retryCount`, `status`, `connectionClass`, `effectiveModel`, `scope`, active/max slots, pending/max depth, queue wait, delay source/delay, elapsed/remaining budget, `nextRetryAt`, and `decision`. The model trace records a successful substitution as `OVERLOAD_FALLBACK`.
+Recovery events retain the existing request ID and allowlisted structured fields for tests and injected loggers. The default human console renders only compact one-line summaries, omits zero-wait grants and duplicate cooldown/retry detail, and labels upstream `429` as rate limited and `529` as overloaded. The model trace records a successful substitution as `OVERLOAD_FALLBACK`.
 
 Logs do not serialize prompts, payloads, tools, authorization data, tokens, or credential-derived account IDs. Public errors keep their Anthropic/OpenAI-compatible payload and safe standard `Retry-After`; the queue does not add retry-progress SSE events, custom recovery headers, or a metrics endpoint.

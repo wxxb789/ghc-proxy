@@ -154,10 +154,59 @@ const RECOVERY_EVENT_OPTIONAL_FIELDS = [
   'decision',
 ] as const
 
+function isRoutineRecoveryEvent(fields: RecoveryEvent): boolean {
+  return (
+    fields.event === 'cooldown'
+    || (fields.event === 'grant' && fields.queueWaitMs === 0)
+    || (
+      fields.event === 'retry'
+      && fields.status !== undefined
+      && (fields.decision === 'retry' || fields.decision === 'recovered')
+    )
+  )
+}
+
+function formatRecoveryEventLine(fields: RecoveryEvent): string {
+  const kind = fields.status === 429
+    ? 'rate limit'
+    : fields.status === 529
+      ? 'overload'
+      : 'recovery'
+  const includeQueueState = fields.event === 'admission' || fields.event === 'grant'
+  const details = [
+    `Upstream ${kind}`,
+    fields.decision ?? fields.event,
+    fields.status !== undefined ? `status=${fields.status}` : undefined,
+    fields.effectiveModel ? `model=${fields.effectiveModel}` : undefined,
+    fields.scope ? `scope=${fields.scope}` : undefined,
+    fields.retryCount !== undefined ? `retry=${fields.retryCount}` : undefined,
+    fields.connectionClass ? `connection=${fields.connectionClass}` : undefined,
+    fields.delayMs !== undefined ? `wait=${formatDurationMs(fields.delayMs)}` : undefined,
+    fields.delaySource ? `source=${fields.delaySource}` : undefined,
+    fields.queueWaitMs !== undefined && fields.queueWaitMs > 0
+      ? `queueWait=${formatDurationMs(fields.queueWaitMs)}`
+      : undefined,
+    includeQueueState && fields.activeSlots !== undefined && fields.maxSlots !== undefined
+      ? `slots=${fields.activeSlots}/${fields.maxSlots}`
+      : undefined,
+    includeQueueState && fields.pendingDepth !== undefined && fields.maxPendingDepth !== undefined
+      ? `queue=${fields.pendingDepth}/${fields.maxPendingDepth}`
+      : undefined,
+    fields.remainingBudgetMs !== undefined
+      ? `budget=${formatDurationMs(fields.remainingBudgetMs)}`
+      : undefined,
+    `rid=${fields.requestId.slice(0, 8)}`,
+  ]
+  return details.filter(value => value !== undefined).join(' ')
+}
+
 export function logRecoveryEvent(
   input: RecoveryEvent,
   logger: RecoveryEventLogger = consola,
 ): void {
+  if (logger === consola && isRoutineRecoveryEvent(input))
+    return
+
   const callerRequestId = sanitizeCallerRequestId(input.callerRequestId)
   const fields: RecoveryEvent = {
     requestId: input.requestId,
@@ -167,6 +216,10 @@ export function logRecoveryEvent(
   for (const key of RECOVERY_EVENT_OPTIONAL_FIELDS) {
     if (input[key] !== undefined)
       Object.assign(fields, { [key]: input[key] })
+  }
+  if (logger === consola) {
+    consola.info(formatRecoveryEventLine(fields))
+    return
   }
   logger.info('Upstream recovery', fields)
 }
