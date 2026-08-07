@@ -791,7 +791,7 @@ describe('Request correlation and recovery logging', () => {
     ]])
   })
 
-  test('default recovery logs are concise single lines without normal grants', () => {
+  test('default recovery logs are concise, safe, and keep terminal summaries', () => {
     const originalInfo = consola.info
     const calls: unknown[][] = []
     consola.info = ((...args: unknown[]) => {
@@ -805,6 +805,22 @@ describe('Request correlation and recovery logging', () => {
         effectiveModel: 'gpt-5.6-luna',
         queueWaitMs: 0,
         decision: 'granted',
+      })
+      logRecoveryEvent({
+        requestId: 'retry-id',
+        event: 'retry',
+        retryCount: 1,
+        status: 429,
+        effectiveModel: 'gpt-5.6-luna',
+        decision: 'retry',
+      })
+      logRecoveryEvent({
+        requestId: 'recovered-id',
+        event: 'retry',
+        retryCount: 1,
+        status: 200,
+        effectiveModel: 'gpt\nforged',
+        decision: 'recovered',
       })
       logRecoveryEvent({
         requestId: 'rate-limit-id',
@@ -821,9 +837,10 @@ describe('Request correlation and recovery logging', () => {
       consola.info = originalInfo
     }
 
-    expect(calls).toEqual([[
-      'Upstream rate limit retry-limit status=429 model=gpt-5.6-luna scope=account retry=1 budget=12s rid=rate-lim',
-    ]])
+    expect(calls).toEqual([
+      ['Upstream recovery recovered status=200 model=gpt\\nforged retry=1 rid=recovere'],
+      ['Upstream rate limit retry-limit status=429 model=gpt-5.6-luna scope=account retry=1 budget=12s rid=rate-lim'],
+    ])
   })
 })
 

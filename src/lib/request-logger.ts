@@ -161,7 +161,7 @@ function isRoutineRecoveryEvent(fields: RecoveryEvent): boolean {
     || (
       fields.event === 'retry'
       && fields.status !== undefined
-      && (fields.decision === 'retry' || fields.decision === 'recovered')
+      && fields.decision === 'retry'
     )
   )
 }
@@ -177,7 +177,7 @@ function formatRecoveryEventLine(fields: RecoveryEvent): string {
     `Upstream ${kind}`,
     fields.decision ?? fields.event,
     fields.status !== undefined ? `status=${fields.status}` : undefined,
-    fields.effectiveModel ? `model=${fields.effectiveModel}` : undefined,
+    fields.effectiveModel ? `model=${JSON.stringify(fields.effectiveModel).slice(1, -1)}` : undefined,
     fields.scope ? `scope=${fields.scope}` : undefined,
     fields.retryCount !== undefined ? `retry=${fields.retryCount}` : undefined,
     fields.connectionClass ? `connection=${fields.connectionClass}` : undefined,
