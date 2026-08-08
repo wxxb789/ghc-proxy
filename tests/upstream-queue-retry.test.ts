@@ -188,16 +188,19 @@ describe('UpstreamRequestQueue transient status retries', () => {
     queued.release()
   })
 
-  test('logs the actual status instead of a rate-limit message', async () => {
+  test.each([
+    [502, 'Upstream 502;'],
+    [429, 'Upstream rate limited (429);'],
+    [529, 'Upstream overloaded (529);'],
+  ] as const)('labels upstream %i as %s', async (status, prefix) => {
     const { queue, warnings } = createHarness()
-
     let calls = 0
     const queued = await queue.dispatch(
       () => {
         calls++
         return Promise.resolve(
           calls === 1
-            ? new Response('bad gateway', { status: 502 })
+            ? new Response('retryable', { status })
             : Response.json({ ok: true }),
         )
       },
@@ -205,7 +208,7 @@ describe('UpstreamRequestQueue transient status retries', () => {
     )
 
     expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toStartWith('Upstream 502;')
+    expect(warnings[0]).toStartWith(prefix)
     queued.release()
   })
 })

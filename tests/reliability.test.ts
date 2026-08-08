@@ -1,6 +1,7 @@
 import type { ServerSentEventMessage } from 'fetch-event-stream'
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import consola from 'consola'
 
 import { CopilotClient } from '~/clients'
 import { HTTPError } from '~/lib/error'
@@ -788,6 +789,58 @@ describe('Request correlation and recovery logging', () => {
         decision: 'retry',
       },
     ]])
+  })
+
+  test('default recovery logs are concise, safe, and keep terminal summaries', () => {
+    const originalInfo = consola.info
+    const calls: unknown[][] = []
+    consola.info = ((...args: unknown[]) => {
+      calls.push(args)
+    }) as unknown as typeof consola.info
+
+    try {
+      logRecoveryEvent({
+        requestId: 'normal-grant-id',
+        event: 'grant',
+        effectiveModel: 'gpt-5.6-luna',
+        queueWaitMs: 0,
+        decision: 'granted',
+      })
+      logRecoveryEvent({
+        requestId: 'retry-id',
+        event: 'retry',
+        retryCount: 1,
+        status: 429,
+        effectiveModel: 'gpt-5.6-luna',
+        decision: 'retry',
+      })
+      logRecoveryEvent({
+        requestId: 'recovered-id',
+        event: 'retry',
+        retryCount: 1,
+        status: 200,
+        effectiveModel: 'gpt\nforged',
+        decision: 'recovered',
+      })
+      logRecoveryEvent({
+        requestId: 'rate-limit-id',
+        event: 'budget',
+        retryCount: 1,
+        status: 429,
+        effectiveModel: 'gpt-5.6-luna',
+        scope: 'account',
+        remainingBudgetMs: 12_000,
+        decision: 'retry-limit',
+      })
+    }
+    finally {
+      consola.info = originalInfo
+    }
+
+    expect(calls).toEqual([
+      ['Upstream recovery recovered status=200 model=gpt\\nforged retry=1 rid=recovere'],
+      ['Upstream rate limit retry-limit status=429 model=gpt-5.6-luna scope=account retry=1 budget=12s rid=rate-lim'],
+    ])
   })
 })
 

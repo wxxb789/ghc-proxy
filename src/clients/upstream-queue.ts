@@ -419,9 +419,14 @@ export class UpstreamRequestQueue {
         discardResponse(response)
         lease.release()
         recovery.retryCount++
+        const statusLabel = status === 429
+          ? 'rate limited (429)'
+          : status === 529
+            ? 'overloaded (529)'
+            : String(status)
         this.logger.warn(
           [
-            `Upstream ${status};`,
+            `Upstream ${statusLabel};`,
             `retrying ${formatRequestContext(context)}`,
             `in ${formatDurationMs(retryDelay.delayMs)}`,
             `(attempt ${recovery.retryCount}/${recovery.retryLimit})`,
@@ -893,7 +898,7 @@ export class UpstreamRequestQueue {
     }
     if (!this.logger.info)
       return
-    logRecoveryEvent({
+    const eventFields: RecoveryEvent = {
       requestId: recovery.requestId,
       callerRequestId: recovery.callerRequestId,
       event,
@@ -906,7 +911,11 @@ export class UpstreamRequestQueue {
           }
         : {}),
       ...fields,
-    }, { info: this.logger.info.bind(this.logger) })
+    }
+    if (this.logger === consola)
+      logRecoveryEvent(eventFields)
+    else
+      logRecoveryEvent(eventFields, { info: this.logger.info.bind(this.logger) })
   }
 
   private emitTerminal(
