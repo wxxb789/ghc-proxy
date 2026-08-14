@@ -26,6 +26,8 @@ Investigation notes and findings from upstream API behavior analysis.
 | [claude-5 Tool Schemas](research/claude-5-tool-schemas.md) | Whether opus-5/sonnet-5 tool gating follows the type tag or the tool name, per schema |
 | [Responses Web Search](research/responses-web-search.md) | Whether `/responses` supports built-in web search, and whether it actually searches |
 | [grok-4.5 Request Schema](research/grok-4.5-schema.md) | Accepted and rejected `/responses` fields for the one xAI model |
+| [xAI API vs GHC Upstream](research/xai-api-capability-matrix-2026-08-14.md) | Native xAI API baseline and live `grok-4.5` capability matrix on Copilot upstream |
+| [Gemini Web Search and API Schemas](research/gemini-web-search-and-api-schema-2026-08-14.md) | Whether GHC Gemini models expose built-in search or Google-native, Responses, and Anthropic schemas |
 | [Competitive Analysis: LiteLLM](research/competitive-analysis-litellm.md) | LiteLLM proxy comparison and feature gap analysis |
 | [Environment Variables](research/environment-variables.md) | Environment variable reference and configuration |
 
