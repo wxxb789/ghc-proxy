@@ -1,6 +1,24 @@
 import { authStore } from '~/state'
+import { errorCauseChainSome } from './timeout-error'
 
 const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 minutes
+
+const CLIENT_ABORT_MARKER = 'ghcProxyClientAbort'
+
+class ClientAbortError extends DOMException {
+  readonly [CLIENT_ABORT_MARKER] = true
+
+  constructor() {
+    super('The client aborted the request.', 'AbortError')
+  }
+}
+
+export function isClientAbortError(error: unknown): boolean {
+  return errorCauseChainSome(
+    error,
+    candidate => (candidate as Record<string, unknown>)[CLIENT_ABORT_MARKER] === true,
+  )
+}
 
 export function createUpstreamDeadlineFromConfig(
   now = performance.now(),
@@ -26,7 +44,7 @@ export function createUpstreamSignal(
 
   const onAbort = () => {
     onClientAbort?.()
-    controller.abort()
+    controller.abort(new ClientAbortError())
   }
   if (clientSignal && !clientSignal.aborted) {
     clientSignal.addEventListener('abort', onAbort)

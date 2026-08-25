@@ -17,7 +17,7 @@ import {
   hasStreamingFlag,
   hasStreamingResponsesQuery,
 } from '~/lib/request-timeout'
-import { createUpstreamSignal } from '~/lib/upstream-signal'
+import { createUpstreamSignal, isClientAbortError } from '~/lib/upstream-signal'
 
 describe('parseRetryAfterMs', () => {
   test('parses delta seconds', () => {
@@ -526,6 +526,7 @@ describe('createUpstreamSignal', () => {
     // Give the event listener time to fire
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(signal.aborted).toBe(true)
+    expect(isClientAbortError(signal.reason)).toBe(true)
     expect(onClientAbort).toHaveBeenCalledTimes(1)
 
     cleanup()

@@ -5,6 +5,7 @@ import { Elysia } from 'elysia'
 import { HTTPError } from './lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
 import { isTimeoutLikeError } from './lib/timeout-error'
+import { isClientAbortError } from './lib/upstream-signal'
 import { classifyObservedEndpoint, sanitizeObservedError } from './observability/request-store'
 import { createCompletionRoutes } from './routes/chat-completions/route'
 import { createDashboardRoutes } from './routes/dashboard/route'
@@ -209,10 +210,12 @@ export function createServer(options?: ServerOptions) {
       const response = handleRouteError({ code, error, set })
       const status = response?.status
         ?? (error instanceof HTTPError ? error.status : 500)
-      runtimeStore.requests.recordError(
-        getOrCreateRequestCorrelation(request).requestId,
-        sanitizeObservedError(error, code, status),
-      )
+      if (!isClientAbortError(error)) {
+        runtimeStore.requests.recordError(
+          getOrCreateRequestCorrelation(request).requestId,
+          sanitizeObservedError(error, code, status),
+        )
+      }
       return response
     })
     .get('/', () => 'Server running')

@@ -193,6 +193,32 @@ describe('RequestActivityStore', () => {
     })
   })
 
+  test('keeps client cancellation authoritative over its synthetic HTTP status', () => {
+    const store = new RequestActivityStore(() => 1_000)
+    store.start({
+      requestId: 'req-pre-response-abort',
+      method: 'POST',
+      endpoint: '/v1/responses',
+    })
+
+    store.markAborted('req-pre-response-abort')
+    store.complete('req-pre-response-abort', 504)
+
+    expect(store.snapshot()).toMatchObject({
+      recent: [{
+        requestId: 'req-pre-response-abort',
+        state: 'aborted',
+        status: 504,
+      }],
+      totals: {
+        started: 1,
+        completed: 0,
+        failed: 0,
+        aborted: 1,
+      },
+    })
+  })
+
   test('reclassifies a just-completed delivery when client abort arrives late', () => {
     const store = new RequestActivityStore(() => 1_000)
     store.start({

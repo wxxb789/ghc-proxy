@@ -72,8 +72,10 @@ Observability is emitted where behavior is actually selected or applied:
 - Transform functions return small change indicators (boolean, count, or
   removed keys). Callers increment stable effect IDs only when the real
   transform changed the request.
-- `runStrategy()` reports stream failures before protocol translation consumes
-  them and marks client-originated cancellation as `aborted`.
+- The shared upstream signal reports client-originated cancellation as
+  `aborted` for pipeline execution and upstream-backed handlers that bypass the
+  pipeline. `runStrategy()` still reports non-client stream failures before
+  protocol translation consumes them.
 - The Responses terminal parser marks `response.failed` as a failed lifecycle
   even when the HTTP status is 200.
 - Both the public Responses path and Messages-via-Responses mark a clean stream

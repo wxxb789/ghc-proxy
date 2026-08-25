@@ -304,8 +304,8 @@ export class RequestActivityStore {
 
     this.active.delete(requestId)
     this.effectBuffers.delete(requestId)
-    const failed = status >= 400 || request.errorSummary !== undefined
-    const aborted = !failed && request.state === 'aborted'
+    const aborted = request.state === 'aborted' && request.errorSummary === undefined
+    const failed = !aborted && (status >= 400 || request.errorSummary !== undefined)
     const completedRequest = projectRequest(
       request,
       Math.max(0, this.now() - request.startedAtMs),
