@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { CopilotClient } from '~/clients'
 import { getCachedConfig } from '~/lib/config'
 import { createServer } from '~/server'
-import { authStore, modelCache } from '~/state'
+import { authStore, modelCache, runtimeStore } from '~/state'
 import { VERSION } from '~/util/version'
 import {
   buildModel,
@@ -38,12 +38,14 @@ const originalConfig = structuredClone(getCachedConfig())
 
 beforeEach(() => {
   setupDefaultTestState()
+  runtimeStore.requests.reset()
 })
 
 afterEach(() => {
   CopilotClient.prototype.createChatCompletions = originalCreateChatCompletions
   CopilotClient.prototype.createEmbeddings = originalCreateEmbeddings
   CopilotClient.prototype.createResponses = originalCreateResponses
+  runtimeStore.requests.reset()
   restoreStateSnapshot(originalState)
 
   const config = getCachedConfig()

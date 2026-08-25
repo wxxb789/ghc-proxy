@@ -274,9 +274,10 @@ async function sendProbe(
 
 export function classifyResult(probe: ProbeCase, httpStatus: number, payload: unknown): ProbeResult {
   const is2xx = httpStatus >= 200 && httpStatus < 300
+  const error = is2xx ? '' : extractErrorMessage(payload)
   const note = is2xx
     ? summarizeSuccess(payload)
-    : `${httpStatus} ${extractErrorMessage(payload)}`
+    : `${httpStatus} ${error}`
 
   if (probe.expect === 'pass') {
     return {
@@ -290,7 +291,6 @@ export function classifyResult(probe: ProbeCase, httpStatus: number, payload: un
   }
 
   // expect === 'reject'
-  const error = extractErrorMessage(payload)
   const matchesStatus = probe.rejection?.statuses.includes(httpStatus)
     ?? (httpStatus >= 400 && httpStatus < 500)
   const matchesMessage = probe.rejection?.messageIncludes === undefined

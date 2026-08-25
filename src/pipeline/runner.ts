@@ -124,6 +124,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
         && validateFallback(config.protocol, pristinePayload, sourceModel).ok,
     },
   )
+  sourceAttempt.commitObservability()
 
   try {
     const result = await sourceAttempt.execute()
@@ -195,9 +196,11 @@ export async function runPipeline<TPayload, TStrategyCtx>(
 
     error.recovery.retryLimit = error.recovery.retryCount
     emitFallbackEvent(error.recovery, candidate.target.id, 'selected', 529)
+    error.recovery.onFallbackFetchStart = fallbackAttempt.commitObservability
 
     try {
       const result = await fallbackAttempt.execute()
+      fallbackAttempt.commitObservability()
       emitFallbackEvent(error.recovery, candidate.target.id, 'succeeded')
       return {
         result: discloseActualModel(result, candidate.target.id),
@@ -205,6 +208,10 @@ export async function runPipeline<TPayload, TStrategyCtx>(
       }
     }
     catch (fallbackError) {
+      if (error.recovery.fallbackFetchStarted)
+        fallbackAttempt.commitObservability()
+      else
+        fallbackAttempt.discardObservability()
       if (params.signal.aborted)
         throw params.signal.reason
       if (fallbackError instanceof FallbackCooldownError) {
@@ -224,12 +231,17 @@ export async function runPipeline<TPayload, TStrategyCtx>(
       )
       throw fallbackError
     }
+    finally {
+      delete error.recovery.onFallbackFetchStart
+    }
   }
 }
 
 interface PreparedAttempt {
   baseModel: string
   modelMapping: ModelMappingInfo
+  commitObservability: () => void
+  discardObservability: () => void
   execute: () => Promise<ExecutionResult>
 }
 
@@ -257,19 +269,31 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
   const baseModel = resolved.model
   const selectedModel = options.target ?? resolved.resolvedModel
   const modelMapping = options.modelMapping ?? resolved.modelMapping
-  runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
+  const deferObservability = options.fallbackAttempt === true
+  if (deferObservability)
+    runtimeStore.requests.beginEffectBuffer(params.requestId)
+  else
+    runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
   const recordedModelStepCount = modelMapping.steps.length
 
-  if (options.target)
-    (payload as { model: string }).model = options.target.id
+  try {
+    if (options.target)
+      (payload as { model: string }).model = options.target.id
 
-  if (config.afterTransform)
-    await config.afterTransform({ payload, meta, headers: params.headers, selectedModel })
+    if (config.afterTransform)
+      await config.afterTransform({ payload, meta, headers: params.headers, selectedModel })
+  }
+  catch (error) {
+    if (deferObservability)
+      runtimeStore.requests.discardEffectBuffer(params.requestId)
+    throw error
+  }
 
   params.signal.throwIfAborted()
   const upstreamSignal = createUpstreamSignalFromConfig(
     params.signal,
     upstreamDeadlineMonotonicMs,
+    () => runtimeStore.requests.markAborted(params.requestId),
   )
   const copilotClient = createCopilotClient(recovery, {
     offerLocalModelCooldown: options.offerLocalModelCooldown,
@@ -287,13 +311,35 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
       recovery,
     })
     const entry = config.strategyRegistry.select(selectedModel, ctx)
-    runtimeStore.requests.recordStrategy(params.requestId, entry.name)
     const strategyEffect = effectForStrategy(config.protocol, entry.name)
-    if (strategyEffect)
-      runtimeStore.requests.recordEffect(params.requestId, strategyEffect)
+    let observabilityCommitted = !deferObservability
+    let observabilityDiscarded = false
+    if (!deferObservability) {
+      runtimeStore.requests.recordStrategy(params.requestId, entry.name)
+      if (strategyEffect)
+        runtimeStore.requests.recordEffect(params.requestId, strategyEffect)
+    }
+    const commitObservability = () => {
+      if (observabilityCommitted || observabilityDiscarded)
+        return
+      observabilityCommitted = true
+      runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
+      runtimeStore.requests.recordStrategy(params.requestId, entry.name)
+      if (strategyEffect)
+        runtimeStore.requests.recordEffect(params.requestId, strategyEffect)
+      runtimeStore.requests.commitEffectBuffer(params.requestId)
+    }
+    const discardObservability = () => {
+      if (observabilityCommitted || observabilityDiscarded)
+        return
+      observabilityDiscarded = true
+      runtimeStore.requests.discardEffectBuffer(params.requestId)
+    }
     return {
       baseModel,
       modelMapping,
+      commitObservability,
+      discardObservability,
       execute: async () => {
         try {
           params.signal.throwIfAborted()
@@ -304,14 +350,20 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
           throw error
         }
         finally {
-          if (modelMapping.steps.length !== recordedModelStepCount)
+          if (
+            observabilityCommitted
+            && modelMapping.steps.length !== recordedModelStepCount
+          ) {
             runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
+          }
         }
       },
     }
   }
   catch (error) {
     upstreamSignal.cleanup()
+    if (deferObservability)
+      runtimeStore.requests.discardEffectBuffer(params.requestId)
     throw error
   }
 }

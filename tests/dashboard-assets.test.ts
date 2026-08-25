@@ -1,7 +1,7 @@
 import { createContext, Script } from 'node:vm'
 import { describe, expect, test } from 'bun:test'
 
-import { DASHBOARD_JS } from '~/routes/dashboard/assets'
+import { DASHBOARD_HTML, DASHBOARD_JS } from '~/routes/dashboard/assets'
 
 class FakeElement {
   children: FakeElement[] = []
@@ -27,6 +27,7 @@ interface DashboardRuntime {
   dashboardState: {
     selectedRequestId: string | null
   }
+  renderOverview: (data: unknown) => void
   renderRequests: (data: { active: RequestFixture[], recent: RequestFixture[] }) => void
   settleLoads: (loads: Array<{ scope: string, load: () => Promise<void> }>) => Promise<void>
 }
@@ -63,7 +64,7 @@ function createRuntime() {
     window: { matchMedia: () => ({ matches: false }) },
   })
 
-  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, renderRequests, settleLoads };`).runInContext(context)
+  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, renderOverview, renderRequests, settleLoads };`).runInContext(context)
 
   return {
     elements,
@@ -90,6 +91,31 @@ describe('dashboard embedded state', () => {
     expect(runtime.dashboardState.selectedRequestId).toBe('active')
     expect(elements.get('requests-body')?.children[0]?.className).toBe('selected')
     expect(elements.get('request-detail')?.textContent).toContain('"requestId": "active"')
+    expect(elements.get('request-count')?.textContent).toBe('1 active / 1 finished')
+  })
+
+  test('renders the explicit aborted lifecycle total', () => {
+    const { elements, runtime } = createRuntime()
+
+    runtime.renderOverview({
+      status: 'ok',
+      version: 'test',
+      uptimeMs: 1_000,
+      startedAt: 1_777_000_000_000,
+      activity: {
+        activeRequests: 0,
+        recentRequests: 1,
+        completed: 0,
+        failed: 0,
+        aborted: 1,
+        upstreamQueue: {},
+      },
+      auth: { github: {}, copilot: {} },
+      quota: { status: 'unavailable' },
+    })
+
+    expect(DASHBOARD_HTML).toContain('id="metric-aborted"')
+    expect(elements.get('metric-aborted')?.textContent).toBe('1')
   })
 
   test('clears request selection when no requests remain', () => {

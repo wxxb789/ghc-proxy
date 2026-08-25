@@ -99,7 +99,6 @@ const openAIChatPayloadSchema = z.object({
   messages: z.array(openAIMessageSchema).min(1),
   temperature: finiteNumberSchema.min(0).max(2).nullable().optional(),
   top_p: finiteNumberSchema.min(0).max(1).nullable().optional(),
-  top_k: z.unknown().optional(),
   max_tokens: nonNegativeIntegerSchema.nullable().optional(),
   stop: z.union([z.string(), z.array(z.string())]).nullable().optional(),
   n: z.number().int().positive().nullable().optional(),

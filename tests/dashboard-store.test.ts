@@ -127,6 +127,154 @@ describe('RequestActivityStore', () => {
       errorSummary: 'Upstream HTTP 429 (rate_limit_error)',
     })
   })
+
+  test('buffers attempt effects until commit and drops discarded attempts', () => {
+    const store = new RequestActivityStore(() => 1_000)
+    store.start({ requestId: 'commit', method: 'POST', endpoint: '/v1/responses' })
+    store.beginEffectBuffer('commit')
+    store.recordEffect('commit', 'responses.parameter_filter', 2)
+
+    expect(store.snapshot().active[0]?.effects).toEqual([])
+    expect(store.summary().effectCounts).toEqual({})
+
+    store.commitEffectBuffer('commit')
+    expect(store.snapshot().active[0]?.effects).toEqual([
+      { id: 'responses.parameter_filter', count: 2 },
+    ])
+    expect(store.summary().effectCounts).toEqual({
+      'responses.parameter_filter': 2,
+    })
+
+    store.start({ requestId: 'discard', method: 'POST', endpoint: '/v1/responses' })
+    store.beginEffectBuffer('discard')
+    store.recordEffect('discard', 'responses.input_compacted')
+    store.discardEffectBuffer('discard')
+
+    expect(store.snapshot().active.find(request => request.requestId === 'discard')?.effects).toEqual([])
+    expect(store.summary().effectCounts).toEqual({
+      'responses.parameter_filter': 2,
+    })
+  })
+
+  test('records client-aborted delivery separately from completed and failed requests', () => {
+    let now = 1_000
+    const store = new RequestActivityStore(() => now)
+    store.start({
+      requestId: 'req-aborted',
+      method: 'POST',
+      endpoint: '/v1/responses',
+    })
+    store.markStreaming('req-aborted')
+
+    now = 1_025
+    store.markAborted('req-aborted')
+    store.complete('req-aborted', 200)
+
+    expect(store.snapshot()).toMatchObject({
+      active: [],
+      recent: [{
+        requestId: 'req-aborted',
+        state: 'aborted',
+        status: 200,
+        durationMs: 25,
+      }],
+      totals: {
+        started: 1,
+        completed: 0,
+        failed: 0,
+        aborted: 1,
+      },
+    })
+    expect(store.summary().totals).toEqual({
+      started: 1,
+      completed: 0,
+      failed: 0,
+      aborted: 1,
+    })
+  })
+
+  test('reclassifies a just-completed delivery when client abort arrives late', () => {
+    const store = new RequestActivityStore(() => 1_000)
+    store.start({
+      requestId: 'req-late-abort',
+      method: 'POST',
+      endpoint: '/v1/responses',
+    })
+    store.markStreaming('req-late-abort')
+    store.complete('req-late-abort', 200)
+
+    store.markAborted('req-late-abort')
+    store.markAborted('req-late-abort')
+
+    expect(store.snapshot()).toMatchObject({
+      recent: [{ requestId: 'req-late-abort', state: 'aborted' }],
+      totals: {
+        started: 1,
+        completed: 0,
+        failed: 0,
+        aborted: 1,
+      },
+    })
+  })
+
+  test('does not overwrite an upstream failure with a later client abort', () => {
+    const store = new RequestActivityStore(() => 1_000)
+    store.start({
+      requestId: 'req-failed-before-abort',
+      method: 'POST',
+      endpoint: '/v1/responses',
+    })
+    store.recordError('req-failed-before-abort', 'Upstream HTTP 500 (upstream_error)')
+    store.complete('req-failed-before-abort', 200)
+
+    store.markAborted('req-failed-before-abort')
+
+    expect(store.snapshot()).toMatchObject({
+      recent: [{ requestId: 'req-failed-before-abort', state: 'failed' }],
+      totals: {
+        started: 1,
+        completed: 1,
+        failed: 1,
+        aborted: 0,
+      },
+    })
+  })
+
+  test.each([
+    'error-before-abort',
+    'abort-before-error',
+  ])('keeps an active upstream failure authoritative for %s ordering', (ordering) => {
+    const store = new RequestActivityStore(() => 1_000)
+    store.start({
+      requestId: ordering,
+      method: 'POST',
+      endpoint: '/v1/responses',
+    })
+
+    if (ordering === 'error-before-abort') {
+      store.recordError(ordering, 'Upstream HTTP 500 (upstream_error)')
+      store.markAborted(ordering)
+    }
+    else {
+      store.markAborted(ordering)
+      store.recordError(ordering, 'Upstream HTTP 500 (upstream_error)')
+    }
+    store.complete(ordering, 200)
+
+    expect(store.snapshot()).toMatchObject({
+      recent: [{
+        requestId: ordering,
+        state: 'failed',
+        errorSummary: 'Upstream HTTP 500 (upstream_error)',
+      }],
+      totals: {
+        started: 1,
+        completed: 1,
+        failed: 1,
+        aborted: 0,
+      },
+    })
+  })
 })
 
 describe('dashboard metadata sanitizers', () => {
@@ -155,6 +303,10 @@ describe('dashboard metadata sanitizers', () => {
       .toBe('HTTP 429 (rate_limit_error)')
     expect(sanitizeObservedError({ body: { error: { type: 'invalid_request_error', code: 'unsupported_input' } } }, 'HTTP', 400))
       .toBe('HTTP 400 (unsupported_input)')
+    expect(sanitizeObservedError({ body: { error: { type: 'translation_error', code: 'unsupported_server_tool' } } }, 'HTTP', 400))
+      .toBe('HTTP 400 (translation_error)')
+    expect(sanitizeObservedError({ body: { error: { type: 'invalid_request_error', code: null } } }, 'HTTP', 400))
+      .toBe('HTTP 400 (invalid_request_error)')
     expect(sanitizeObservedError({ body: { error: { type: 'secret_token_123' } } }, 'HTTP', 400))
       .toBe('HTTP 400')
     expect(sanitizeObservedError({ body: { error: { type: 'not_found_error' } } }, 'HTTP', 404))

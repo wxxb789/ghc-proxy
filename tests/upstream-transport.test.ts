@@ -513,7 +513,12 @@ describe('createUpstreamSignal', () => {
 
   test('signal aborts when linked clientSignal aborts', async () => {
     const clientController = new AbortController()
-    const { signal, cleanup } = createUpstreamSignal(clientController.signal, 10_000)
+    const onClientAbort = mock()
+    const { signal, cleanup } = createUpstreamSignal(
+      clientController.signal,
+      10_000,
+      onClientAbort,
+    )
 
     expect(signal.aborted).toBe(false)
     clientController.abort()
@@ -521,18 +526,25 @@ describe('createUpstreamSignal', () => {
     // Give the event listener time to fire
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(signal.aborted).toBe(true)
+    expect(onClientAbort).toHaveBeenCalledTimes(1)
 
     cleanup()
   })
 
   test('does NOT abort when clientSignal is already aborted', () => {
     const clientController = new AbortController()
+    const onClientAbort = mock()
     clientController.abort()
 
-    const { signal, cleanup } = createUpstreamSignal(clientController.signal, 10_000)
+    const { signal, cleanup } = createUpstreamSignal(
+      clientController.signal,
+      10_000,
+      onClientAbort,
+    )
 
     // The key fix: signal should NOT inherit pre-aborted state
     expect(signal.aborted).toBe(false)
+    expect(onClientAbort).not.toHaveBeenCalled()
 
     cleanup()
   })

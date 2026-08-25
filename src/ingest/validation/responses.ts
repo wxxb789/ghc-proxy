@@ -315,7 +315,6 @@ function createResponsesPayloadSchema(options: {
     tool_choice: responsesToolChoiceSchema.nullable().optional(),
     temperature: finiteNumberSchema.min(0).max(2).nullable().optional(),
     top_p: finiteNumberSchema.min(0).max(1).nullable().optional(),
-    top_k: z.unknown().optional(),
     max_output_tokens: nonNegativeIntegerSchema.nullable().optional(),
     max_tool_calls: nonNegativeIntegerSchema.nullable().optional(),
     metadata: z.record(z.string(), z.string()).nullable().optional(),

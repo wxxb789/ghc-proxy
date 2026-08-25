@@ -18,7 +18,7 @@ import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
 import { runStrategy } from '~/lib/execution-strategy'
 import { runPipeline } from '~/pipeline/runner'
-import { authStore, modelCache } from '~/state'
+import { authStore, modelCache, runtimeStore } from '~/state'
 
 import {
   buildModel,
@@ -511,6 +511,49 @@ describe('runPipeline', () => {
     expect(executedPayloads[0]!.messages[0]?.content).toBe('mutated')
   })
 
+  test('keeps source mapping visible when source transform preflight rejects', async () => {
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.modelRewrites = [{ from: 'requested', to: 'source' }]
+    modelCache.cacheModels(buildModelsResponse(buildModel('source')))
+    runtimeStore.requests.reset()
+    runtimeStore.requests.start({
+      requestId: 'internal-request-id',
+      method: 'POST',
+      endpoint: '/v1/chat/completions',
+      requestedModel: 'requested',
+    })
+    const preflightError = new Error('source transform rejected')
+
+    try {
+      await expect(runPipeline(
+        makeParams({ model: 'requested', messages: [{ role: 'user', content: 'hi' }] }),
+        makeConfig({
+          afterTransform: async () => {
+            throw preflightError
+          },
+        }),
+      )).rejects.toBe(preflightError)
+
+      expect(runtimeStore.requests.snapshot()).toMatchObject({
+        active: [{
+          requestedModel: 'requested',
+          effectiveModel: 'source',
+          modelTransforms: [{
+            tag: 'CONFIG_REWRITE',
+            from: 'requested',
+            to: 'source',
+          }],
+          effects: [{ id: 'model.config_rewrite', count: 1 }],
+        }],
+        effectCounts: { 'model.config_rewrite': 1 },
+      })
+      expect(runtimeStore.requests.snapshot().active[0]?.selectedStrategy).toBeUndefined()
+    }
+    finally {
+      runtimeStore.requests.reset()
+    }
+  })
+
   test('model mapping shows original model when no transforms apply', async () => {
     const params = makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'hi' }] })
     const config = makeConfig()
@@ -977,6 +1020,213 @@ describe('runPipeline', () => {
     )).rejects.toBe(sourceError)
     expect(attempts).toBe(2)
     expect(sourceError.recovery.fallbackFetchStarted).toBeFalse()
+  })
+
+  test('keeps source observability when fallback execution fails before target fetch', async () => {
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.overloadFallbacks = { source: 'target' }
+    modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
+    runtimeStore.requests.reset()
+    runtimeStore.requests.start({
+      requestId: 'internal-request-id',
+      method: 'POST',
+      endpoint: '/v1/chat/completions',
+      requestedModel: 'source',
+    })
+    const sourceError = new TerminalUpstreamRecoveryError(
+      new HTTPError(529, {
+        error: { message: 'source overloaded', type: 'overloaded_error' },
+      }),
+      { requestId: 'internal-request-id', retryCount: 1, sourceModel: 'source' },
+    )
+    const registry = new StrategyRegistry<{
+      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+    }>()
+    registry.register({
+      name: 'source-strategy',
+      canHandle: model => model?.id === 'source',
+      execute: async () => {
+        throw sourceError
+      },
+    })
+    registry.register({
+      name: 'target-strategy',
+      canHandle: () => true,
+      execute: async () => {
+        throw new HTTPError(400, {
+          error: { message: 'target translation rejected', type: 'translation_error' },
+        })
+      },
+    })
+
+    try {
+      await expect(runPipeline<SimplePayload, {
+        recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+      }>(
+        makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
+        {
+          protocol: 'openai-chat',
+          strategyRegistry: registry,
+          afterTransform({ selectedModel }) {
+            if (selectedModel?.id === 'target') {
+              runtimeStore.requests.recordEffect(
+                'internal-request-id',
+                'chat.max_tokens_defaulted',
+              )
+            }
+          },
+          buildStrategyContext: ({ recovery }) => ({ recovery }),
+        },
+      )).rejects.toBe(sourceError)
+
+      expect(runtimeStore.requests.snapshot()).toMatchObject({
+        active: [{
+          requestedModel: 'source',
+          effectiveModel: 'source',
+          selectedStrategy: 'source-strategy',
+          modelTransforms: [],
+          effects: [],
+        }],
+        effectCounts: {},
+      })
+    }
+    finally {
+      runtimeStore.requests.reset()
+    }
+  })
+
+  test('commits fallback observability once the target fetch starts', async () => {
+    const config_ = getCachedConfig() as Record<string, unknown>
+    config_.overloadFallbacks = { source: 'target' }
+    modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
+    runtimeStore.requests.reset()
+    runtimeStore.requests.start({
+      requestId: 'internal-request-id',
+      method: 'POST',
+      endpoint: '/v1/chat/completions',
+      requestedModel: 'source',
+    })
+    const targetError = new Error('target fetch failed')
+    let signalFetchStarted: () => void = () => {}
+    const fetchStarted = new Promise<void>((resolve) => {
+      signalFetchStarted = resolve
+    })
+    let releaseFetch: () => void = () => {}
+    const fetchRelease = new Promise<void>((resolve) => {
+      releaseFetch = resolve
+    })
+    const queue = new UpstreamRequestQueue({ concurrency: 1, maxRetries: 0 })
+    interface Context {
+      model: string
+      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+      upstreamSignal: Parameters<typeof runStrategy>[1]
+    }
+    const registry = new StrategyRegistry<Context>()
+    registry.register({
+      name: 'source-strategy',
+      canHandle: model => model?.id === 'source',
+      execute: async ({ recovery }) => {
+        recovery.sourceModel = 'source'
+        throw new TerminalUpstreamRecoveryError(
+          new HTTPError(529, {
+            error: { message: 'source overloaded', type: 'overloaded_error' },
+          }),
+          recovery,
+        )
+      },
+    })
+    registry.register({
+      name: 'target-strategy',
+      canHandle: () => true,
+      execute: async ({ recovery, upstreamSignal }) => {
+        await queue.dispatch(
+          async () => {
+            signalFetchStarted()
+            await fetchRelease
+            throw targetError
+          },
+          {
+            url: 'https://example.invalid/chat/completions',
+            effectiveModel: 'target',
+            fallbackAttempt: true,
+            recovery,
+          },
+          upstreamSignal.signal,
+        )
+        throw new Error('unreachable')
+      },
+    })
+
+    try {
+      const pending = runPipeline<SimplePayload, Context>(
+        makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
+        {
+          protocol: 'openai-chat',
+          strategyRegistry: registry,
+          afterTransform({ selectedModel }) {
+            if (selectedModel?.id === 'target') {
+              runtimeStore.requests.recordEffect(
+                'internal-request-id',
+                'chat.max_tokens_defaulted',
+              )
+            }
+          },
+          buildStrategyContext: ({ payload, recovery, upstreamSignal }) => ({
+            model: payload.model,
+            recovery,
+            upstreamSignal,
+          }),
+        },
+      )
+
+      await fetchStarted
+      const activeSnapshot = runtimeStore.requests.snapshot()
+      releaseFetch()
+      await expect(pending).rejects.toBe(targetError)
+
+      expect(activeSnapshot).toMatchObject({
+        active: [{
+          effectiveModel: 'target',
+          selectedStrategy: 'target-strategy',
+          modelTransforms: [{
+            tag: 'OVERLOAD_FALLBACK',
+            from: 'source',
+            to: 'target',
+          }],
+          effects: [
+            { id: 'chat.max_tokens_defaulted', count: 1 },
+            { id: 'model.overload_fallback', count: 1 },
+          ],
+        }],
+        effectCounts: {
+          'chat.max_tokens_defaulted': 1,
+          'model.overload_fallback': 1,
+        },
+      })
+
+      expect(runtimeStore.requests.snapshot()).toMatchObject({
+        active: [{
+          effectiveModel: 'target',
+          selectedStrategy: 'target-strategy',
+          modelTransforms: [{
+            tag: 'OVERLOAD_FALLBACK',
+            from: 'source',
+            to: 'target',
+          }],
+          effects: [
+            { id: 'chat.max_tokens_defaulted', count: 1 },
+            { id: 'model.overload_fallback', count: 1 },
+          ],
+        }],
+        effectCounts: {
+          'chat.max_tokens_defaulted': 1,
+          'model.overload_fallback': 1,
+        },
+      })
+    }
+    finally {
+      runtimeStore.requests.reset()
+    }
   })
 
   test('cleans the fallback upstream signal when target preflight rejects', async () => {

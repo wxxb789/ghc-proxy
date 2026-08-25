@@ -69,6 +69,7 @@ export interface UpstreamRecoveryRecord {
   cooldown?: RecoveryCooldownState
   publicError?: RecoveryPublicError
   fallbackFetchStarted?: boolean
+  onFallbackFetchStart?: () => void
   queueMetrics?: RecoveryQueueMetrics
 }
 
@@ -345,8 +346,10 @@ export class UpstreamRequestQueue {
 
       try {
         this.throwIfRecoveryExpired(recovery, lastConnectionError)
-        if (context.fallbackAttempt)
+        if (context.fallbackAttempt) {
           recovery.fallbackFetchStarted = true
+          recovery.onFallbackFetchStart?.()
+        }
         response = await this.fetchBeforeDeadline(fetcher, signal, recovery, lastConnectionError)
         lastConnectionError = undefined
       }

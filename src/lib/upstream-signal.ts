@@ -11,7 +11,11 @@ export function createUpstreamDeadlineFromConfig(
   return timeoutMs > 0 ? now + timeoutMs : null
 }
 
-export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS) {
+export function createUpstreamSignal(
+  clientSignal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  onClientAbort?: () => void,
+) {
   const controller = new AbortController()
   // No abort reason on purpose: a bare `abort()` yields the standard
   // DOMException `AbortError`, which `isTimeoutLikeError` recognizes. A custom
@@ -20,7 +24,10 @@ export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEF
     ? setTimeout(() => controller.abort(), timeoutMs)
     : undefined
 
-  const onAbort = () => controller.abort()
+  const onAbort = () => {
+    onClientAbort?.()
+    controller.abort()
+  }
   if (clientSignal && !clientSignal.aborted) {
     clientSignal.addEventListener('abort', onAbort)
   }
@@ -50,22 +57,29 @@ export function createUpstreamSignal(clientSignal?: AbortSignal, timeoutMs = DEF
 export function createUpstreamSignalFromConfig(
   clientSignal: AbortSignal,
   deadlineMonotonicMs = createUpstreamDeadlineFromConfig(),
+  onClientAbort?: () => void,
 ) {
   const remainingMs = deadlineMonotonicMs === null
     ? undefined
     : deadlineMonotonicMs - performance.now()
   const upstreamSignal = remainingMs !== undefined && remainingMs <= 0
-    ? createExpiredUpstreamSignal(clientSignal)
-    : createUpstreamSignal(clientSignal, remainingMs ?? 0)
+    ? createExpiredUpstreamSignal(clientSignal, onClientAbort)
+    : createUpstreamSignal(clientSignal, remainingMs ?? 0, onClientAbort)
   return { ...upstreamSignal, deadlineMonotonicMs }
 }
 
-function createExpiredUpstreamSignal(clientSignal: AbortSignal) {
+function createExpiredUpstreamSignal(
+  clientSignal: AbortSignal,
+  onClientAbort?: () => void,
+) {
   const controller = new AbortController()
   controller.abort()
+  const onAbort = () => onClientAbort?.()
+  if (!clientSignal.aborted)
+    clientSignal.addEventListener('abort', onAbort)
   return {
     signal: controller.signal,
     clientSignal,
-    cleanup: () => {},
+    cleanup: () => clientSignal.removeEventListener('abort', onAbort),
   }
 }

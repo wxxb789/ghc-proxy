@@ -62,6 +62,12 @@ For any status the call site has not explicitly authorized the queue to handle p
 
 A `200` stream that fails before its first downstream event is still committed. JSON errors, body timeouts, and mid-stream disconnects do not enter retry or overload fallback. Caller cancellation and normal delivery timeout handling remain live after recovery listeners are disarmed.
 
+For an overload fallback, the queue marks the target attempt authoritative
+immediately before invoking its first `fetch()`. An internal recovery callback
+commits the target model, strategy, and buffered effects at that boundary, so
+active Dashboard state changes with the real dispatch rather than after the
+target attempt settles.
+
 ## Defaults and Configuration
 
 | CLI | `config.json` | Default | Bounds/meaning |
