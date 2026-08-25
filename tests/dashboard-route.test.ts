@@ -114,6 +114,15 @@ describe('dashboard API security projection', () => {
     expect(response.status).toBe(403)
   })
 
+  test('validates the peer address on srvx live Node requests', async () => {
+    const app = createDashboardRoutes()
+    const remoteResponse = await app.handle(srvxNodeRequest('203.0.113.7'))
+    const loopbackResponse = await app.handle(srvxNodeRequest('127.0.0.1'))
+
+    expect(remoteResponse.status).toBe(403)
+    expect(loopbackResponse.status).toBe(200)
+  })
+
   test('never exposes tokens or unsafe quota fields', async () => {
     authStore.githubToken = 'github-secret-token'
     authStore.copilotToken = 'copilot-secret-token'
@@ -138,6 +147,16 @@ describe('dashboard API security projection', () => {
     expect(body).not.toContain('authorization')
   })
 })
+
+function srvxNodeRequest(ip: string): Request {
+  return Object.assign(
+    new Request('http://localhost/dashboard/api/models'),
+    {
+      ip,
+      runtime: { name: 'node', node: {} },
+    },
+  )
+}
 
 function usageFixture(): CopilotUsageResponse {
   const quota = {

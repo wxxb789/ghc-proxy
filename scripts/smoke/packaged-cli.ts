@@ -25,6 +25,7 @@ const EXPECTED_RUNTIME_PROBES = [
   'caller-cancellation',
   'protocol-payload-contract',
   'dashboard-bundle-contract',
+  'dashboard-node-listener-boundary',
 ]
 
 async function main() {

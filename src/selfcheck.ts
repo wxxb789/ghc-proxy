@@ -3,9 +3,12 @@
 import type { Socket } from 'node:net'
 import type { Dispatcher } from 'undici'
 
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
+import { networkInterfaces } from 'node:os'
 import process from 'node:process'
+import { node } from '@elysiajs/node'
 import { defineCommand } from 'citty'
+import { Elysia } from 'elysia'
 import { Agent } from 'undici'
 
 import { UpstreamRequestQueue } from './clients/upstream-queue'
@@ -30,6 +33,19 @@ interface RuntimeProbe {
   error?: string
 }
 
+interface NodeDashboardListener {
+  raw: {
+    close: (closeActiveConnections?: boolean) => Promise<void>
+    ready: () => Promise<unknown>
+    readonly url?: string
+  }
+}
+
+interface HttpProbeResult {
+  body: string
+  status: number
+}
+
 const PROBE_ENCODINGS = [
   'o200k_base',
   'cl100k_base',
@@ -48,6 +64,7 @@ const RUNTIME_PROBES = [
   ['caller-cancellation', probeCallerCancellation],
   ['protocol-payload-contract', probeProtocolPayloadContract],
   ['dashboard-bundle-contract', probeDashboardBundleContract],
+  ['dashboard-node-listener-boundary', probeDashboardNodeListenerBoundary],
 ] as const
 
 async function probeEncoding(encoding: string): Promise<EncodingProbe> {
@@ -297,6 +314,77 @@ async function probeDashboardBundleContract(): Promise<void> {
   assertProbe(css.includes('.app-header'), 'dashboard CSS was not bundled')
   assertProbe(js.includes('fetchJson(\'/dashboard/api/overview\')'), 'dashboard JS was not bundled')
   assertProbe(!js.includes('innerHTML'), 'dashboard JS uses unsafe HTML insertion')
+}
+
+async function probeDashboardNodeListenerBoundary(): Promise<void> {
+  if (process.versions.bun)
+    return
+
+  const app = new Elysia({ adapter: node() }).use(createDashboardRoutes())
+  let listener: NodeDashboardListener | undefined
+
+  try {
+    app.listen({ hostname: '0.0.0.0', port: 0 }, (server) => {
+      listener = server as unknown as NodeDashboardListener
+    })
+    assertProbe(listener !== undefined, 'Node dashboard listener was not created')
+    await listener.raw.ready()
+    assertProbe(listener.raw.url !== undefined, 'Node dashboard listener has no URL')
+
+    const port = Number(new URL(listener.raw.url).port)
+    assertProbe(Number.isInteger(port) && port > 0, 'Node dashboard listener has no bound port')
+
+    const loopback = await requestDashboard('127.0.0.1', port)
+    assertProbe(loopback.status === 200, `loopback dashboard request returned ${loopback.status}`)
+    assertProbe(loopback.body.includes('/dashboard/styles.css'), 'loopback dashboard response lost its HTML')
+
+    const remoteAddress = firstNonLoopbackIpv4Address()
+    if (remoteAddress) {
+      const remote = await requestDashboard(remoteAddress, port)
+      assertProbe(remote.status === 403, `non-loopback dashboard request returned ${remote.status}`)
+    }
+  }
+  finally {
+    await listener?.raw.close(true)
+  }
+}
+
+function firstNonLoopbackIpv4Address(): string | undefined {
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === 'IPv4' && !address.internal)
+        return address.address
+    }
+  }
+}
+
+function requestDashboard(address: string, port: number): Promise<HttpProbeResult> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      headers: {
+        connection: 'close',
+        host: `localhost:${port}`,
+      },
+      hostname: address,
+      method: 'GET',
+      path: '/dashboard',
+      port,
+    }, (response) => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', chunk => body += chunk)
+      response.on('end', () => resolve({
+        body,
+        status: response.statusCode ?? 0,
+      }))
+    })
+
+    request.on('error', reject)
+    request.setTimeout(5_000, () => {
+      request.destroy(new Error(`dashboard listener probe timed out for ${address}`))
+    })
+    request.end()
+  })
 }
 
 function createRuntimeProbeQueue(

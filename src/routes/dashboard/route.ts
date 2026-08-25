@@ -39,15 +39,26 @@ interface DashboardRouteOptions {
   quotaCache?: DashboardQuotaCache
 }
 
+interface DashboardPeer {
+  address?: string
+  live: boolean
+}
+
+interface SrvxNodeRequest extends Request {
+  ip?: string
+  runtime?: {
+    name?: string
+  }
+}
+
 export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
   const quotaCache = options.quotaCache ?? dashboardQuotaCache
 
   return new Elysia({ name: 'dashboard' })
-    .onBeforeHandle(({ request, server }) => rejectDashboardAccess(
-      request,
-      server ? server.requestIP(request)?.address : undefined,
-      server !== null,
-    ))
+    .onBeforeHandle(({ request, server }) => {
+      const peer = getDashboardPeer(request, server)
+      return rejectDashboardAccess(request, peer.address, peer.live)
+    })
     .get('/dashboard', () => assetResponse(
       DASHBOARD_HTML,
       'text/html; charset=utf-8',
@@ -69,6 +80,28 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
       apiResponse(getDashboardBehavior()))
     .get('/dashboard/api/requests', () =>
       apiResponse({ capacity: RECENT_REQUEST_LIMIT, ...getDashboardRequests() }))
+}
+
+function getDashboardPeer(
+  request: Request,
+  server: { requestIP: (request: Request) => { address: string } | null } | null,
+): DashboardPeer {
+  if (server !== null) {
+    return {
+      address: server.requestIP(request)?.address,
+      live: true,
+    }
+  }
+
+  const srvxRequest = request as SrvxNodeRequest
+  if (srvxRequest.runtime?.name === 'node') {
+    return {
+      address: srvxRequest.ip,
+      live: true,
+    }
+  }
+
+  return { live: false }
 }
 
 function rejectDashboardAccess(
