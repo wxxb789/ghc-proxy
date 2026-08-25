@@ -258,6 +258,7 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
   const selectedModel = options.target ?? resolved.resolvedModel
   const modelMapping = options.modelMapping ?? resolved.modelMapping
   runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
+  const recordedModelStepCount = modelMapping.steps.length
 
   if (options.target)
     (payload as { model: string }).model = options.target.id
@@ -303,7 +304,8 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
           throw error
         }
         finally {
-          runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
+          if (modelMapping.steps.length !== recordedModelStepCount)
+            runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
         }
       },
     }

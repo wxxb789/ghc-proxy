@@ -2,6 +2,11 @@ import type { ResponsesPayload } from '~/types'
 
 import consola from 'consola'
 
+export const RESPONSES_INPUT_POLICY = {
+  filtersUnresolvableItems: true,
+  rejectsRemoteImageUrls: true,
+} as const
+
 /**
  * Strip `phase` from input message items.
  *

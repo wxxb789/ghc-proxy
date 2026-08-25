@@ -5,12 +5,12 @@ import { getModelFallbackConfig } from '~/lib/model-resolver'
 import { PROXY_EFFECT_DEFINITIONS } from '~/observability/effects'
 import { chatCompletionsStrategyRegistry } from '~/routes/chat-completions/strategy-registry'
 import { defaultStrategyRegistry, resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
-import { RESPONSES_INPUT_POLICY } from '~/routes/responses/handler'
 import { responsesStrategyRegistry } from '~/routes/responses/strategy-registry'
 import { handleUsageCore } from '~/routes/usage/handler'
 import { authStore, configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 import { resolveResponsesCompactThreshold } from '~/transform/context-management'
 import { getChatCompletionsTokenParameter, resolveStrippedResponsesParams, RESPONSES_MIN_OUTPUT_TOKENS } from '~/transform/parameter-filter'
+import { RESPONSES_INPUT_POLICY } from '~/transform/responses-input'
 import { VERSION } from '~/util/version'
 
 const DEFAULT_QUOTA_TTL_MS = 60_000

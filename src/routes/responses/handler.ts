@@ -8,17 +8,12 @@ import { configStore, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/sta
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters, clampResponsesOutputTokens, clampResponsesReasoningEffort } from '~/transform/parameter-filter'
-import { stripPhaseFromInputMessages } from '~/transform/responses-input'
+import { RESPONSES_INPUT_POLICY, stripPhaseFromInputMessages } from '~/transform/responses-input'
 import { normalizeFunctionParametersSchemaForCopilot } from '~/translator/responses/function-schema'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
 import { responsesStrategyRegistry } from './strategy-registry'
 
 const HTTP_URL_RE = /^https?:\/\//i
-
-export const RESPONSES_INPUT_POLICY = {
-  filtersUnresolvableItems: true,
-  rejectsRemoteImageUrls: true,
-} as const
 
 export interface ResponsesCoreParams {
   body: unknown
@@ -178,63 +173,23 @@ export async function handleResponsesCore(
 function applyResponsesToolTransforms(
   payload: ResponsesPayload,
 ): { applyPatch: number, functionSchemas: number } {
-  return {
-    applyPatch: applyFunctionApplyPatch(payload),
-    functionSchemas: applyFunctionToolCompatibilityDefaults(payload),
-  }
-}
-
-function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): number {
   if (!Array.isArray(payload.tools)) {
-    return 0
+    return { applyPatch: 0, functionSchemas: 0 }
   }
 
-  let normalized = 0
+  const applyPatchEnabled = configStore.isFunctionApplyPatchEnabled()
+  let applyPatch = 0
+  let functionSchemas = 0
   payload.tools = payload.tools.map((tool) => {
-    if (!isResponseFunctionTool(tool)) {
-      return tool
-    }
-    normalized++
-
-    // Forward the caller's `strict`; omit the key entirely when they sent none.
-    //
-    // `strict` has three states, not two: probed 2026-08-06
-    // (`scripts/probes/tool-strict.ts`), a schema whose `required` names a key
-    // absent from `properties` returns 200 with the key omitted and 400 with
-    // `strict: false` — upstream runs a different validator when the key is
-    // present at all. `null` is folded into omission rather than forwarded,
-    // since the type permits it and forwarding it would trip that validator.
-    //
-    // `strict` is destructured out of the spread so a caller-sent `null` is
-    // dropped rather than carried through by `...rest`.
-    const { strict, ...rest } = tool
-    return {
-      ...rest,
-      parameters: normalizeFunctionParametersSchemaForCopilot(tool.parameters),
-      ...(strict != null ? { strict } : {}),
-    }
-  })
-  return normalized
-}
-
-function isResponseFunctionTool(tool: ResponseTool): tool is ResponseFunctionTool {
-  return tool.type === 'function'
-}
-
-function applyFunctionApplyPatch(payload: ResponsesPayload): number {
-  if (!configStore.isFunctionApplyPatchEnabled() || !Array.isArray(payload.tools)) {
-    return 0
-  }
-
-  let converted = 0
-  payload.tools = payload.tools.map((tool) => {
+    let transformed = tool
     if (
-      tool.type === 'custom'
+      applyPatchEnabled
+      && tool.type === 'custom'
       && typeof tool.name === 'string'
       && tool.name === 'apply_patch'
     ) {
-      converted++
-      return {
+      applyPatch++
+      transformed = {
         type: 'function',
         name: tool.name,
         description: 'Use the `apply_patch` tool to edit files',
@@ -252,9 +207,38 @@ function applyFunctionApplyPatch(payload: ResponsesPayload): number {
       }
     }
 
-    return tool
+    if (!isResponseFunctionTool(transformed))
+      return transformed
+
+    functionSchemas++
+    return normalizeResponseFunctionTool(transformed)
   })
-  return converted
+
+  return { applyPatch, functionSchemas }
+}
+
+function isResponseFunctionTool(tool: ResponseTool): tool is ResponseFunctionTool {
+  return tool.type === 'function'
+}
+
+function normalizeResponseFunctionTool(tool: ResponseFunctionTool): ResponseFunctionTool {
+  // Forward the caller's `strict`; omit the key entirely when they sent none.
+  //
+  // `strict` has three states, not two: probed 2026-08-06
+  // (`scripts/probes/tool-strict.ts`), a schema whose `required` names a key
+  // absent from `properties` returns 200 with the key omitted and 400 with
+  // `strict: false` — upstream runs a different validator when the key is
+  // present at all. `null` is folded into omission rather than forwarded,
+  // since the type permits it and forwarding it would trip that validator.
+  //
+  // `strict` is destructured out of the spread so a caller-sent `null` is
+  // dropped rather than carried through by `...rest`.
+  const { strict, ...rest } = tool
+  return {
+    ...rest,
+    parameters: normalizeFunctionParametersSchemaForCopilot(tool.parameters),
+    ...(strict != null ? { strict } : {}),
+  }
 }
 
 function applyResponsesInputPolicies(
