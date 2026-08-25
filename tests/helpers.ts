@@ -399,6 +399,11 @@ export interface StateSnapshot {
   copilotToken: typeof authStore.copilotToken
   copilotApiBase: typeof authStore.copilotApiBase
   githubToken: typeof authStore.githubToken
+  githubLogin: typeof authStore.githubLogin
+  githubValidatedAt: typeof authStore.githubValidatedAt
+  copilotTokenExpiresAt: typeof authStore.copilotTokenExpiresAt
+  copilotTokenLastRefreshAt: typeof authStore.copilotTokenLastRefreshAt
+  copilotTokenLastRefreshSucceeded: typeof authStore.copilotTokenLastRefreshSucceeded
   gheDomain: typeof authStore.gheDomain
   accountType: typeof authStore.accountType
   manualApprove: typeof authStore.manualApprove
@@ -416,6 +421,11 @@ export function saveStateSnapshot(): StateSnapshot {
     copilotToken: authStore.copilotToken,
     copilotApiBase: authStore.copilotApiBase,
     githubToken: authStore.githubToken,
+    githubLogin: authStore.githubLogin,
+    githubValidatedAt: authStore.githubValidatedAt,
+    copilotTokenExpiresAt: authStore.copilotTokenExpiresAt,
+    copilotTokenLastRefreshAt: authStore.copilotTokenLastRefreshAt,
+    copilotTokenLastRefreshSucceeded: authStore.copilotTokenLastRefreshSucceeded,
     gheDomain: authStore.gheDomain,
     accountType: authStore.accountType,
     manualApprove: authStore.manualApprove,
@@ -433,6 +443,11 @@ export function restoreStateSnapshot(snapshot: StateSnapshot) {
   authStore.copilotToken = snapshot.copilotToken
   authStore.copilotApiBase = snapshot.copilotApiBase
   authStore.githubToken = snapshot.githubToken
+  authStore.githubLogin = snapshot.githubLogin
+  authStore.githubValidatedAt = snapshot.githubValidatedAt
+  authStore.copilotTokenExpiresAt = snapshot.copilotTokenExpiresAt
+  authStore.copilotTokenLastRefreshAt = snapshot.copilotTokenLastRefreshAt
+  authStore.copilotTokenLastRefreshSucceeded = snapshot.copilotTokenLastRefreshSucceeded
   authStore.gheDomain = snapshot.gheDomain
   authStore.accountType = snapshot.accountType
   authStore.manualApprove = snapshot.manualApprove
@@ -477,6 +492,9 @@ export function expectCacheCheckpoints(payload: CapiChatCompletionsPayload) {
 
 export function setupDefaultTestState() {
   authStore.copilotToken = 'test-token'
+  authStore.copilotTokenExpiresAt = Date.now() + 60_000
+  authStore.copilotTokenLastRefreshAt = Date.now()
+  authStore.copilotTokenLastRefreshSucceeded = true
   authStore.accountType = 'individual'
   authStore.manualApprove = false
   authStore.rateLimitSeconds = undefined

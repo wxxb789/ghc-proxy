@@ -1,4 +1,5 @@
 import type { CopilotClient } from '~/clients'
+import type { UpstreamRecoveryRecord } from '~/clients/upstream-queue'
 
 import { cacheModels, createCopilotClient } from '~/clients/factory'
 import { modelCache } from '~/state'
@@ -10,9 +11,12 @@ import { modelCache } from '~/state'
  * route does not go through `runPipeline`, so it constructs its own client on
  * a cache miss.
  */
-export async function handleModelsCore(client?: CopilotClient): Promise<object> {
+export async function handleModelsCore(
+  client?: CopilotClient,
+  recovery?: UpstreamRecoveryRecord,
+): Promise<object> {
   if (!modelCache.getModels()) {
-    const copilotClient = client ?? createCopilotClient()
+    const copilotClient = client ?? createCopilotClient(recovery)
     await cacheModels(copilotClient)
   }
 

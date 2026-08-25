@@ -1,4 +1,5 @@
 import type { CopilotClient } from '~/clients'
+import type { UpstreamRecoveryRecord } from '~/clients/upstream-queue'
 import type { EmbeddingRequest } from '~/types'
 
 import { createCopilotClient } from '~/clients/factory'
@@ -25,13 +26,14 @@ export async function handleEmbeddingsCore(
   headers: Headers,
   client?: CopilotClient,
   signal?: AbortSignal,
+  recovery?: UpstreamRecoveryRecord,
 ): Promise<object> {
   const { payload } = protocolRegistry.ingest<EmbeddingRequest>(
     'embeddings',
     body,
     headers,
   )
-  const copilotClient = client ?? createCopilotClient()
+  const copilotClient = client ?? createCopilotClient(recovery)
   const upstreamSignal = signal
     ? createUpstreamSignalFromConfig(signal)
     : undefined

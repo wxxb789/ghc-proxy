@@ -4,12 +4,12 @@ import type { ResponseFunctionTool, ResponsesPayload, ResponsesResult, ResponseT
 import consola from 'consola'
 import { throwInvalidRequestError } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
-import { configStore, modelCache, RESPONSES_ENDPOINT } from '~/state'
+import { configStore, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters, clampResponsesOutputTokens, clampResponsesReasoningEffort } from '~/transform/parameter-filter'
-import { stripPhaseFromInputMessages } from '~/transform/responses-input'
-import { normalizeFunctionParametersSchemaForCopilot } from '~/translator/responses/function-schema'
+import { RESPONSES_INPUT_POLICY, stripPhaseFromInputMessages } from '~/transform/responses-input'
+import { normalizeFunctionParametersSchemaForCopilotWithChangeMetadata } from '~/translator/responses/function-schema'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
 import { responsesStrategyRegistry } from './strategy-registry'
 
@@ -49,9 +49,48 @@ export async function handleResponsesCore(
         return emulatorPrepared?.upstreamPayload ?? payload
       },
       afterTransform({ payload, selectedModel }) {
-        applyResponsesToolTransforms(payload)
-        applyResponsesInputPolicies(payload)
-        compactInputByLatestCompaction(payload)
+        const toolEffects = applyResponsesToolTransforms(payload)
+        if (toolEffects.applyPatch > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.function_apply_patch',
+            toolEffects.applyPatch,
+          )
+        }
+        if (toolEffects.functionSchemas > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.function_schema_normalized',
+            toolEffects.functionSchemas,
+          )
+        }
+
+        const inputEffects = applyResponsesInputPolicies(payload)
+        if (inputEffects.storeDisabled)
+          runtimeStore.requests.recordEffect(requestId, 'responses.store_disabled')
+        if (inputEffects.filteredItems > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.input_items_filtered',
+            inputEffects.filteredItems,
+          )
+        }
+        if (inputEffects.filteredPhases > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.phase_filtered',
+            inputEffects.filteredPhases,
+          )
+        }
+
+        const compactedItems = compactInputByLatestCompaction(payload)
+        if (compactedItems > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.input_compacted',
+            compactedItems,
+          )
+        }
 
         if (!selectedModel) {
           throwInvalidRequestError(
@@ -66,23 +105,36 @@ export async function handleResponsesCore(
           )
         }
 
-        applyContextManagement(
+        const contextThreshold = applyContextManagement(
           payload,
           selectedModel.capabilities.limits.max_prompt_tokens,
         )
+        if (contextThreshold !== undefined)
+          runtimeStore.requests.recordEffect(requestId, 'responses.context_management')
 
         // Runs last so it can strip any request parameter — including fields
         // this proxy injects above (e.g. context_management) — that the model
         // rejects, per the configured filter rules.
-        applyResponsesParameterFilters(payload, selectedModel)
-        clampResponsesOutputTokens(payload)
-        clampResponsesReasoningEffort(payload, selectedModel)
+        const removedParams = applyResponsesParameterFilters(payload, selectedModel)
+        if (removedParams.length > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.parameter_filter',
+            removedParams.length,
+          )
+        }
+        if (clampResponsesOutputTokens(payload))
+          runtimeStore.requests.recordEffect(requestId, 'responses.output_tokens_raised')
+        if (clampResponsesReasoningEffort(payload, selectedModel))
+          runtimeStore.requests.recordEffect(requestId, 'responses.reasoning_effort_lowered')
       },
-      buildStrategyContext({ payload, meta, selectedModel, copilotClient, upstreamSignal }) {
+      buildStrategyContext({ payload, meta, selectedModel, copilotClient, upstreamSignal, recovery }) {
         const { vision, initiator } = getResponsesRequestOptions(payload)
         const prepared = emulatorPrepared
         const requestPayload = originalPayload ?? payload
+        const strategyRequestId = recovery.requestId
         return {
+          requestId: strategyRequestId,
           copilotClient,
           payload,
           upstreamSignal,
@@ -96,17 +148,28 @@ export async function handleResponsesCore(
                 prepared,
               )
             : undefined,
-          onTerminalResponse: prepared
-            ? (terminalResponse: ResponsesResult) => {
-                if (!prepared.shouldStore) {
-                  return
-                }
-                persistEmulatorResponse(
-                  terminalResponse,
-                  prepared.effectiveInputItems,
-                )
-              }
-            : undefined,
+          onTerminalResponse(terminalResponse: ResponsesResult) {
+            if (terminalResponse.status === 'failed' || terminalResponse.error) {
+              runtimeStore.requests.recordError(
+                strategyRequestId,
+                'Upstream HTTP 200 (response_failed)',
+              )
+            }
+            if (prepared?.shouldStore) {
+              persistEmulatorResponse(
+                terminalResponse,
+                prepared.effectiveInputItems,
+              )
+            }
+          },
+          onStreamEndWithoutTerminal() {
+            if (upstreamSignal.clientSignal?.aborted)
+              return
+            runtimeStore.requests.recordError(
+              strategyRequestId,
+              'Upstream HTTP 200 (response_stream_eof)',
+            )
+          },
         }
       },
     },
@@ -115,57 +178,26 @@ export async function handleResponsesCore(
   return pipelineResult
 }
 
-function applyResponsesToolTransforms(payload: ResponsesPayload): void {
-  applyFunctionApplyPatch(payload)
-  applyFunctionToolCompatibilityDefaults(payload)
-}
-
-function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): void {
+function applyResponsesToolTransforms(
+  payload: ResponsesPayload,
+): { applyPatch: number, functionSchemas: number } {
   if (!Array.isArray(payload.tools)) {
-    return
+    return { applyPatch: 0, functionSchemas: 0 }
   }
 
+  const applyPatchEnabled = configStore.isFunctionApplyPatchEnabled()
+  let applyPatch = 0
+  let functionSchemas = 0
   payload.tools = payload.tools.map((tool) => {
-    if (!isResponseFunctionTool(tool)) {
-      return tool
-    }
-
-    // Forward the caller's `strict`; omit the key entirely when they sent none.
-    //
-    // `strict` has three states, not two: probed 2026-08-06
-    // (`scripts/probes/tool-strict.ts`), a schema whose `required` names a key
-    // absent from `properties` returns 200 with the key omitted and 400 with
-    // `strict: false` — upstream runs a different validator when the key is
-    // present at all. `null` is folded into omission rather than forwarded,
-    // since the type permits it and forwarding it would trip that validator.
-    //
-    // `strict` is destructured out of the spread so a caller-sent `null` is
-    // dropped rather than carried through by `...rest`.
-    const { strict, ...rest } = tool
-    return {
-      ...rest,
-      parameters: normalizeFunctionParametersSchemaForCopilot(tool.parameters),
-      ...(strict != null ? { strict } : {}),
-    }
-  })
-}
-
-function isResponseFunctionTool(tool: ResponseTool): tool is ResponseFunctionTool {
-  return tool.type === 'function'
-}
-
-function applyFunctionApplyPatch(payload: ResponsesPayload): void {
-  if (!configStore.isFunctionApplyPatchEnabled() || !Array.isArray(payload.tools)) {
-    return
-  }
-
-  payload.tools = payload.tools.map((tool) => {
+    let transformed = tool
     if (
-      tool.type === 'custom'
+      applyPatchEnabled
+      && tool.type === 'custom'
       && typeof tool.name === 'string'
       && tool.name === 'apply_patch'
     ) {
-      return {
+      applyPatch++
+      transformed = {
         type: 'function',
         name: tool.name,
         description: 'Use the `apply_patch` tool to edit files',
@@ -183,19 +215,67 @@ function applyFunctionApplyPatch(payload: ResponsesPayload): void {
       }
     }
 
-    return tool
+    if (!isResponseFunctionTool(transformed))
+      return transformed
+
+    const normalized = normalizeResponseFunctionTool(transformed)
+    if (normalized.changed)
+      functionSchemas++
+    return normalized.tool
   })
+
+  return { applyPatch, functionSchemas }
 }
 
-function applyResponsesInputPolicies(payload: ResponsesPayload): void {
+function isResponseFunctionTool(tool: ResponseTool): tool is ResponseFunctionTool {
+  return tool.type === 'function'
+}
+
+function normalizeResponseFunctionTool(
+  tool: ResponseFunctionTool,
+): { tool: ResponseFunctionTool, changed: boolean } {
+  // Forward the caller's `strict`; omit the key entirely when they sent none.
+  //
+  // `strict` has three states, not two: probed 2026-08-06
+  // (`scripts/probes/tool-strict.ts`), a schema whose `required` names a key
+  // absent from `properties` returns 200 with the key omitted and 400 with
+  // `strict: false` — upstream runs a different validator when the key is
+  // present at all. `null` is folded into omission rather than forwarded,
+  // since the type permits it and forwarding it would trip that validator.
+  //
+  // `strict` is destructured out of the spread so a caller-sent `null` is
+  // dropped rather than carried through by `...rest`.
+  const { strict, ...rest } = tool
+  const parameters = normalizeFunctionParametersSchemaForCopilotWithChangeMetadata(
+    tool.parameters,
+  )
+  const changed = parameters.changed || strict === null
+  if (!changed)
+    return { tool, changed: false }
+
+  return {
+    tool: {
+      ...rest,
+      parameters: parameters.schema,
+      ...(strict != null ? { strict } : {}),
+    },
+    changed: true,
+  }
+}
+
+function applyResponsesInputPolicies(
+  payload: ResponsesPayload,
+): { storeDisabled: boolean, filteredItems: number, filteredPhases: number } {
   // Force store=false so Copilot never returns opaque item IDs that it
   // cannot resolve on subsequent requests (→ 404). Clients should also
   // set { "store": false } in their Provider Options.
+  const storeDisabled = payload.store !== false
   payload.store = false
 
-  stripUnresolvableInputItems(payload)
-  stripPhaseFromInputMessages(payload)
+  const filteredItems = stripUnresolvableInputItems(payload)
+  const filteredPhases = stripPhaseFromInputMessages(payload)
   rejectUnsupportedRemoteImageUrls(payload)
+  return { storeDisabled, filteredItems, filteredPhases }
 }
 
 /**
@@ -204,9 +284,9 @@ function applyResponsesInputPolicies(payload: ResponsesPayload): void {
  * - `function_call_output` items whose `call_id` has no matching prior
  *   `function_call` in the same input array (orphaned outputs)
  */
-function stripUnresolvableInputItems(payload: ResponsesPayload): void {
-  if (!Array.isArray(payload.input)) {
-    return
+function stripUnresolvableInputItems(payload: ResponsesPayload): number {
+  if (!RESPONSES_INPUT_POLICY.filtersUnresolvableItems || !Array.isArray(payload.input)) {
+    return 0
   }
 
   const functionCallIds = new Set<string>()
@@ -249,10 +329,15 @@ function stripUnresolvableInputItems(payload: ResponsesPayload): void {
       + ` (item_reference / orphaned function_call_output)`,
     )
   }
+  return originalLength - payload.input.length
 }
 
 function rejectUnsupportedRemoteImageUrls(payload: ResponsesPayload): void {
-  if (!Array.isArray(payload.input) || !containsRemoteImageUrl(payload.input)) {
+  if (
+    !RESPONSES_INPUT_POLICY.rejectsRemoteImageUrls
+    || !Array.isArray(payload.input)
+    || !containsRemoteImageUrl(payload.input)
+  ) {
     return
   }
 

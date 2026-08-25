@@ -7,7 +7,8 @@ import { SignatureCodec } from '~/translator/responses/signature-codec'
 
 export function filterThinkingBlocksForNativeMessages(
   anthropicPayload: AnthropicMessagesPayload,
-): void {
+): number {
+  let removed = 0
   for (const message of anthropicPayload.messages) {
     if (message.role !== 'assistant' || !Array.isArray(message.content)) {
       continue
@@ -16,15 +17,19 @@ export function filterThinkingBlocksForNativeMessages(
       if (block.type !== 'thinking') {
         return true
       }
-      return Boolean(
+      const keep = Boolean(
         block.thinking
         && block.thinking !== 'Thinking...'
         && block.signature
         && !SignatureCodec.isReasoningSignature(block.signature)
         && !SignatureCodec.isCompactionSignature(block.signature),
       )
+      if (!keep)
+        removed++
+      return keep
     })
   }
+  return removed
 }
 
 // Canonical Anthropic effort ordering: low < medium < high < xhigh < max.
@@ -127,16 +132,17 @@ export function canReduceOutputFormatForNativeMessages(
  */
 export function reduceOutputFormatForNativeMessages(
   payload: AnthropicMessagesPayload,
-): void {
+): boolean {
   const format = payload.output_config?.format
   if (!format || format.name === undefined) {
-    return
+    return false
   }
 
   payload.output_config = {
     ...payload.output_config,
     format: { type: format.type, schema: format.schema },
   }
+  return true
 }
 
 // Heuristic mapping from Anthropic classic `budget_tokens` to an adaptive
@@ -166,12 +172,12 @@ function budgetTokensToEffort(budget: number): OutputConfigEffort {
 export function convertEnabledThinkingToAdaptive(
   payload: AnthropicMessagesPayload,
   model: Model | undefined,
-): void {
+): boolean {
   if (payload.thinking?.type !== 'enabled') {
-    return
+    return false
   }
   if (!modelCache.supportsAdaptiveThinking(model)) {
-    return
+    return false
   }
 
   const budget = payload.thinking.budget_tokens
@@ -185,6 +191,7 @@ export function convertEnabledThinkingToAdaptive(
       effort: budgetTokensToEffort(budget),
     }
   }
+  return true
 }
 /**
  * Normalize `output_config` for the native `/v1/messages` boundary.
@@ -198,14 +205,14 @@ export function convertEnabledThinkingToAdaptive(
 export function sanitizeOutputConfig(
   payload: AnthropicMessagesPayload,
   model: Model | undefined,
-): void {
+): boolean {
   if (!payload.output_config) {
-    return
+    return false
   }
 
   if (!modelCache.supportsOutputConfig(model)) {
     delete payload.output_config
-    return
+    return true
   }
 
   const effort = payload.output_config.effort
@@ -214,43 +221,57 @@ export function sanitizeOutputConfig(
     // usual shape of a structured-output request, which sends no effort at all.
     // Deleting the container here would drop the caller's schema silently.
     if (payload.output_config.format) {
+      const hadEffort = 'effort' in payload.output_config
       delete payload.output_config.effort
-      return
+      return hadEffort
     }
     delete payload.output_config
-    return
+    return true
   }
 
-  payload.output_config.effort = normalizeOutputConfigEffort(effort, model) ?? effort
+  const normalized = normalizeOutputConfigEffort(effort, model) ?? effort
+  payload.output_config.effort = normalized
+  return normalized !== effort
 }
 
-function normalizeCacheControlBlock(obj: Record<string, unknown>): void {
+function normalizeCacheControlBlock(obj: Record<string, unknown>): boolean {
   if (obj.cache_control && typeof obj.cache_control === 'object') {
-    obj.cache_control = { type: (obj.cache_control as Record<string, unknown>).type }
+    const cacheControl = obj.cache_control as Record<string, unknown>
+    if (!Object.keys(cacheControl).some(key => key !== 'type'))
+      return false
+    obj.cache_control = { type: cacheControl.type }
+    return true
   }
+  return false
 }
 
-export function sanitizeCacheControl(payload: AnthropicMessagesPayload): void {
+export function sanitizeCacheControl(payload: AnthropicMessagesPayload): number {
+  let sanitized = 0
   if (Array.isArray(payload.system)) {
     for (const block of payload.system) {
-      normalizeCacheControlBlock(block as unknown as Record<string, unknown>)
+      if (normalizeCacheControlBlock(block as unknown as Record<string, unknown>))
+        sanitized++
     }
   }
 
   for (const message of payload.messages) {
-    normalizeCacheControlBlock(message as unknown as Record<string, unknown>)
+    if (normalizeCacheControlBlock(message as unknown as Record<string, unknown>))
+      sanitized++
     if (Array.isArray(message.content)) {
       for (const block of message.content) {
-        normalizeCacheControlBlock(block as unknown as Record<string, unknown>)
+        if (normalizeCacheControlBlock(block as unknown as Record<string, unknown>))
+          sanitized++
       }
     }
   }
 
   if (payload.tools) {
     for (const tool of payload.tools) {
-      normalizeCacheControlBlock(tool as unknown as Record<string, unknown>)
+      if (normalizeCacheControlBlock(tool as unknown as Record<string, unknown>))
+        sanitized++
     }
   }
+  return sanitized
 }
 
 /**
@@ -271,9 +292,9 @@ export function sanitizeCacheControl(payload: AnthropicMessagesPayload): void {
  * Applied unconditionally on this boundary: models that accept the pair are
  * unaffected in practice, since sending only `temperature` is always valid.
  */
-export function sanitizeExclusiveSamplingParams(payload: AnthropicMessagesPayload): void {
+export function sanitizeExclusiveSamplingParams(payload: AnthropicMessagesPayload): boolean {
   if (payload.temperature === undefined || payload.top_p === undefined) {
-    return
+    return false
   }
 
   consola.warn(
@@ -281,4 +302,5 @@ export function sanitizeExclusiveSamplingParams(payload: AnthropicMessagesPayloa
     + `Keeping temperature=${payload.temperature}.`,
   )
   delete payload.top_p
+  return true
 }

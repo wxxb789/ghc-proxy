@@ -46,10 +46,10 @@ export class GitHubClient {
     return (await response.json()) as T
   }
 
-  async getCopilotUsage(): Promise<CopilotUsageResponse> {
+  async getCopilotUsage(signal?: AbortSignal): Promise<CopilotUsageResponse> {
     return this.requestJson<CopilotUsageResponse>(
       `${this.config.githubApiBaseUrl ?? GITHUB_API_BASE_URL}/copilot_internal/user`,
-      { headers: githubHeaders(this.auth, this.config) },
+      { headers: githubHeaders(this.auth, this.config), signal },
       'Failed to get Copilot usage',
     )
   }

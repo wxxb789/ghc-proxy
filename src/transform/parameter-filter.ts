@@ -106,10 +106,10 @@ function resolveReasoningExemptions(modelId: string): Set<string> {
 export function applyResponsesParameterFilters(
   payload: ResponsesPayload,
   model: Model | undefined,
-): void {
+): Array<string> {
   const strip = resolveStrippedResponsesParams(model)
   if (strip.size === 0) {
-    return
+    return []
   }
 
   const removed: Array<string> = []
@@ -125,6 +125,7 @@ export function applyResponsesParameterFilters(
       `Stripped unsupported responses params for model ${model?.id}: ${removed.join(', ')}`,
     )
   }
+  return removed
 }
 
 /**
@@ -152,14 +153,14 @@ const DEFAULT_MAX_COMPLETION_TOKENS_MODELS = ['gpt-5.4', 'gpt-5.4-*'] as const
 export function applyChatCompletionsTokenParam(
   payload: { max_tokens?: number | null },
   model: Model | undefined,
-): void {
+): boolean {
   if (payload.max_tokens == null) {
-    return
+    return false
   }
 
   const modelId = model?.id
   if (!modelId || !requiresMaxCompletionTokens(modelId)) {
-    return
+    return false
   }
 
   const record = payload as Record<string, unknown>
@@ -169,14 +170,21 @@ export function applyChatCompletionsTokenParam(
   consola.debug(
     `Renamed max_tokens to max_completion_tokens for model ${modelId}`,
   )
+  return true
 }
 
-function requiresMaxCompletionTokens(modelId: string): boolean {
+export function requiresMaxCompletionTokens(modelId: string): boolean {
   const patterns: Array<string> = [
     ...DEFAULT_MAX_COMPLETION_TOKENS_MODELS,
     ...configStore.getChatCompletionsMaxCompletionTokensModels(),
   ]
   return patterns.some(pattern => matchesGlob(pattern, modelId))
+}
+
+export function getChatCompletionsTokenParameter(modelId: string): 'max_tokens' | 'max_completion_tokens' {
+  return requiresMaxCompletionTokens(modelId)
+    ? 'max_completion_tokens'
+    : 'max_tokens'
 }
 
 /**
@@ -190,7 +198,7 @@ function requiresMaxCompletionTokens(modelId: string): boolean {
  * `limits.max_output_tokens` + 1 was accepted everywhere — so only the floor
  * is clamped.
  */
-const RESPONSES_MIN_OUTPUT_TOKENS = 16
+export const RESPONSES_MIN_OUTPUT_TOKENS = 16
 
 /**
  * Raise a below-minimum `max_output_tokens` to Copilot's floor.
@@ -199,16 +207,17 @@ const RESPONSES_MIN_OUTPUT_TOKENS = 16
  * and this floor is a Copilot quirk the proxy absorbs rather than leaks back
  * as a 400.
  */
-export function clampResponsesOutputTokens(payload: ResponsesPayload): void {
+export function clampResponsesOutputTokens(payload: ResponsesPayload): boolean {
   const requested = payload.max_output_tokens
   if (requested == null || requested >= RESPONSES_MIN_OUTPUT_TOKENS) {
-    return
+    return false
   }
 
   payload.max_output_tokens = RESPONSES_MIN_OUTPUT_TOKENS
   consola.debug(
     `Raised max_output_tokens from ${requested} to the Copilot minimum of ${RESPONSES_MIN_OUTPUT_TOKENS}`,
   )
+  return true
 }
 
 /**
@@ -228,10 +237,10 @@ export function clampResponsesOutputTokens(payload: ResponsesPayload): void {
 export function clampResponsesReasoningEffort(
   payload: ResponsesPayload,
   model: Model | undefined,
-): void {
+): boolean {
   const requested = payload.reasoning?.effort
   if (!requested || requested === 'none' || requested === 'minimal') {
-    return
+    return false
   }
 
   const clamped = clampEffortToAdvertised(
@@ -239,13 +248,14 @@ export function clampResponsesReasoningEffort(
     model?.capabilities.supports.reasoning_effort,
   )
   if (!clamped || clamped === requested) {
-    return
+    return false
   }
 
   payload.reasoning = { ...payload.reasoning, effort: clamped }
   consola.warn(
     `Lowered reasoning.effort from ${requested} to ${clamped}, the highest level ${model?.id} advertises.`,
   )
+  return true
 }
 
 /**
@@ -269,11 +279,11 @@ export function clampResponsesReasoningEffort(
 export function clampMessagesOutputTokens(
   payload: { max_tokens?: number },
   model: Model | undefined,
-): void {
+): boolean {
   const ceiling = model?.capabilities.limits.max_output_tokens
   const requested = payload.max_tokens
   if (ceiling == null || requested == null || requested <= ceiling) {
-    return
+    return false
   }
 
   payload.max_tokens = ceiling
@@ -281,4 +291,5 @@ export function clampMessagesOutputTokens(
     `Lowered max_tokens from ${requested} to ${ceiling}, the ceiling ${model?.id} advertises. `
     + `Copilot rejects a higher value outright on /v1/messages.`,
   )
+  return true
 }

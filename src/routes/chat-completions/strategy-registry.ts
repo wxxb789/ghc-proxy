@@ -10,10 +10,12 @@ import { OpenAIChatAdapter } from '~/adapters'
 import { StrategyRegistry } from '~/dispatch'
 import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
+import { runtimeStore } from '~/state'
 
 import { createChatCompletionsStrategy } from './strategy'
 
 export interface ChatCompletionsStrategyContext {
+  requestId: string
   copilotClient: CopilotClient
   payload: ChatCompletionsPayload
   upstreamSignal: ReturnType<typeof createUpstreamSignalFromConfig>
@@ -34,7 +36,9 @@ const chatCompletionsEntry: StrategyEntry<ChatCompletionsStrategyContext> = {
 
     consola.debug('Streaming response')
     const strategy = createChatCompletionsStrategy(ctx.copilotClient, adapter, plan, ctx.upstreamSignal.signal)
-    return await runStrategy(strategy, ctx.upstreamSignal)
+    return await runStrategy(strategy, ctx.upstreamSignal, {
+      onStreamError: error => runtimeStore.recordStreamError(ctx.requestId, error),
+    })
   },
 }
 

@@ -1,8 +1,9 @@
 import type { ExecutionResult } from '~/lib/execution-strategy'
 import type { ModelMappingInfo } from '~/lib/request-logger'
 
-import { setRequestModelMapping } from '~/lib/request-logger'
+import { getOrCreateRequestCorrelation, setRequestModelMapping } from '~/lib/request-logger'
 import { sseAdapter } from '~/lib/sse-adapter'
+import { runtimeStore } from '~/state'
 
 export type DeliveryResult
   = | { streaming: false, data: unknown }
@@ -17,5 +18,8 @@ export function deliverResult(
   if (result.kind === 'json') {
     return { streaming: false, data: result.data }
   }
+  runtimeStore.requests.markStreaming(
+    getOrCreateRequestCorrelation(request).requestId,
+  )
   return { streaming: true, stream: sseAdapter(result.generator) }
 }

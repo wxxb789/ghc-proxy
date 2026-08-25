@@ -73,6 +73,8 @@ export async function refreshCopilotToken(githubClient: GitHubClient): Promise<v
     }
   }
   catch (error) {
+    authStore.copilotTokenLastRefreshAt = Date.now()
+    authStore.copilotTokenLastRefreshSucceeded = false
     consola.error('Failed to refresh Copilot token:', error)
   }
 }
@@ -84,6 +86,8 @@ interface SetupGitHubTokenOptions {
 export async function setupGitHubToken(
   options?: SetupGitHubTokenOptions,
 ): Promise<void> {
+  authStore.githubLogin = undefined
+  authStore.githubValidatedAt = undefined
   try {
     await ensureVSCodeVersion()
 
@@ -172,6 +176,7 @@ async function logUser() {
   const githubClient = createGitHubClient()
   const user = await githubClient.getGitHubUser()
   authStore.githubLogin = user.login
+  authStore.githubValidatedAt = Date.now()
   consola.debug(`Logged in as ${user.login}`)
 }
 
@@ -182,6 +187,9 @@ function createGitHubClient() {
 function applyCopilotTokenState(response: GetCopilotTokenResponse) {
   authStore.copilotToken = response.token
   authStore.copilotApiBase = normalizeCopilotApiBase(response.endpoints?.api)
+  authStore.copilotTokenExpiresAt = response.expires_at * 1_000
+  authStore.copilotTokenLastRefreshAt = Date.now()
+  authStore.copilotTokenLastRefreshSucceeded = true
 }
 
 function normalizeCopilotApiBase(value?: string): string | undefined {

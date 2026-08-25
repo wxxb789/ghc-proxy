@@ -5,14 +5,16 @@ import { Elysia } from 'elysia'
 import { HTTPError } from './lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
 import { isTimeoutLikeError } from './lib/timeout-error'
+import { classifyObservedEndpoint, sanitizeObservedError } from './observability/request-store'
 import { createCompletionRoutes } from './routes/chat-completions/route'
+import { createDashboardRoutes } from './routes/dashboard/route'
 import { createEmbeddingRoutes } from './routes/embeddings/route'
 import { createMessageRoutes } from './routes/messages/route'
 import { createModelRoutes } from './routes/models/route'
 import { createResponsesRoutes } from './routes/responses/route'
 import { createTokenRoute } from './routes/token/route'
 import { createUsageRoute } from './routes/usage/route'
-import { authStore, modelCache } from './state'
+import { authStore, modelCache, runtimeStore } from './state'
 import { VERSION } from './util/version'
 
 const isBun = typeof globalThis.Bun !== 'undefined'
@@ -161,7 +163,17 @@ export function createServer(options?: ServerOptions) {
     // `onRequest` return into the response, and a WeakMap setter returns the
     // WeakMap. `markRequestStart` is typed `: void` for the same reason.
     .onRequest(({ request }) => {
+      const endpoint = classifyObservedEndpoint(request.url)
+      if (endpoint === undefined)
+        return
+
       markRequestStart(request)
+      const { requestId } = getOrCreateRequestCorrelation(request)
+      runtimeStore.requests.start({
+        requestId,
+        method: request.method,
+        endpoint,
+      })
     })
     .derive(({ request }) => ({
       ...getOrCreateRequestCorrelation(request),
@@ -175,14 +187,34 @@ export function createServer(options?: ServerOptions) {
         : undefined
       if (typeof model === 'string') {
         setRequestModelMapping(request, { originalModel: model, steps: [] })
+        runtimeStore.requests.recordRequestedModel(
+          getOrCreateRequestCorrelation(request).requestId,
+          model,
+        )
       }
     })
     .onAfterResponse(({ callerRequestId, request, requestId, set }) => {
-      const elapsed = formatElapsed(getRequestStart(request))
+      const correlation = getOrCreateRequestCorrelation(request)
+      const internalRequestId = requestId ?? correlation.requestId
       const status = typeof set.status === 'number' ? set.status : 200
-      logRequest(request.method, request.url, status, elapsed, getRequestModelMapping(request), requestId, callerRequestId)
+      if (!runtimeStore.requests.complete(internalRequestId, status))
+        return
+
+      const elapsed = formatElapsed(getRequestStart(request))
+      const externalRequestId = callerRequestId ?? correlation.callerRequestId
+      const modelMapping = getRequestModelMapping(request)
+      logRequest(request.method, request.url, status, elapsed, modelMapping, internalRequestId, externalRequestId)
     })
-    .onError(({ code, error, set }) => handleRouteError({ code, error, set }))
+    .onError(({ code, error, request, set }) => {
+      const response = handleRouteError({ code, error, set })
+      const status = response?.status
+        ?? (error instanceof HTTPError ? error.status : 500)
+      runtimeStore.requests.recordError(
+        getOrCreateRequestCorrelation(request).requestId,
+        sanitizeObservedError(error, code, status),
+      )
+      return response
+    })
     .get('/', () => 'Server running')
     .get('/health', () => ({
       status: 'ok',
@@ -190,6 +222,7 @@ export function createServer(options?: ServerOptions) {
       modelsLoaded: !!modelCache.getModels(),
       version: VERSION,
     }))
+    .use(createDashboardRoutes())
     // Root-level routes: completions, models, embeddings, responses are registered here
     // for clients that omit the /v1 prefix. Token and usage routes are root-only
     // because they are proxy-specific endpoints, not part of any upstream API spec.

@@ -80,19 +80,19 @@ export class ModelCache {
   }
 
   supportsToolCalls(model: Model | undefined): boolean {
-    return model?.capabilities.supports.tool_calls ?? false
+    return model?.capabilities?.supports?.tool_calls ?? false
   }
 
   supportsAdaptiveThinking(model: Model | undefined): boolean {
-    return model?.capabilities.supports.adaptive_thinking ?? false
+    return model?.capabilities?.supports?.adaptive_thinking ?? false
   }
 
   supportsVision(model: Model | undefined): boolean {
-    return model?.capabilities.supports.vision ?? false
+    return model?.capabilities?.supports?.vision ?? false
   }
 
   supportsReasoningEffort(model: Model | undefined): boolean {
-    return (model?.capabilities.supports.reasoning_effort?.length ?? 0) > 0
+    return (model?.capabilities?.supports?.reasoning_effort?.length ?? 0) > 0
   }
 
   supportsOutputConfig(model: Model | undefined): boolean {
@@ -105,7 +105,7 @@ export class ModelCache {
     if (!model || MODELS_BLOCKING_NATIVE_STRUCTURED_OUTPUT.has(model.id)) {
       return false
     }
-    return model.capabilities.supports.structured_outputs ?? false
+    return model.capabilities?.supports?.structured_outputs ?? false
   }
 }
 

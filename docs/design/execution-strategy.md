@@ -51,6 +51,7 @@ interface ExecutionStrategy<TResult, TChunk> {
 async function runStrategy<TResult, TChunk>(
   strategy: ExecutionStrategy<TResult, TChunk>,
   signal: { signal: AbortSignal, clientSignal?: AbortSignal, cleanup: () => void },
+  observer?: { onStreamError?: (error: unknown) => void },
 ): Promise<ExecutionResult>
 ```
 
@@ -59,7 +60,8 @@ The executor:
 2. If non-streaming: returns `{ kind: 'json', data: strategy.translateResult(result) }`
 3. If streaming: iterates the async iterable, translating each chunk via `translateStreamChunk`, yielding `SSEOutput` events via an `AsyncGenerator`
 4. On stream completion: calls `onStreamDone()` for any final events
-5. On stream error (if client not aborted): calls `onStreamError()` for error events
+5. On stream error: notifies the optional metadata-only observer, then (if the
+   client did not abort) calls `onStreamError()` for protocol error events
 6. Always calls `signal.cleanup()` in the finally block
 
 ### Key Design Choice: SSEOutput Return Type
@@ -169,6 +171,10 @@ interface PipelineConfig<TPayload, TStrategyCtx> {
 ```
 
 Each route provides its own protocol ID, strategy registry, and a `buildStrategyContext` function that maps the generic pipeline state into the route-specific strategy context type. Model resolution is shared: every route runs the same `resolveRequestModel()`, and `applyModelPolicy` selects whether compact small-model routing participates (only `/v1/messages` sends the Anthropic-shaped payload the policy inspects). The lifecycle hooks let routes inject route-specific logic at well-defined points without forking the pipeline. `afterIngest` resolves the payload that flows into transform/dispatch and its return is required: side-effect-only callers end with `return ctx.payload` to forward the ingested payload unchanged, while replacement callers (e.g. `/responses`) return a different payload to swap in the emulator's upstream payload. The required return makes a forgotten replacement a compile error rather than a silent fallback.
+
+`buildStrategyContext` also receives the internal `requestId`. Strategies use it
+only for metadata-only stream error observation; request content is not passed
+to the observability store.
 
 ### Route Handler Integration
 
