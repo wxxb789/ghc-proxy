@@ -334,6 +334,7 @@ const dashboardState = {
   selectedModelIds: new Set(),
   requests: [],
   selectedRequestId: null,
+  errors: new Map(),
   refreshing: false,
   pendingRefresh: null,
 };
@@ -429,14 +430,17 @@ async function fetchJson(path) {
   return response.json();
 }
 
-function showError(error) {
+function renderErrors() {
   const banner = byId('error-banner');
+  const current = dashboardState.errors.values().next();
+  if (current.done) {
+    banner.textContent = '';
+    banner.hidden = true;
+    return;
+  }
+  const error = current.value;
   banner.textContent = error instanceof Error ? error.message : 'Dashboard refresh failed';
   banner.hidden = false;
-}
-
-function clearError() {
-  byId('error-banner').hidden = true;
 }
 
 function renderOverview(data) {
@@ -721,6 +725,14 @@ function renderRequests(data) {
   const active = Array.isArray(data.active) ? data.active : [];
   const recent = Array.isArray(data.recent) ? data.recent : [];
   dashboardState.requests = active.concat(recent);
+  const selectedRequestExists = dashboardState.requests.some(function (request) {
+    return request.requestId === dashboardState.selectedRequestId;
+  });
+  if (!selectedRequestExists) {
+    dashboardState.selectedRequestId = dashboardState.requests.length > 0
+      ? dashboardState.requests[0].requestId
+      : null;
+  }
   byId('request-count').textContent = active.length + ' active / ' + recent.length + ' completed';
   const body = byId('requests-body');
   clearNode(body);
@@ -745,9 +757,6 @@ function renderRequests(data) {
     body.appendChild(row);
   });
 
-  if (!dashboardState.selectedRequestId && dashboardState.requests.length > 0) {
-    dashboardState.selectedRequestId = dashboardState.requests[0].requestId;
-  }
   renderRequestDetail();
 }
 
@@ -783,9 +792,13 @@ async function loadRequests() {
 }
 
 async function settleLoads(loads) {
-  const results = await Promise.allSettled(loads);
-  const failure = results.find(function (result) { return result.status === 'rejected'; });
-  if (failure) throw failure.reason;
+  const results = await Promise.allSettled(loads.map(function (entry) { return entry.load(); }));
+  results.forEach(function (result, index) {
+    const scope = loads[index].scope;
+    if (result.status === 'rejected') dashboardState.errors.set(scope, result.reason);
+    else dashboardState.errors.delete(scope);
+  });
+  renderErrors();
 }
 
 function queuePendingRefresh(kind) {
@@ -809,10 +822,12 @@ async function refreshAll() {
   dashboardState.refreshing = true;
   byId('refresh-button').disabled = true;
   try {
-    await settleLoads([loadOverview(), loadModels(), loadBehavior(), loadRequests()]);
-    clearError();
-  } catch (error) {
-    showError(error);
+    await settleLoads([
+      { scope: 'overview', load: loadOverview },
+      { scope: 'models', load: loadModels },
+      { scope: 'behavior', load: loadBehavior },
+      { scope: 'requests', load: loadRequests },
+    ]);
   } finally {
     dashboardState.refreshing = false;
     byId('refresh-button').disabled = false;
@@ -824,13 +839,10 @@ async function refreshLiveViews() {
   if (!byId('live-refresh').checked || document.hidden || dashboardState.refreshing) return;
   dashboardState.refreshing = true;
   try {
-    const loads = [loadOverview()];
-    if (dashboardState.activeView === 'requests') loads.push(loadRequests());
-    if (dashboardState.activeView === 'behavior') loads.push(loadBehavior());
+    const loads = [{ scope: 'overview', load: loadOverview }];
+    if (dashboardState.activeView === 'requests') loads.push({ scope: 'requests', load: loadRequests });
+    if (dashboardState.activeView === 'behavior') loads.push({ scope: 'behavior', load: loadBehavior });
     await settleLoads(loads);
-    clearError();
-  } catch (error) {
-    showError(error);
   } finally {
     dashboardState.refreshing = false;
     replayPendingRefresh();
@@ -844,12 +856,12 @@ async function refreshSelectedView(view) {
   }
   dashboardState.refreshing = true;
   try {
-    if (view === 'models') await loadModels();
-    if (view === 'behavior') await loadBehavior();
-    if (view === 'requests') await loadRequests();
-    clearError();
-  } catch (error) {
-    showError(error);
+    const loads = [];
+    if (view === 'overview') loads.push({ scope: 'overview', load: loadOverview });
+    if (view === 'models') loads.push({ scope: 'models', load: loadModels });
+    if (view === 'behavior') loads.push({ scope: 'behavior', load: loadBehavior });
+    if (view === 'requests') loads.push({ scope: 'requests', load: loadRequests });
+    if (loads.length > 0) await settleLoads(loads);
   } finally {
     dashboardState.refreshing = false;
     replayPendingRefresh();
