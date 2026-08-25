@@ -1,3 +1,4 @@
+import type { RecoveryEvent } from '~/lib/request-logger'
 import type { CopilotUsageResponse, Model } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -333,6 +334,87 @@ test('upstream queue records recovery effects without relying on its logger', as
     'recovery.cooldown': 1,
     'recovery.retry': 1,
   })
+})
+
+test('retry exhaustion is not projected as recovery budget exhaustion', async () => {
+  runtimeStore.requests.start({
+    requestId: 'retry-limit-observed',
+    method: 'POST',
+    endpoint: '/v1/responses',
+  })
+  const events: Array<RecoveryEvent> = []
+  const queue = new UpstreamRequestQueue({
+    concurrency: 1,
+    maxRetries: 0,
+    baseDelayMs: 0,
+    maxDelayMs: 1,
+    maxQueueDepth: 1,
+    recoveryBudgetMs: 1_000,
+  }, {
+    logger: {
+      info(_message, fields) {
+        events.push(fields)
+      },
+      warn() {},
+    },
+  })
+
+  const result = await queue.dispatch(
+    async () => new Response('', { status: 500 }),
+    {
+      url: 'https://example.invalid/responses',
+      retryable: true,
+      recovery: {
+        requestId: 'retry-limit-observed',
+        retryCount: 0,
+      },
+    },
+  )
+  result.release()
+
+  expect(events).toContainEqual(expect.objectContaining({
+    event: 'budget',
+    decision: 'retry-limit',
+  }))
+  expect(runtimeStore.requests.summary().effectCounts['recovery.budget_exhausted'])
+    .toBeUndefined()
+})
+
+test('a server delay beyond the recovery budget remains budget exhaustion', async () => {
+  runtimeStore.requests.start({
+    requestId: 'budget-exhausted-observed',
+    method: 'POST',
+    endpoint: '/v1/responses',
+  })
+  const queue = new UpstreamRequestQueue({
+    concurrency: 1,
+    maxRetries: 1,
+    baseDelayMs: 0,
+    maxDelayMs: 1,
+    maxQueueDepth: 1,
+    recoveryBudgetMs: 1_000,
+  }, {
+    logger: { warn() {} },
+  })
+
+  const result = await queue.dispatch(
+    async () => new Response('', {
+      status: 500,
+      headers: { 'retry-after': '1' },
+    }),
+    {
+      url: 'https://example.invalid/responses',
+      retryable: true,
+      recovery: {
+        requestId: 'budget-exhausted-observed',
+        retryCount: 0,
+      },
+    },
+  )
+  result.release()
+
+  expect(runtimeStore.requests.summary().effectCounts['recovery.budget_exhausted'])
+    .toBe(1)
 })
 
 function quota(entitlement: number, remaining: number) {

@@ -971,8 +971,15 @@ function recordRecoveryEffect(event: RecoveryEvent): void {
     runtimeStore.requests.recordEffect(event.requestId, 'recovery.cooldown')
     return
   }
-  if (event.event === 'budget')
+  if (
+    event.event === 'budget'
+    && (
+      event.decision === 'deadline-exceeded'
+      || event.decision === 'server-delay-exceeds-budget'
+    )
+  ) {
     runtimeStore.requests.recordEffect(event.requestId, 'recovery.budget_exhausted')
+  }
 }
 
 export function createDefaultUpstreamRequestQueue(): UpstreamRequestQueue {

@@ -1,4 +1,5 @@
 import type { CopilotClient } from '~/clients'
+import type { UpstreamRecoveryRecord } from '~/clients/upstream-queue'
 import type { CapiRequestContext } from '~/core/capi/types'
 import type {
   ResponseInputItemsListParams,
@@ -19,6 +20,7 @@ export interface ResourceHandlerParams {
   signal: AbortSignal
   /** Injection seam for tests; production callers omit it. */
   client?: CopilotClient
+  recovery?: UpstreamRecoveryRecord
 }
 
 export interface ResourceHandlerBodyParams {
@@ -27,15 +29,16 @@ export interface ResourceHandlerBodyParams {
   signal: AbortSignal
   /** Injection seam for tests; production callers omit it. */
   client?: CopilotClient
+  recovery?: UpstreamRecoveryRecord
 }
 
 // --- Core functions ---
 
 export async function handleRetrieveResponseCore(
-  { params, url, headers, signal, client }: ResourceHandlerParams,
+  { params, url, headers, signal, client, recovery }: ResourceHandlerParams,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
-  const dispatcher = createResourceDispatcher(client)
+  const dispatcher = createResourceDispatcher(client, recovery)
   return await dispatcher.retrieve(
     responseId,
     getRetrieveParamsFromUrl(url),
@@ -44,10 +47,10 @@ export async function handleRetrieveResponseCore(
 }
 
 export async function handleListResponseInputItemsCore(
-  { params, url, headers, signal, client }: ResourceHandlerParams,
+  { params, url, headers, signal, client, recovery }: ResourceHandlerParams,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
-  const dispatcher = createResourceDispatcher(client)
+  const dispatcher = createResourceDispatcher(client, recovery)
   return await dispatcher.listInputItems(
     responseId,
     getInputItemsParamsFromUrl(url),
@@ -56,14 +59,14 @@ export async function handleListResponseInputItemsCore(
 }
 
 export async function handleCreateResponseInputTokensCore(
-  { body, headers, signal, client }: ResourceHandlerBodyParams,
+  { body, headers, signal, client, recovery }: ResourceHandlerBodyParams,
 ): Promise<object> {
   const { payload, meta } = protocolRegistry.ingest<import('~/types').ResponsesInputTokensPayload>(
     'responses-input-tokens',
     body,
     headers,
   )
-  const dispatcher = createResourceDispatcher(client)
+  const dispatcher = createResourceDispatcher(client, recovery)
   return await dispatcher.createInputTokens(
     payload,
     { requestContext: meta.requestContext as Partial<CapiRequestContext> | undefined, signal },
@@ -71,10 +74,10 @@ export async function handleCreateResponseInputTokensCore(
 }
 
 export async function handleDeleteResponseCore(
-  { params, headers, signal, client }: Omit<ResourceHandlerParams, 'url'>,
+  { params, headers, signal, client, recovery }: Omit<ResourceHandlerParams, 'url'>,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
-  const dispatcher = createResourceDispatcher(client)
+  const dispatcher = createResourceDispatcher(client, recovery)
   return await dispatcher.delete(
     responseId,
     { requestContext: readCapiRequestContext(headers), signal },

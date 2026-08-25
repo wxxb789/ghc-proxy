@@ -3,6 +3,7 @@ import type { ClientConfig } from '~/clients'
 
 import consola from 'consola'
 import { CopilotClient, getVSCodeVersion } from '~/clients'
+import { getOrCreateRequestCorrelation } from '~/lib/request-logger'
 import { authStore, modelCache } from '~/state'
 import { buildGitHubUrls } from './ghe-domain'
 import { createDefaultUpstreamRequestQueue } from './upstream-queue'
@@ -42,6 +43,16 @@ export function createCopilotClient(
     recovery,
     ...options,
   })
+}
+
+export function createRequestRecoveryRecord(request: Request): UpstreamRecoveryRecord {
+  const { requestId, callerRequestId } = getOrCreateRequestCorrelation(request)
+  return {
+    requestId,
+    ...(callerRequestId ? { callerRequestId } : {}),
+    callerSignal: request.signal,
+    retryCount: 0,
+  }
 }
 
 export async function cacheModels(client?: CopilotClient): Promise<void> {

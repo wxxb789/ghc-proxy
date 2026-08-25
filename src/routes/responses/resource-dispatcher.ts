@@ -1,4 +1,5 @@
 import type { CopilotClient } from '~/clients'
+import type { UpstreamRecoveryRecord } from '~/clients/upstream-queue'
 import type { CapiRequestContext } from '~/core/capi/types'
 
 import type { ResponseInputItemsListParams, ResponseRetrieveParams, ResponsesInputTokensPayload } from '~/types'
@@ -75,8 +76,11 @@ class UpstreamResourceDispatcher implements ResourceDispatcher {
  * upstream path without patching `CopilotClient.prototype`. Production callers
  * omit it and get the configured client.
  */
-export function createResourceDispatcher(client?: CopilotClient): ResourceDispatcher {
+export function createResourceDispatcher(
+  client?: CopilotClient,
+  recovery?: UpstreamRecoveryRecord,
+): ResourceDispatcher {
   return configStore.isEmulatorEnabled()
     ? new EmulatorResourceDispatcher()
-    : new UpstreamResourceDispatcher(client ?? createCopilotClient())
+    : new UpstreamResourceDispatcher(client ?? createCopilotClient(recovery))
 }
