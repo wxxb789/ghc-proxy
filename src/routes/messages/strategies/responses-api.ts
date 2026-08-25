@@ -19,6 +19,7 @@ export function createMessagesViaResponsesStrategy(
     initiator: 'user' | 'agent'
     signal: AbortSignal
     requestContext: Partial<CapiRequestContext>
+    onTerminalResponse?: (response: ResponsesResult) => void
   },
 ): ExecutionStrategy<ResponsesApiResult, SSEStreamChunk> {
   const translator = new ResponsesStreamTranslator()
@@ -33,7 +34,9 @@ export function createMessagesViaResponsesStrategy(
     },
 
     translateResult(result) {
-      return translateResponsesToAnthropic(result as ResponsesResult)
+      const response = result as ResponsesResult
+      options.onTerminalResponse?.(response)
+      return translateResponsesToAnthropic(response)
     },
 
     translateStreamChunk(chunk): SSEOutput | SSEOutput[] | null {
@@ -48,9 +51,15 @@ export function createMessagesViaResponsesStrategy(
         return null
       }
 
-      const events = translator.onEvent(
-        JSON.parse(chunk.data) as ResponseStreamEvent,
-      )
+      const event = JSON.parse(chunk.data) as ResponseStreamEvent
+      if (
+        event.type === 'response.completed'
+        || event.type === 'response.incomplete'
+        || event.type === 'response.failed'
+      ) {
+        options.onTerminalResponse?.(event.response)
+      }
+      const events = translator.onEvent(event)
 
       return serializeAnthropicSSE(events)
     },

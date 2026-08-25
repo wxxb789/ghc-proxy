@@ -7,10 +7,12 @@ import type { ResponsesPayload, ResponsesResult } from '~/types'
 import { resolveInitiator } from '~/core/capi/request-context'
 import { StrategyRegistry } from '~/dispatch'
 import { runStrategy } from '~/lib/execution-strategy'
+import { runtimeStore } from '~/state'
 
 import { createResponsesPassthroughStrategy } from './strategy'
 
 export interface ResponsesStrategyContext {
+  requestId: string
   copilotClient: CopilotClient
   payload: ResponsesPayload
   upstreamSignal: ReturnType<typeof createUpstreamSignalFromConfig>
@@ -33,7 +35,9 @@ const responsesPassthroughEntry: StrategyEntry<ResponsesStrategyContext> = {
       mapResponse: ctx.decorateResponse,
       onTerminalResponse: ctx.onTerminalResponse,
     })
-    return await runStrategy(strategy, ctx.upstreamSignal)
+    return await runStrategy(strategy, ctx.upstreamSignal, {
+      onStreamError: error => runtimeStore.recordStreamError(ctx.requestId, error),
+    })
   },
 }
 

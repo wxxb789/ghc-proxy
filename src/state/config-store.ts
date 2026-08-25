@@ -48,6 +48,10 @@ export class ConfigStore {
     return getCachedConfig().responsesApiContextManagementModels?.includes(model) ?? false
   }
 
+  getContextManagementModels(): Array<string> {
+    return [...(getCachedConfig().responsesApiContextManagementModels ?? [])]
+  }
+
   getReasoningEffort(model: string): ReasoningEffort {
     return getCachedConfig().modelReasoningEfforts?.[model] ?? DEFAULT_REASONING_EFFORT
   }
@@ -80,6 +84,10 @@ export class ConfigStore {
 
   getOverloadFallback(sourceModel: string): string | undefined {
     return getCachedConfig().overloadFallbacks?.[sourceModel]
+  }
+
+  getOverloadFallbacks(): Record<string, string> {
+    return { ...(getCachedConfig().overloadFallbacks ?? {}) }
   }
 
   hasOverloadFallbacks(): boolean {

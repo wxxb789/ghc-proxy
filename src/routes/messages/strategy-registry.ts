@@ -11,7 +11,7 @@ import { StrategyRegistry } from '~/dispatch'
 import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
 import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
-import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
+import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters, clampMessagesOutputTokens, clampResponsesOutputTokens } from '~/transform/parameter-filter'
 import { stripPhaseFromInputMessages } from '~/transform/responses-input'
@@ -24,6 +24,7 @@ import { createNativeMessagesStrategy } from './strategies/native-messages'
 import { createMessagesViaResponsesStrategy } from './strategies/responses-api'
 
 export interface StrategyContext {
+  requestId: string
   copilotClient: CopilotClient
   anthropicPayload: AnthropicMessagesPayload
   anthropicBetaHeader: string | undefined
@@ -32,6 +33,27 @@ export interface StrategyContext {
   headers: Headers
   requestContext: Partial<CapiRequestContext>
   modelMapping: ModelMappingInfo
+}
+
+export function canUseNativeMessages(
+  model: Model | undefined,
+  payload?: AnthropicMessagesPayload,
+): boolean {
+  return modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
+    && (!hasOutputConfigFormat(payload)
+      || (modelCache.supportsStructuredOutputs(model)
+        && canReduceOutputFormatForNativeMessages(payload)))
+}
+
+export function resolveMessagesStrategyName(
+  model: Model | undefined,
+  payload?: AnthropicMessagesPayload,
+): 'native-messages' | 'responses-api' | 'chat-completions' {
+  if (canUseNativeMessages(model, payload))
+    return 'native-messages'
+  if (modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT))
+    return 'responses-api'
+  return 'chat-completions'
 }
 
 const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
@@ -43,18 +65,34 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
   // (claude-opus-4.7, claude-sonnet-4.6) fail on a Vertex organization policy
   // rather than a protocol limit — they advertise the capability, so
   // `supportsStructuredOutputs` excludes them by ID rather than by flag.
-  canHandle: (model, ctx) => modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
-    && (!hasOutputConfigFormat(ctx?.anthropicPayload)
-      || (modelCache.supportsStructuredOutputs(model)
-        && canReduceOutputFormatForNativeMessages(ctx?.anthropicPayload))),
+  canHandle: (model, ctx) => canUseNativeMessages(model, ctx?.anthropicPayload),
   async execute(ctx) {
-    convertEnabledThinkingToAdaptive(ctx.anthropicPayload, ctx.selectedModel)
-    filterThinkingBlocksForNativeMessages(ctx.anthropicPayload)
-    sanitizeOutputConfig(ctx.anthropicPayload, ctx.selectedModel)
-    reduceOutputFormatForNativeMessages(ctx.anthropicPayload)
-    sanitizeExclusiveSamplingParams(ctx.anthropicPayload)
-    sanitizeCacheControl(ctx.anthropicPayload)
-    clampMessagesOutputTokens(ctx.anthropicPayload, ctx.selectedModel)
+    if (convertEnabledThinkingToAdaptive(ctx.anthropicPayload, ctx.selectedModel))
+      runtimeStore.requests.recordEffect(ctx.requestId, 'messages.thinking_adapted')
+    const filteredThinkingBlocks = filterThinkingBlocksForNativeMessages(ctx.anthropicPayload)
+    if (filteredThinkingBlocks > 0) {
+      runtimeStore.requests.recordEffect(
+        ctx.requestId,
+        'messages.thinking_blocks_filtered',
+        filteredThinkingBlocks,
+      )
+    }
+    if (sanitizeOutputConfig(ctx.anthropicPayload, ctx.selectedModel))
+      runtimeStore.requests.recordEffect(ctx.requestId, 'messages.output_config_sanitized')
+    if (reduceOutputFormatForNativeMessages(ctx.anthropicPayload))
+      runtimeStore.requests.recordEffect(ctx.requestId, 'messages.output_format_reduced')
+    if (sanitizeExclusiveSamplingParams(ctx.anthropicPayload))
+      runtimeStore.requests.recordEffect(ctx.requestId, 'messages.sampling_filtered')
+    const sanitizedCacheControl = sanitizeCacheControl(ctx.anthropicPayload)
+    if (sanitizedCacheControl > 0) {
+      runtimeStore.requests.recordEffect(
+        ctx.requestId,
+        'messages.cache_control_sanitized',
+        sanitizedCacheControl,
+      )
+    }
+    if (clampMessagesOutputTokens(ctx.anthropicPayload, ctx.selectedModel))
+      runtimeStore.requests.recordEffect(ctx.requestId, 'messages.output_tokens_lowered')
 
     const strategy = createNativeMessagesStrategy(
       ctx.copilotClient,
@@ -65,7 +103,9 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
         requestContext: ctx.requestContext,
       },
     )
-    return await runStrategy(strategy, ctx.upstreamSignal)
+    return await runStrategy(strategy, ctx.upstreamSignal, {
+      onStreamError: error => runtimeStore.recordStreamError(ctx.requestId, error),
+    })
   },
 }
 
@@ -80,22 +120,46 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
       }),
     )
 
-    applyContextManagement(
+    const contextThreshold = applyContextManagement(
       responsesPayload,
       ctx.selectedModel?.capabilities.limits.max_prompt_tokens,
     )
-    compactInputByLatestCompaction(responsesPayload)
+    if (contextThreshold !== undefined)
+      runtimeStore.requests.recordEffect(ctx.requestId, 'responses.context_management')
+    const compactedItems = compactInputByLatestCompaction(responsesPayload)
+    if (compactedItems > 0) {
+      runtimeStore.requests.recordEffect(
+        ctx.requestId,
+        'responses.input_compacted',
+        compactedItems,
+      )
+    }
 
     // The translator emits `phase` on assistant messages, and some models
     // reject it as input with a 400. Strip it here for the same reason
     // /responses does — this path generates the field rather than receiving
     // it, so it is if anything more exposed.
-    stripPhaseFromInputMessages(responsesPayload)
+    const strippedPhases = stripPhaseFromInputMessages(responsesPayload)
+    if (strippedPhases > 0) {
+      runtimeStore.requests.recordEffect(
+        ctx.requestId,
+        'responses.phase_filtered',
+        strippedPhases,
+      )
+    }
 
     // Runs last so it can strip any request parameter — including fields
     // injected above (e.g. context_management) — that the model rejects.
-    applyResponsesParameterFilters(responsesPayload, ctx.selectedModel)
-    clampResponsesOutputTokens(responsesPayload)
+    const removedParams = applyResponsesParameterFilters(responsesPayload, ctx.selectedModel)
+    if (removedParams.length > 0) {
+      runtimeStore.requests.recordEffect(
+        ctx.requestId,
+        'responses.parameter_filter',
+        removedParams.length,
+      )
+    }
+    if (clampResponsesOutputTokens(responsesPayload))
+      runtimeStore.requests.recordEffect(ctx.requestId, 'responses.output_tokens_raised')
 
     const { vision, initiator } = getResponsesRequestOptions(responsesPayload)
     const strategy = createMessagesViaResponsesStrategy(
@@ -106,9 +170,19 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
         initiator,
         signal: ctx.upstreamSignal.signal,
         requestContext: ctx.requestContext,
+        onTerminalResponse(response) {
+          if (response.status === 'failed' || response.error) {
+            runtimeStore.requests.recordError(
+              ctx.requestId,
+              'Upstream HTTP 200 (response_failed)',
+            )
+          }
+        },
       },
     )
-    return await runStrategy(strategy, ctx.upstreamSignal)
+    return await runStrategy(strategy, ctx.upstreamSignal, {
+      onStreamError: error => runtimeStore.recordStreamError(ctx.requestId, error),
+    })
   },
 }
 
@@ -152,7 +226,9 @@ const chatCompletionsEntry: StrategyEntry<StrategyContext> = {
       plan,
       ctx.upstreamSignal.signal,
     )
-    return await runStrategy(strategy, ctx.upstreamSignal)
+    return await runStrategy(strategy, ctx.upstreamSignal, {
+      onStreamError: error => runtimeStore.recordStreamError(ctx.requestId, error),
+    })
   },
 }
 

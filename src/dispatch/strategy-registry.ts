@@ -16,6 +16,10 @@ export class StrategyRegistry<TContext = unknown> {
     this.entries.push(entry)
   }
 
+  listNames(): Array<string> {
+    return this.entries.map(entry => entry.name)
+  }
+
   select(model: Model | undefined, ctx?: TContext): StrategyEntry<TContext> {
     if (this.entries.length === 0) {
       throw new Error('StrategyRegistry has no registered entries')

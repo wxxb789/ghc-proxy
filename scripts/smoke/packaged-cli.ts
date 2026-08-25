@@ -24,6 +24,7 @@ const EXPECTED_RUNTIME_PROBES = [
   'response-commit-boundary',
   'caller-cancellation',
   'protocol-payload-contract',
+  'dashboard-bundle-contract',
 ]
 
 async function main() {

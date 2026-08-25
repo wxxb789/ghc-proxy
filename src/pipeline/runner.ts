@@ -22,7 +22,8 @@ import {
   createUpstreamDeadlineFromConfig,
   createUpstreamSignalFromConfig,
 } from '~/lib/upstream-signal'
-import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT } from '~/state'
+import { effectForStrategy } from '~/observability/effects'
+import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 import { resolveRequestModel } from '~/transform/resolve-model'
 
 export interface PipelineParams {
@@ -256,6 +257,7 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
   const baseModel = resolved.model
   const selectedModel = options.target ?? resolved.resolvedModel
   const modelMapping = options.modelMapping ?? resolved.modelMapping
+  runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
 
   if (options.target)
     (payload as { model: string }).model = options.target.id
@@ -284,6 +286,10 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
       recovery,
     })
     const entry = config.strategyRegistry.select(selectedModel, ctx)
+    runtimeStore.requests.recordStrategy(params.requestId, entry.name)
+    const strategyEffect = effectForStrategy(config.protocol, entry.name)
+    if (strategyEffect)
+      runtimeStore.requests.recordEffect(params.requestId, strategyEffect)
     return {
       baseModel,
       modelMapping,
@@ -295,6 +301,9 @@ async function prepareAttempt<TPayload, TStrategyCtx>(
         catch (error) {
           upstreamSignal.cleanup()
           throw error
+        }
+        finally {
+          runtimeStore.requests.recordModelMapping(params.requestId, modelMapping)
         }
       },
     }

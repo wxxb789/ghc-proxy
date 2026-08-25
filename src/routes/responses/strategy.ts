@@ -106,17 +106,9 @@ export function createResponsesPassthroughStrategy(
     translateResult(result) {
       const response = result as ResponsesResult
       const mapped = options.mapResponse ? options.mapResponse(response) : response
-      // A non-stream upstream body is always terminal, so persist unconditionally
-      // here (the stream seam is gated by tryExtractTerminalResponse instead).
-      // `onTerminalResponse` encapsulates the shouldStore guard, so it is a no-op
-      // when store=false. It MUST stay synchronous and in-memory: runStrategy calls
-      // translateResult AFTER signal.cleanup() on the non-stream branch
-      // (execution-strategy.ts), so a throwing/async persist here would leak the
-      // upstream signal. Gating on `options.mapResponse` mirrors translateStreamChunk
-      // and the both-or-neither wiring in buildStrategyContext.
-      if (options.mapResponse) {
-        options.onTerminalResponse?.(mapped)
-      }
+      // The callback combines metadata observation with optional emulator
+      // persistence. It remains synchronous and process-local.
+      options.onTerminalResponse?.(mapped)
       return mapped
     },
 

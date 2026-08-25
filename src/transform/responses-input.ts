@@ -15,9 +15,9 @@ import consola from 'consola'
  * strategy has the translator *generate* it (see `resolveAssistantPhase` in
  * `translator/responses/response-items.ts`), so neither path is exempt.
  */
-export function stripPhaseFromInputMessages(payload: ResponsesPayload): void {
+export function stripPhaseFromInputMessages(payload: ResponsesPayload): number {
   if (!Array.isArray(payload.input)) {
-    return
+    return 0
   }
 
   let stripped = 0
@@ -36,4 +36,5 @@ export function stripPhaseFromInputMessages(payload: ResponsesPayload): void {
   if (stripped > 0) {
     consola.debug(`Stripped phase from ${stripped} input message item(s)`)
   }
+  return stripped
 }

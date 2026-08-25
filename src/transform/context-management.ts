@@ -56,35 +56,39 @@ function createCompactionContextManagement(
 export function applyContextManagement(
   payload: ResponsesPayload,
   maxPromptTokens?: number,
-): void {
+): number | undefined {
   if (payload.context_management !== undefined) {
-    return
+    return undefined
   }
   if (!configStore.isContextManagementModel(payload.model)) {
-    return
+    return undefined
   }
 
+  const threshold = resolveResponsesCompactThreshold(maxPromptTokens)
   payload.context_management = createCompactionContextManagement(
-    resolveResponsesCompactThreshold(maxPromptTokens),
+    threshold,
   )
+  return threshold
 }
 
 export function compactInputByLatestCompaction(
   payload: ResponsesPayload,
-): void {
+): number {
   if (!configStore.isAutoCompactResponsesInputEnabled()) {
-    return
+    return 0
   }
   if (!Array.isArray(payload.input) || payload.input.length === 0) {
-    return
+    return 0
   }
 
   const latestCompactionMessageIndex = getLatestCompactionMessageIndex(payload.input)
   if (latestCompactionMessageIndex === undefined) {
-    return
+    return 0
   }
 
+  const removed = latestCompactionMessageIndex
   payload.input = payload.input.slice(latestCompactionMessageIndex)
+  return removed
 }
 
 function getLatestCompactionMessageIndex(

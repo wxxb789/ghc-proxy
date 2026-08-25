@@ -1,0 +1,163 @@
+import { describe, expect, test } from 'bun:test'
+
+import {
+  classifyObservedEndpoint,
+  RECENT_REQUEST_LIMIT,
+  RequestActivityStore,
+  sanitizeObservedError,
+} from '~/observability/request-store'
+
+describe('RequestActivityStore', () => {
+  test('tracks active metadata and moves completed requests into the recent ring', () => {
+    let now = 1_000
+    const store = new RequestActivityStore(() => now)
+
+    store.start({
+      requestId: 'req-1',
+      method: 'POST',
+      endpoint: '/v1/messages',
+      requestedModel: 'claude-sonnet-5',
+    })
+    store.recordModelMapping('req-1', {
+      originalModel: 'claude-sonnet-5',
+      steps: [{
+        tag: 'COMPACT',
+        from: 'claude-sonnet-5',
+        to: 'claude-haiku-4.5',
+      }],
+    })
+    store.recordStrategy('req-1', 'native-messages')
+    store.markStreaming('req-1')
+
+    now = 1_025
+    expect(store.snapshot()).toMatchObject({
+      active: [{
+        requestId: 'req-1',
+        endpoint: '/v1/messages',
+        state: 'streaming',
+        durationMs: 25,
+        requestedModel: 'claude-sonnet-5',
+        effectiveModel: 'claude-haiku-4.5',
+        selectedStrategy: 'native-messages',
+        effects: [{ id: 'model.compact_route', count: 1 }],
+      }],
+      recent: [],
+    })
+
+    now = 1_040
+    store.complete('req-1', 200)
+
+    expect(store.snapshot()).toMatchObject({
+      active: [],
+      recent: [{
+        requestId: 'req-1',
+        state: 'completed',
+        status: 200,
+        durationMs: 40,
+      }],
+      totals: {
+        started: 1,
+        completed: 1,
+        failed: 0,
+      },
+    })
+    expect(store.summary()).toMatchObject({
+      active: 0,
+      recent: 1,
+      totals: { started: 1, completed: 1, failed: 0 },
+      effectCounts: { 'model.compact_route': 1 },
+    })
+  })
+
+  test(`hard-caps completed history at exactly ${RECENT_REQUEST_LIMIT}`, () => {
+    let now = 0
+    const store = new RequestActivityStore(() => now)
+
+    for (let index = 0; index < RECENT_REQUEST_LIMIT + 44; index++) {
+      store.start({
+        requestId: `req-${index}`,
+        method: 'POST',
+        endpoint: '/v1/responses',
+      })
+      now++
+      store.complete(`req-${index}`, 200)
+    }
+
+    const snapshot = store.snapshot()
+    expect(snapshot.active).toHaveLength(0)
+    expect(snapshot.recent).toHaveLength(RECENT_REQUEST_LIMIT)
+    expect(snapshot.recent[0]?.requestId).toBe('req-299')
+    expect(snapshot.recent.at(-1)?.requestId).toBe('req-44')
+  })
+
+  test('keeps in-flight requests separate from the completed ring', () => {
+    const store = new RequestActivityStore(() => 1)
+
+    for (let index = 0; index < RECENT_REQUEST_LIMIT; index++) {
+      store.start({ requestId: `done-${index}`, method: 'GET', endpoint: '/health' })
+      store.complete(`done-${index}`, 200)
+    }
+    store.start({ requestId: 'active-1', method: 'POST', endpoint: '/v1/messages' })
+
+    const snapshot = store.snapshot()
+    expect(snapshot.active.map(request => request.requestId)).toEqual(['active-1'])
+    expect(snapshot.recent).toHaveLength(RECENT_REQUEST_LIMIT)
+  })
+
+  test('stores only bounded metadata and safe effect counts', () => {
+    const store = new RequestActivityStore(() => 1)
+    store.start({
+      requestId: 'req-safe',
+      method: 'POST',
+      endpoint: '/v1/responses',
+      requestedModel: `gpt-5.6\nBearer secret ${'x'.repeat(300)}`,
+    })
+    store.recordEffect('req-safe', 'responses.parameter_filter')
+    store.recordEffect('req-safe', 'responses.parameter_filter')
+    store.recordError('req-safe', 'Upstream HTTP 429 (rate_limit_error)')
+    store.complete('req-safe', 429)
+
+    const json = JSON.stringify(store.snapshot())
+    expect(json).not.toContain('Bearer secret')
+    expect(json).not.toContain('prompt')
+    expect(json).not.toContain('headers')
+    expect(store.snapshot().recent[0]).toMatchObject({
+      state: 'failed',
+      effects: [{ id: 'responses.parameter_filter', count: 2 }],
+      errorSummary: 'Upstream HTTP 429 (rate_limit_error)',
+    })
+  })
+})
+
+describe('dashboard metadata sanitizers', () => {
+  test('normalizes known dynamic endpoints without retaining resource ids or query strings', () => {
+    expect(classifyObservedEndpoint('http://localhost/v1/responses/resp_secret/input_items?include=all'))
+      .toBe('/v1/responses/:responseId/input_items')
+    expect(classifyObservedEndpoint('http://localhost/private/token-in-path'))
+      .toBe('unmatched')
+    expect(classifyObservedEndpoint('http://localhost/dashboard')).toBeUndefined()
+    expect(classifyObservedEndpoint('http://localhost/dashboard/api/requests')).toBeUndefined()
+    expect(classifyObservedEndpoint('http://localhost/dashboarding')).toBe('unmatched')
+    expect(classifyObservedEndpoint('http://localhost/responses/input_tokens'))
+      .toBe('/responses/input_tokens')
+    expect(classifyObservedEndpoint('http://localhost/v1/responses/input_tokens?model=gpt'))
+      .toBe('/v1/responses/input_tokens')
+    expect(classifyObservedEndpoint('http://localhost/v1/responses/input_tokens/'))
+      .toBe('/v1/responses/input_tokens')
+  })
+
+  test('classifies errors without storing raw messages', () => {
+    expect(sanitizeObservedError(new Error('prompt text and Bearer secret'), 'UNKNOWN', 500))
+      .toBe('Unhandled proxy error')
+    expect(sanitizeObservedError(new DOMException('timed out', 'TimeoutError'), 'UNKNOWN', 504))
+      .toBe('Upstream timeout')
+    expect(sanitizeObservedError({ body: { error: { type: 'rate_limit_error' } } }, 'HTTP', 429))
+      .toBe('HTTP 429 (rate_limit_error)')
+    expect(sanitizeObservedError({ body: { error: { type: 'invalid_request_error', code: 'unsupported_input' } } }, 'HTTP', 400))
+      .toBe('HTTP 400 (unsupported_input)')
+    expect(sanitizeObservedError({ body: { error: { type: 'secret_token_123' } } }, 'HTTP', 400))
+      .toBe('HTTP 400')
+    expect(sanitizeObservedError({ body: { error: { type: 'not_found_error' } } }, 'HTTP', 404))
+      .toBe('HTTP 404 (not_found_error)')
+  })
+})

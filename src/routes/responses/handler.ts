@@ -4,7 +4,7 @@ import type { ResponseFunctionTool, ResponsesPayload, ResponsesResult, ResponseT
 import consola from 'consola'
 import { throwInvalidRequestError } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
-import { configStore, modelCache, RESPONSES_ENDPOINT } from '~/state'
+import { configStore, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters, clampResponsesOutputTokens, clampResponsesReasoningEffort } from '~/transform/parameter-filter'
@@ -14,6 +14,11 @@ import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest
 import { responsesStrategyRegistry } from './strategy-registry'
 
 const HTTP_URL_RE = /^https?:\/\//i
+
+export const RESPONSES_INPUT_POLICY = {
+  filtersUnresolvableItems: true,
+  rejectsRemoteImageUrls: true,
+} as const
 
 export interface ResponsesCoreParams {
   body: unknown
@@ -49,9 +54,48 @@ export async function handleResponsesCore(
         return emulatorPrepared?.upstreamPayload ?? payload
       },
       afterTransform({ payload, selectedModel }) {
-        applyResponsesToolTransforms(payload)
-        applyResponsesInputPolicies(payload)
-        compactInputByLatestCompaction(payload)
+        const toolEffects = applyResponsesToolTransforms(payload)
+        if (toolEffects.applyPatch > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.function_apply_patch',
+            toolEffects.applyPatch,
+          )
+        }
+        if (toolEffects.functionSchemas > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.function_schema_normalized',
+            toolEffects.functionSchemas,
+          )
+        }
+
+        const inputEffects = applyResponsesInputPolicies(payload)
+        if (inputEffects.storeDisabled)
+          runtimeStore.requests.recordEffect(requestId, 'responses.store_disabled')
+        if (inputEffects.filteredItems > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.input_items_filtered',
+            inputEffects.filteredItems,
+          )
+        }
+        if (inputEffects.filteredPhases > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.phase_filtered',
+            inputEffects.filteredPhases,
+          )
+        }
+
+        const compactedItems = compactInputByLatestCompaction(payload)
+        if (compactedItems > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.input_compacted',
+            compactedItems,
+          )
+        }
 
         if (!selectedModel) {
           throwInvalidRequestError(
@@ -66,23 +110,36 @@ export async function handleResponsesCore(
           )
         }
 
-        applyContextManagement(
+        const contextThreshold = applyContextManagement(
           payload,
           selectedModel.capabilities.limits.max_prompt_tokens,
         )
+        if (contextThreshold !== undefined)
+          runtimeStore.requests.recordEffect(requestId, 'responses.context_management')
 
         // Runs last so it can strip any request parameter — including fields
         // this proxy injects above (e.g. context_management) — that the model
         // rejects, per the configured filter rules.
-        applyResponsesParameterFilters(payload, selectedModel)
-        clampResponsesOutputTokens(payload)
-        clampResponsesReasoningEffort(payload, selectedModel)
+        const removedParams = applyResponsesParameterFilters(payload, selectedModel)
+        if (removedParams.length > 0) {
+          runtimeStore.requests.recordEffect(
+            requestId,
+            'responses.parameter_filter',
+            removedParams.length,
+          )
+        }
+        if (clampResponsesOutputTokens(payload))
+          runtimeStore.requests.recordEffect(requestId, 'responses.output_tokens_raised')
+        if (clampResponsesReasoningEffort(payload, selectedModel))
+          runtimeStore.requests.recordEffect(requestId, 'responses.reasoning_effort_lowered')
       },
-      buildStrategyContext({ payload, meta, selectedModel, copilotClient, upstreamSignal }) {
+      buildStrategyContext({ payload, meta, selectedModel, copilotClient, upstreamSignal, recovery }) {
         const { vision, initiator } = getResponsesRequestOptions(payload)
         const prepared = emulatorPrepared
         const requestPayload = originalPayload ?? payload
+        const strategyRequestId = recovery.requestId
         return {
+          requestId: strategyRequestId,
           copilotClient,
           payload,
           upstreamSignal,
@@ -96,17 +153,20 @@ export async function handleResponsesCore(
                 prepared,
               )
             : undefined,
-          onTerminalResponse: prepared
-            ? (terminalResponse: ResponsesResult) => {
-                if (!prepared.shouldStore) {
-                  return
-                }
-                persistEmulatorResponse(
-                  terminalResponse,
-                  prepared.effectiveInputItems,
-                )
-              }
-            : undefined,
+          onTerminalResponse(terminalResponse: ResponsesResult) {
+            if (terminalResponse.status === 'failed' || terminalResponse.error) {
+              runtimeStore.requests.recordError(
+                strategyRequestId,
+                'Upstream HTTP 200 (response_failed)',
+              )
+            }
+            if (prepared?.shouldStore) {
+              persistEmulatorResponse(
+                terminalResponse,
+                prepared.effectiveInputItems,
+              )
+            }
+          },
         }
       },
     },
@@ -115,20 +175,26 @@ export async function handleResponsesCore(
   return pipelineResult
 }
 
-function applyResponsesToolTransforms(payload: ResponsesPayload): void {
-  applyFunctionApplyPatch(payload)
-  applyFunctionToolCompatibilityDefaults(payload)
+function applyResponsesToolTransforms(
+  payload: ResponsesPayload,
+): { applyPatch: number, functionSchemas: number } {
+  return {
+    applyPatch: applyFunctionApplyPatch(payload),
+    functionSchemas: applyFunctionToolCompatibilityDefaults(payload),
+  }
 }
 
-function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): void {
+function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): number {
   if (!Array.isArray(payload.tools)) {
-    return
+    return 0
   }
 
+  let normalized = 0
   payload.tools = payload.tools.map((tool) => {
     if (!isResponseFunctionTool(tool)) {
       return tool
     }
+    normalized++
 
     // Forward the caller's `strict`; omit the key entirely when they sent none.
     //
@@ -148,23 +214,26 @@ function applyFunctionToolCompatibilityDefaults(payload: ResponsesPayload): void
       ...(strict != null ? { strict } : {}),
     }
   })
+  return normalized
 }
 
 function isResponseFunctionTool(tool: ResponseTool): tool is ResponseFunctionTool {
   return tool.type === 'function'
 }
 
-function applyFunctionApplyPatch(payload: ResponsesPayload): void {
+function applyFunctionApplyPatch(payload: ResponsesPayload): number {
   if (!configStore.isFunctionApplyPatchEnabled() || !Array.isArray(payload.tools)) {
-    return
+    return 0
   }
 
+  let converted = 0
   payload.tools = payload.tools.map((tool) => {
     if (
       tool.type === 'custom'
       && typeof tool.name === 'string'
       && tool.name === 'apply_patch'
     ) {
+      converted++
       return {
         type: 'function',
         name: tool.name,
@@ -185,17 +254,22 @@ function applyFunctionApplyPatch(payload: ResponsesPayload): void {
 
     return tool
   })
+  return converted
 }
 
-function applyResponsesInputPolicies(payload: ResponsesPayload): void {
+function applyResponsesInputPolicies(
+  payload: ResponsesPayload,
+): { storeDisabled: boolean, filteredItems: number, filteredPhases: number } {
   // Force store=false so Copilot never returns opaque item IDs that it
   // cannot resolve on subsequent requests (→ 404). Clients should also
   // set { "store": false } in their Provider Options.
+  const storeDisabled = payload.store !== false
   payload.store = false
 
-  stripUnresolvableInputItems(payload)
-  stripPhaseFromInputMessages(payload)
+  const filteredItems = stripUnresolvableInputItems(payload)
+  const filteredPhases = stripPhaseFromInputMessages(payload)
   rejectUnsupportedRemoteImageUrls(payload)
+  return { storeDisabled, filteredItems, filteredPhases }
 }
 
 /**
@@ -204,9 +278,9 @@ function applyResponsesInputPolicies(payload: ResponsesPayload): void {
  * - `function_call_output` items whose `call_id` has no matching prior
  *   `function_call` in the same input array (orphaned outputs)
  */
-function stripUnresolvableInputItems(payload: ResponsesPayload): void {
-  if (!Array.isArray(payload.input)) {
-    return
+function stripUnresolvableInputItems(payload: ResponsesPayload): number {
+  if (!RESPONSES_INPUT_POLICY.filtersUnresolvableItems || !Array.isArray(payload.input)) {
+    return 0
   }
 
   const functionCallIds = new Set<string>()
@@ -249,10 +323,15 @@ function stripUnresolvableInputItems(payload: ResponsesPayload): void {
       + ` (item_reference / orphaned function_call_output)`,
     )
   }
+  return originalLength - payload.input.length
 }
 
 function rejectUnsupportedRemoteImageUrls(payload: ResponsesPayload): void {
-  if (!Array.isArray(payload.input) || !containsRemoteImageUrl(payload.input)) {
+  if (
+    !RESPONSES_INPUT_POLICY.rejectsRemoteImageUrls
+    || !Array.isArray(payload.input)
+    || !containsRemoteImageUrl(payload.input)
+  ) {
     return
   }
 

@@ -11,6 +11,7 @@ import { Agent } from 'undici'
 import { UpstreamRequestQueue } from './clients/upstream-queue'
 import { HTTPError, isRetryableConnectionEstablishmentError } from './lib/error'
 import { getTokenCount } from './lib/tokenizer'
+import { createDashboardRoutes } from './routes/dashboard/route'
 
 interface RunSelfCheckOptions {
   json: boolean
@@ -46,6 +47,7 @@ const RUNTIME_PROBES = [
   ['response-commit-boundary', probeResponseCommitBoundary],
   ['caller-cancellation', probeCallerCancellation],
   ['protocol-payload-contract', probeProtocolPayloadContract],
+  ['dashboard-bundle-contract', probeDashboardBundleContract],
 ] as const
 
 async function probeEncoding(encoding: string): Promise<EncodingProbe> {
@@ -271,6 +273,30 @@ async function probeProtocolPayloadContract(): Promise<void> {
     [...response.headers.keys()].every(name => !name.startsWith('x-ghc-')),
     'public response gained a non-standard recovery header',
   )
+}
+
+async function probeDashboardBundleContract(): Promise<void> {
+  const app = createDashboardRoutes()
+  const [htmlResponse, cssResponse, jsResponse] = await Promise.all([
+    app.handle(new Request('http://localhost/dashboard')),
+    app.handle(new Request('http://localhost/dashboard/styles.css')),
+    app.handle(new Request('http://localhost/dashboard/app.js')),
+  ])
+
+  assertProbe(htmlResponse.status === 200, `dashboard HTML returned ${htmlResponse.status}`)
+  assertProbe(cssResponse.status === 200, `dashboard CSS returned ${cssResponse.status}`)
+  assertProbe(jsResponse.status === 200, `dashboard JS returned ${jsResponse.status}`)
+
+  const [html, css, js] = await Promise.all([
+    htmlResponse.text(),
+    cssResponse.text(),
+    jsResponse.text(),
+  ])
+  assertProbe(html.includes('/dashboard/styles.css'), 'dashboard HTML lost its CSS route')
+  assertProbe(html.includes('/dashboard/app.js'), 'dashboard HTML lost its JS route')
+  assertProbe(css.includes('.app-header'), 'dashboard CSS was not bundled')
+  assertProbe(js.includes('fetchJson(\'/dashboard/api/overview\')'), 'dashboard JS was not bundled')
+  assertProbe(!js.includes('innerHTML'), 'dashboard JS uses unsafe HTML insertion')
 }
 
 function createRuntimeProbeQueue(

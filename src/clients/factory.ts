@@ -1,4 +1,4 @@
-import type { UpstreamRecoveryRecord, UpstreamRequestQueueOptions } from './upstream-queue'
+import type { UpstreamRecoveryRecord, UpstreamRequestQueueOptions, UpstreamRequestQueueSnapshot } from './upstream-queue'
 import type { ClientConfig } from '~/clients'
 
 import consola from 'consola'
@@ -13,6 +13,10 @@ export function configureUpstreamRequestQueue(
   options: Partial<UpstreamRequestQueueOptions>,
 ): void {
   upstreamRequestQueue.updateOptions(options)
+}
+
+export function getUpstreamRequestQueueSnapshot(): UpstreamRequestQueueSnapshot {
+  return upstreamRequestQueue.snapshot()
 }
 
 export function getClientConfig(): ClientConfig {

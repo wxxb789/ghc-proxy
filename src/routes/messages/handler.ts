@@ -43,8 +43,9 @@ export async function handleMessagesCore(
           // different one); returning ctx.payload is the no-substitution case.
           return payload
         },
-        buildStrategyContext({ payload, meta, headers: reqHeaders, selectedModel, copilotClient, upstreamSignal, modelMapping }) {
+        buildStrategyContext({ payload, meta, headers: reqHeaders, selectedModel, copilotClient, upstreamSignal, modelMapping, recovery }) {
           return {
+            requestId: recovery.requestId,
             copilotClient,
             anthropicPayload: payload,
             anthropicBetaHeader,

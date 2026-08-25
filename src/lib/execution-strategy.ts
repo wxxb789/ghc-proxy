@@ -31,6 +31,7 @@ export interface ExecutionStrategy<TResult, TChunk> {
 export async function runStrategy<TResult, TChunk>(
   strategy: ExecutionStrategy<TResult, TChunk>,
   signal: { signal: AbortSignal, clientSignal?: AbortSignal, cleanup: () => void },
+  observer?: { onStreamError?: (error: unknown) => void },
 ): Promise<ExecutionResult> {
   let result: TResult
   try {
@@ -63,6 +64,7 @@ export async function runStrategy<TResult, TChunk>(
       }
     }
     catch (error) {
+      observer?.onStreamError?.(error)
       // Only suppress error events when the *client* disconnected.
       // Upstream timeouts (proxy-side abort) should still emit onStreamError
       // so strategies can translate them into proper SSE error events.

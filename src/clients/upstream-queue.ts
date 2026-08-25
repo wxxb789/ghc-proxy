@@ -18,6 +18,7 @@ import {
   upstreamErrorType,
 } from '~/lib/error'
 import { logRecoveryEvent } from '~/lib/request-logger'
+import { runtimeStore } from '~/state/runtime'
 import { formatDurationMs } from '~/util/duration'
 
 export interface UpstreamRequestQueueOptions {
@@ -27,6 +28,15 @@ export interface UpstreamRequestQueueOptions {
   maxDelayMs: number
   maxQueueDepth: number
   recoveryBudgetMs: number
+}
+
+export interface UpstreamRequestQueueSnapshot {
+  active: number
+  concurrency: number
+  pending: number
+  maxPending: number
+  accountCooldown: boolean
+  modelCooldowns: number
 }
 
 export interface RecoveryCooldownState {
@@ -212,6 +222,18 @@ export class UpstreamRequestQueue {
   updateOptions(options: Partial<UpstreamRequestQueueOptions>): void {
     this.options = normalizeOptions(mergeDefinedOptions(this.options, options))
     this.drain()
+  }
+
+  snapshot(): UpstreamRequestQueueSnapshot {
+    this.clearExpiredModels()
+    return {
+      active: this.active,
+      concurrency: this.options.concurrency,
+      pending: this.waiters.length,
+      maxPending: this.options.maxQueueDepth,
+      accountCooldown: this.accountNotBefore > this.now(),
+      modelCooldowns: this.modelNotBefore.size,
+    }
   }
 
   async dispatch(
@@ -896,8 +918,6 @@ export class UpstreamRequestQueue {
       pendingDepth: this.waiters.length,
       maxPendingDepth: this.options.maxQueueDepth,
     }
-    if (!this.logger.info)
-      return
     const eventFields: RecoveryEvent = {
       requestId: recovery.requestId,
       callerRequestId: recovery.callerRequestId,
@@ -912,6 +932,9 @@ export class UpstreamRequestQueue {
         : {}),
       ...fields,
     }
+    recordRecoveryEffect(eventFields)
+    if (!this.logger.info)
+      return
     if (this.logger === consola)
       logRecoveryEvent(eventFields)
     else
@@ -933,6 +956,23 @@ export class UpstreamRequestQueue {
     if (waiter.signal && waiter.onAbort)
       waiter.signal.removeEventListener('abort', waiter.onAbort)
   }
+}
+
+function recordRecoveryEffect(event: RecoveryEvent): void {
+  if (event.event === 'grant' && (event.queueWaitMs ?? 0) > 0) {
+    runtimeStore.requests.recordEffect(event.requestId, 'recovery.queued')
+    return
+  }
+  if (event.event === 'retry' && event.decision === 'retry') {
+    runtimeStore.requests.recordEffect(event.requestId, 'recovery.retry')
+    return
+  }
+  if (event.event === 'cooldown') {
+    runtimeStore.requests.recordEffect(event.requestId, 'recovery.cooldown')
+    return
+  }
+  if (event.event === 'budget')
+    runtimeStore.requests.recordEffect(event.requestId, 'recovery.budget_exhausted')
 }
 
 export function createDefaultUpstreamRequestQueue(): UpstreamRequestQueue {
