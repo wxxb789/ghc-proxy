@@ -20,9 +20,11 @@ export function createMessagesViaResponsesStrategy(
     signal: AbortSignal
     requestContext: Partial<CapiRequestContext>
     onTerminalResponse?: (response: ResponsesResult) => void
+    onStreamEndWithoutTerminal?: () => void
   },
 ): ExecutionStrategy<ResponsesApiResult, SSEStreamChunk> {
   const translator = new ResponsesStreamTranslator()
+  let terminalResponseSeen = false
 
   return {
     execute() {
@@ -57,6 +59,7 @@ export function createMessagesViaResponsesStrategy(
         || event.type === 'response.incomplete'
         || event.type === 'response.failed'
       ) {
+        terminalResponseSeen = true
         options.onTerminalResponse?.(event.response)
       }
       const events = translator.onEvent(event)
@@ -69,6 +72,8 @@ export function createMessagesViaResponsesStrategy(
     },
 
     onStreamDone() {
+      if (!terminalResponseSeen)
+        options.onStreamEndWithoutTerminal?.()
       if (translator.isCompleted) {
         return null
       }

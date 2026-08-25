@@ -178,6 +178,14 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
             )
           }
         },
+        onStreamEndWithoutTerminal() {
+          if (ctx.upstreamSignal.clientSignal?.aborted)
+            return
+          runtimeStore.requests.recordError(
+            ctx.requestId,
+            'Upstream HTTP 200 (response_stream_eof)',
+          )
+        },
       },
     )
     return await runStrategy(strategy, ctx.upstreamSignal, {

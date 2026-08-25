@@ -1,4 +1,5 @@
-import type { CapturedResponsesCall } from './helpers'
+import type { ServerSentEventMessage } from 'fetch-event-stream'
+import type { CapturedMessagesCall, CapturedResponsesCall } from './helpers'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
@@ -12,6 +13,7 @@ import {
   buildModelsResponse,
   buildResponsesResult,
   clearConfig,
+  mockMessages,
   mockResponses,
   restoreStateSnapshot,
   saveStateSnapshot,
@@ -20,11 +22,13 @@ import {
 
 let snapshot: ReturnType<typeof saveStateSnapshot>
 let createChatCompletions: typeof CopilotClient.prototype.createChatCompletions
+let createMessages: typeof CopilotClient.prototype.createMessages
 let createResponses: typeof CopilotClient.prototype.createResponses
 
 beforeEach(() => {
   snapshot = saveStateSnapshot()
   createChatCompletions = CopilotClient.prototype.createChatCompletions
+  createMessages = CopilotClient.prototype.createMessages
   createResponses = CopilotClient.prototype.createResponses
   clearConfig()
   setupDefaultTestState()
@@ -33,6 +37,7 @@ beforeEach(() => {
 
 afterEach(() => {
   CopilotClient.prototype.createChatCompletions = createChatCompletions
+  CopilotClient.prototype.createMessages = createMessages
   CopilotClient.prototype.createResponses = createResponses
   runtimeStore.requests.reset()
   clearConfig()
@@ -42,6 +47,21 @@ afterEach(() => {
 async function settleResponse(response: Response): Promise<void> {
   await response.text()
   await new Promise(resolve => setTimeout(resolve, 50))
+}
+
+function createTerminalLessResponsesStream(
+  model = 'gpt-5.6-sol',
+): AsyncGenerator<ServerSentEventMessage, void, unknown> {
+  return (async function* () {
+    yield {
+      event: 'response.created',
+      data: JSON.stringify({
+        type: 'response.created',
+        sequence_number: 0,
+        response: buildResponsesResult({ model, status: 'in_progress' }),
+      }),
+    }
+  })()
 }
 
 describe('dashboard request lifecycle', () => {
@@ -144,6 +164,88 @@ describe('dashboard request lifecycle', () => {
     ]))
   })
 
+  test('counts only function schemas that actually change', async () => {
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('gpt-5.6-sol', {
+      supported_endpoints: ['/responses'],
+    })))
+    CopilotClient.prototype.createResponses = mockResponses(
+      buildResponsesResult({ model: 'gpt-5.6-sol', status: 'completed' }),
+      calls,
+    )
+
+    const response = await createServer().handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.6-sol',
+        input: 'hello',
+        tools: [
+          {
+            type: 'function',
+            name: 'unchanged',
+            parameters: { type: 'object', properties: { value: { type: 'string' } } },
+          },
+          {
+            type: 'function',
+            name: 'changed',
+            parameters: { type: 'object', title: 'metadata', properties: {} },
+          },
+        ],
+      }),
+    }))
+    await settleResponse(response)
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.payload.tools?.[1]).toMatchObject({
+      parameters: { type: 'object', properties: {} },
+    })
+    expect(runtimeStore.requests.snapshot().recent[0]?.effects).toContainEqual({
+      id: 'responses.function_schema_normalized',
+      count: 1,
+    })
+  })
+
+  test('counts only cache_control blocks that actually change', async () => {
+    const calls: Array<CapturedMessagesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('claude-sonnet-4.5', {
+      supported_endpoints: ['/v1/messages'],
+    })))
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      model: 'claude-sonnet-4.5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+
+    const response = await createServer().handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4.5',
+        max_tokens: 64,
+        system: [
+          { type: 'text', text: 'unchanged', cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: 'changed', cache_control: { type: 'ephemeral', scope: 'turn' } },
+        ],
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }))
+    await settleResponse(response)
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(runtimeStore.requests.snapshot().recent[0]?.effects).toContainEqual({
+      id: 'messages.cache_control_sanitized',
+      count: 1,
+    })
+  })
+
   test('marks an HTTP 200 Responses terminal failure as failed metadata', async () => {
     const model = buildGptModel('gpt-5.6-sol', {
       supported_endpoints: ['/responses'],
@@ -209,6 +311,69 @@ describe('dashboard request lifecycle', () => {
     expect(
       JSON.stringify(runtimeStore.requests.snapshot()),
     ).not.toContain('raw translated upstream detail')
+  })
+
+  test('marks a clean Responses EOF without a terminal event as failed metadata', async () => {
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('gpt-5.6-sol', {
+      supported_endpoints: ['/responses'],
+    })))
+    CopilotClient.prototype.createResponses = mockResponses(
+      createTerminalLessResponsesStream(),
+      [],
+    )
+
+    const response = await createServer().handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-5.6-sol', input: 'hello', stream: true }),
+    }))
+    const body = await response.text()
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    expect(response.status).toBe(200)
+    expect(body).toContain('event: response.created')
+    expect(body).not.toContain('response.completed')
+    expect(body).not.toContain('response.incomplete')
+    expect(body).not.toContain('response.failed')
+    expect(runtimeStore.requests.snapshot().recent[0]).toMatchObject({
+      endpoint: '/v1/responses',
+      state: 'failed',
+      status: 200,
+      errorSummary: 'Upstream HTTP 200 (response_stream_eof)',
+    })
+  })
+
+  test('marks a clean Messages-via-Responses EOF without a terminal event as failed metadata', async () => {
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('gpt-5.6-sol', {
+      supported_endpoints: ['/responses'],
+    })))
+    CopilotClient.prototype.createResponses = mockResponses(
+      createTerminalLessResponsesStream(),
+      [],
+    )
+
+    const response = await createServer().handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.6-sol',
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: true,
+      }),
+    }))
+    const body = await response.text()
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    expect(response.status).toBe(200)
+    expect(body).toContain('Responses stream ended without completion')
+    expect(runtimeStore.requests.snapshot().recent[0]).toMatchObject({
+      endpoint: '/v1/messages',
+      selectedStrategy: 'responses-api',
+      state: 'failed',
+      status: 200,
+      errorSummary: 'Upstream HTTP 200 (response_stream_eof)',
+    })
   })
 
   test('retains sanitized failure metadata after a streaming response starts', async () => {

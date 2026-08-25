@@ -21,6 +21,7 @@ export interface ResponsesStrategyContext {
   initiator: 'user' | 'agent'
   decorateResponse?: (response: ResponsesResult) => ResponsesResult
   onTerminalResponse?: (response: ResponsesResult) => void
+  onStreamEndWithoutTerminal?: () => void
 }
 
 const responsesPassthroughEntry: StrategyEntry<ResponsesStrategyContext> = {
@@ -34,6 +35,7 @@ const responsesPassthroughEntry: StrategyEntry<ResponsesStrategyContext> = {
       signal: ctx.upstreamSignal.signal,
       mapResponse: ctx.decorateResponse,
       onTerminalResponse: ctx.onTerminalResponse,
+      onStreamEndWithoutTerminal: ctx.onStreamEndWithoutTerminal,
     })
     return await runStrategy(strategy, ctx.upstreamSignal, {
       onStreamError: error => runtimeStore.recordStreamError(ctx.requestId, error),

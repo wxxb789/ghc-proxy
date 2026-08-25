@@ -610,7 +610,10 @@ describe('runStrategy abort signal behavior', () => {
       cleanup: () => {},
     }
 
-    const result = await runStrategy(makeStrategy(stream), signal)
+    const observeStreamError = mock()
+    const result = await runStrategy(makeStrategy(stream), signal, {
+      onStreamError: observeStreamError,
+    })
     expect(result.kind).toBe('stream')
     if (result.kind !== 'stream')
       return
@@ -624,6 +627,7 @@ describe('runStrategy abort signal behavior', () => {
     const errorOutput = outputs.find(o => o.event === 'error')
     expect(errorOutput).toBeDefined()
     expect(errorOutput!.data).toContain('Upstream timeout')
+    expect(observeStreamError).toHaveBeenCalledTimes(1)
   })
 
   test('suppresses onStreamError when client disconnects', async () => {
@@ -638,7 +642,10 @@ describe('runStrategy abort signal behavior', () => {
       cleanup: () => {},
     }
 
-    const result = await runStrategy(makeStrategy(stream), signal)
+    const observeStreamError = mock()
+    const result = await runStrategy(makeStrategy(stream), signal, {
+      onStreamError: observeStreamError,
+    })
     expect(result.kind).toBe('stream')
     if (result.kind !== 'stream')
       return
@@ -652,6 +659,7 @@ describe('runStrategy abort signal behavior', () => {
     // Should NOT have the error event because client disconnected
     const errorOutput = outputs.find(o => o.event === 'error')
     expect(errorOutput).toBeUndefined()
+    expect(observeStreamError).not.toHaveBeenCalled()
   })
 })
 

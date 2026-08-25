@@ -82,9 +82,11 @@ export function createResponsesPassthroughStrategy(
     signal: AbortSignal
     mapResponse?: (response: ResponsesResult) => ResponsesResult
     onTerminalResponse?: (response: ResponsesResult) => void
+    onStreamEndWithoutTerminal?: () => void
   },
 ): ExecutionStrategy<ResponsesResult | AsyncIterable<SSEStreamChunk>, SSEStreamChunk> {
   const tracker: StreamIdState = { itemIdsByOutputIndex: new Map() }
+  let terminalResponseSeen = false
 
   return {
     async execute() {
@@ -119,9 +121,16 @@ export function createResponsesPassthroughStrategy(
         : fixedData
       const parsedResponse = tryExtractTerminalResponse(mappedData)
       if (parsedResponse) {
+        terminalResponseSeen = true
         options.onTerminalResponse?.(parsedResponse)
       }
       return passthroughSSEChunk(chunk, mappedData)
+    },
+
+    onStreamDone() {
+      if (!terminalResponseSeen)
+        options.onStreamEndWithoutTerminal?.()
+      return null
     },
   }
 }

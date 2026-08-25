@@ -236,7 +236,10 @@ export function sanitizeOutputConfig(
 
 function normalizeCacheControlBlock(obj: Record<string, unknown>): boolean {
   if (obj.cache_control && typeof obj.cache_control === 'object') {
-    obj.cache_control = { type: (obj.cache_control as Record<string, unknown>).type }
+    const cacheControl = obj.cache_control as Record<string, unknown>
+    if (!Object.keys(cacheControl).some(key => key !== 'type'))
+      return false
+    obj.cache_control = { type: cacheControl.type }
     return true
   }
   return false

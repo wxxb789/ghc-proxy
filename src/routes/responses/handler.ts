@@ -9,7 +9,7 @@ import { configStore, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/sta
 import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
 import { applyResponsesParameterFilters, clampResponsesOutputTokens, clampResponsesReasoningEffort } from '~/transform/parameter-filter'
 import { RESPONSES_INPUT_POLICY, stripPhaseFromInputMessages } from '~/transform/responses-input'
-import { normalizeFunctionParametersSchemaForCopilot } from '~/translator/responses/function-schema'
+import { normalizeFunctionParametersSchemaForCopilotWithChangeMetadata } from '~/translator/responses/function-schema'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
 import { responsesStrategyRegistry } from './strategy-registry'
 
@@ -162,6 +162,14 @@ export async function handleResponsesCore(
               )
             }
           },
+          onStreamEndWithoutTerminal() {
+            if (upstreamSignal.clientSignal?.aborted)
+              return
+            runtimeStore.requests.recordError(
+              strategyRequestId,
+              'Upstream HTTP 200 (response_stream_eof)',
+            )
+          },
         }
       },
     },
@@ -210,8 +218,10 @@ function applyResponsesToolTransforms(
     if (!isResponseFunctionTool(transformed))
       return transformed
 
-    functionSchemas++
-    return normalizeResponseFunctionTool(transformed)
+    const normalized = normalizeResponseFunctionTool(transformed)
+    if (normalized.schemaChanged)
+      functionSchemas++
+    return normalized.tool
   })
 
   return { applyPatch, functionSchemas }
@@ -221,7 +231,9 @@ function isResponseFunctionTool(tool: ResponseTool): tool is ResponseFunctionToo
   return tool.type === 'function'
 }
 
-function normalizeResponseFunctionTool(tool: ResponseFunctionTool): ResponseFunctionTool {
+function normalizeResponseFunctionTool(
+  tool: ResponseFunctionTool,
+): { tool: ResponseFunctionTool, schemaChanged: boolean } {
   // Forward the caller's `strict`; omit the key entirely when they sent none.
   //
   // `strict` has three states, not two: probed 2026-08-06
@@ -234,10 +246,16 @@ function normalizeResponseFunctionTool(tool: ResponseFunctionTool): ResponseFunc
   // `strict` is destructured out of the spread so a caller-sent `null` is
   // dropped rather than carried through by `...rest`.
   const { strict, ...rest } = tool
+  const parameters = normalizeFunctionParametersSchemaForCopilotWithChangeMetadata(
+    tool.parameters,
+  )
   return {
-    ...rest,
-    parameters: normalizeFunctionParametersSchemaForCopilot(tool.parameters),
-    ...(strict != null ? { strict } : {}),
+    tool: {
+      ...rest,
+      parameters: parameters.schema,
+      ...(strict != null ? { strict } : {}),
+    },
+    schemaChanged: parameters.changed,
   }
 }
 

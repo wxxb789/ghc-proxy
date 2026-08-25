@@ -64,11 +64,11 @@ export async function runStrategy<TResult, TChunk>(
       }
     }
     catch (error) {
-      observer?.onStreamError?.(error)
-      // Only suppress error events when the *client* disconnected.
-      // Upstream timeouts (proxy-side abort) should still emit onStreamError
-      // so strategies can translate them into proper SSE error events.
+      // Client cancellation is a delivery outcome, not an upstream failure.
+      // Upstream timeouts (proxy-side abort) still reach both observability
+      // and the strategy so the protocol can emit its normal SSE error event.
       if (!signal.clientSignal?.aborted) {
+        observer?.onStreamError?.(error)
         const errOutputs = normalizeOutputs(strategy.onStreamError?.(error) ?? null)
         for (const output of errOutputs) {
           yield output
