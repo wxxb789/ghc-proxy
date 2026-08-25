@@ -191,6 +191,12 @@ describe('dashboard request lifecycle', () => {
             name: 'changed',
             parameters: { type: 'object', title: 'metadata', properties: {} },
           },
+          {
+            type: 'function',
+            name: 'strict-null',
+            parameters: { type: 'object', properties: {} },
+            strict: null,
+          },
         ],
       }),
     }))
@@ -201,9 +207,10 @@ describe('dashboard request lifecycle', () => {
     expect(calls[0]?.payload.tools?.[1]).toMatchObject({
       parameters: { type: 'object', properties: {} },
     })
+    expect(calls[0]?.payload.tools?.[2]).not.toHaveProperty('strict')
     expect(runtimeStore.requests.snapshot().recent[0]?.effects).toContainEqual({
       id: 'responses.function_schema_normalized',
-      count: 1,
+      count: 2,
     })
   })
 

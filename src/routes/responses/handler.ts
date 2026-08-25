@@ -219,7 +219,7 @@ function applyResponsesToolTransforms(
       return transformed
 
     const normalized = normalizeResponseFunctionTool(transformed)
-    if (normalized.schemaChanged)
+    if (normalized.changed)
       functionSchemas++
     return normalized.tool
   })
@@ -233,7 +233,7 @@ function isResponseFunctionTool(tool: ResponseTool): tool is ResponseFunctionToo
 
 function normalizeResponseFunctionTool(
   tool: ResponseFunctionTool,
-): { tool: ResponseFunctionTool, schemaChanged: boolean } {
+): { tool: ResponseFunctionTool, changed: boolean } {
   // Forward the caller's `strict`; omit the key entirely when they sent none.
   //
   // `strict` has three states, not two: probed 2026-08-06
@@ -249,13 +249,17 @@ function normalizeResponseFunctionTool(
   const parameters = normalizeFunctionParametersSchemaForCopilotWithChangeMetadata(
     tool.parameters,
   )
+  const changed = parameters.changed || strict === null
+  if (!changed)
+    return { tool, changed: false }
+
   return {
     tool: {
       ...rest,
       parameters: parameters.schema,
       ...(strict != null ? { strict } : {}),
     },
-    schemaChanged: parameters.changed,
+    changed: true,
   }
 }
 

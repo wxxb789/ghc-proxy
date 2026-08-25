@@ -26,9 +26,10 @@ interface SchemaNodeNormalization {
 function normalizeSchemaNode(node: unknown): SchemaNodeNormalization {
   if (Array.isArray(node)) {
     const entries = node.map(normalizeSchemaNode)
+    const changed = entries.some(entry => entry.changed)
     return {
-      value: entries.map(entry => entry.value),
-      changed: entries.some(entry => entry.changed),
+      value: changed ? entries.map(entry => entry.value) : node,
+      changed,
     }
   }
 
@@ -36,7 +37,7 @@ function normalizeSchemaNode(node: unknown): SchemaNodeNormalization {
     return { value: node, changed: false }
   }
 
-  const normalized: Record<string, unknown> = {}
+  let normalized: Record<string, unknown> = node
   let changed = false
   for (const [key, value] of Object.entries(node)) {
     // Copilot's function schema validator is stricter than OpenAI's public
@@ -44,6 +45,9 @@ function normalizeSchemaNode(node: unknown): SchemaNodeNormalization {
     // annotations. Strip those upstream-incompatible metadata fields while
     // preserving the structural schema shape used by clients and models.
     if (COPILOT_UNSUPPORTED_SCHEMA_ANNOTATIONS.has(key)) {
+      if (!changed)
+        normalized = { ...node }
+      delete normalized[key]
       changed = true
       continue
     }
@@ -52,16 +56,24 @@ function normalizeSchemaNode(node: unknown): SchemaNodeNormalization {
       const properties = Object.entries(value).map(([propertyName, propertySchema]) => {
         return [propertyName, normalizeSchemaNode(propertySchema)] as const
       })
-      normalized[key] = Object.fromEntries(
-        properties.map(([name, result]) => [name, result.value]),
-      )
-      changed ||= properties.some(([, result]) => result.changed)
+      if (properties.some(([, result]) => result.changed)) {
+        if (!changed)
+          normalized = { ...node }
+        normalized[key] = Object.fromEntries(
+          properties.map(([name, result]) => [name, result.value]),
+        )
+        changed = true
+      }
       continue
     }
 
     const result = normalizeSchemaNode(value)
-    normalized[key] = result.value
-    changed ||= result.changed
+    if (result.changed) {
+      if (!changed)
+        normalized = { ...node }
+      normalized[key] = result.value
+      changed = true
+    }
   }
 
   return {

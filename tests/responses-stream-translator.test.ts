@@ -1122,7 +1122,7 @@ describe('normalizeFunctionParametersSchemaForCopilot', () => {
       },
     }
 
-    expect(normalizeFunctionParametersSchemaForCopilot(schema)).toEqual(schema)
+    expect(normalizeFunctionParametersSchemaForCopilot(schema)).toBe(schema)
   })
 
   test('passes through nullish schemas unchanged', () => {

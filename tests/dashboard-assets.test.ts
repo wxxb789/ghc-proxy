@@ -52,7 +52,7 @@ function createRuntime() {
     },
     querySelectorAll: () => [],
   }
-  const initializationStart = '\ndocument.querySelectorAll(\'.tab\')'
+  const initializationStart = '\n/* dashboard-state-test-boundary */'
   const initializationIndex = DASHBOARD_JS.indexOf(initializationStart)
   if (initializationIndex < 0)
     throw new Error('Dashboard initialization marker not found')

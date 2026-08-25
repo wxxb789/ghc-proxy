@@ -868,6 +868,7 @@ async function refreshSelectedView(view) {
   }
 }
 
+/* dashboard-state-test-boundary */
 document.querySelectorAll('.tab').forEach(function (button) {
   button.addEventListener('click', function () {
     const target = button.dataset.tab;
