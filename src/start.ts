@@ -43,6 +43,8 @@ interface RunServerOptions {
   dumpFailedPayloads: boolean
 }
 
+const UNSIGNED_INTEGER_RE = /^\d+$/
+
 async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
   const models = modelCache.getModels()
   if (!models) {
@@ -186,32 +188,22 @@ async function runServer(options: RunServerOptions): Promise<void> {
   process.on('SIGINT', shutdown)
 }
 
-function parseIntArg(raw: string | undefined, name: string, fallbackMsg: string): number | undefined {
+export function parseIntArg(
+  raw: string | undefined,
+  name: string,
+  fallbackMsg: string,
+  min = 0,
+  max = Number.MAX_SAFE_INTEGER,
+): number | undefined {
   if (raw === undefined)
     return undefined
-  const n = Number.parseInt(raw, 10)
-  if (Number.isNaN(n) || n < 0) {
+  const normalized = raw.trim()
+  const n = Number(normalized)
+  if (!UNSIGNED_INTEGER_RE.test(normalized) || !Number.isSafeInteger(n) || n < min || n > max) {
     consola.warn(`Invalid --${name} value "${raw}". ${fallbackMsg}`)
     return undefined
   }
   return n
-}
-
-export function parseBoundedIntArg(
-  raw: string | undefined,
-  name: string,
-  fallbackMsg: string,
-  min: number,
-  max: number,
-): number | undefined {
-  if (raw === undefined)
-    return undefined
-  const value = Number(raw)
-  if (!raw.trim() || !Number.isInteger(value) || value < min || value > max) {
-    consola.warn(`Invalid --${name} value "${raw}". ${fallbackMsg}`)
-    return undefined
-  }
-  return value
 }
 
 function secondsToMs(seconds: number | undefined): number | undefined {
@@ -336,17 +328,20 @@ export const start = defineCommand({
     },
   },
   run({ args }) {
+    const port = parseIntArg(args.port, 'port', 'Server not started.', 1, 65_535)
+    if (port === undefined)
+      throw new Error(`Invalid --port value "${args.port}".`)
     const rateLimit = parseIntArg(args['rate-limit'], 'rate-limit', 'Rate limiting disabled.')
     const idleTimeoutSeconds = parseIntArg(args['idle-timeout'], 'idle-timeout', 'Falling back to Bun default.')
-    const upstreamTimeoutSeconds = parseIntArg(args['upstream-timeout'], 'upstream-timeout', 'Falling back to default (300s).')
-    const upstreamQueueConcurrency = parseIntArg(args['upstream-queue-concurrency'], 'upstream-queue-concurrency', 'Using default upstream queue concurrency.')
-    const upstreamQueueMaxRetries = parseBoundedIntArg(args['upstream-queue-retries'], 'upstream-queue-retries', 'Using default upstream queue retry count.', 0, MAX_UPSTREAM_QUEUE_RETRIES)
-    const upstreamRecoveryBudgetSeconds = parseBoundedIntArg(args['upstream-recovery-budget'], 'upstream-recovery-budget', 'Using default upstream recovery budget.', MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS, MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS)
+    const upstreamTimeoutSeconds = parseIntArg(args['upstream-timeout'], 'upstream-timeout', 'Falling back to default (1800s).')
+    const upstreamQueueConcurrency = parseIntArg(args['upstream-queue-concurrency'], 'upstream-queue-concurrency', 'Using default upstream queue concurrency.', 1)
+    const upstreamQueueMaxRetries = parseIntArg(args['upstream-queue-retries'], 'upstream-queue-retries', 'Using default upstream queue retry count.', 0, MAX_UPSTREAM_QUEUE_RETRIES)
+    const upstreamRecoveryBudgetSeconds = parseIntArg(args['upstream-recovery-budget'], 'upstream-recovery-budget', 'Using default upstream recovery budget.', MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS, MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS)
     const upstreamQueueBaseDelaySeconds = parseIntArg(args['upstream-queue-base-delay'], 'upstream-queue-base-delay', 'Using default upstream queue base delay.')
     const upstreamQueueMaxDelaySeconds = parseIntArg(args['upstream-queue-max-delay'], 'upstream-queue-max-delay', 'Using default upstream queue max delay.')
 
     return runServer({
-      port: Number.parseInt(args.port, 10),
+      port,
       verbose: args.verbose,
       accountType: args['account-type'],
       manual: args.manual,

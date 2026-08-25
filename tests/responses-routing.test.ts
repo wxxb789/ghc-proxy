@@ -1322,11 +1322,13 @@ describe('responses and routing', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         input: [{ type: 'message', role: 'user', content: 'hello' }],
+        store: true,
       }),
     }))
     expect(inputTokensResponse.status).toBe(200)
     expect(inputTokensCalls[0]?.payload).toMatchObject({
       input: [{ type: 'message', role: 'user', content: 'hello' }],
+      store: false,
     })
 
     const deleteResponse = await app.handle(new Request('http://localhost/v1/responses/resp_123', {

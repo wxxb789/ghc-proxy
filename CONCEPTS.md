@@ -22,7 +22,7 @@ A result is scoped to everything the request varied: the boundary, the request s
 ### Advertised capability
 What a model's own record says it supports, fetched from Copilot's model list at startup. Distinct from an [[Upstream probe]], which measures what the model actually does: an advertised list is free and available for every model including ones that did not exist when the last probe ran, but it is the model's claim rather than a measurement.
 
-The relationship is asymmetric, and the asymmetry is what makes it usable. A model rejects everything it does not advertise, so the list is trustworthy for *narrowing* a request — clamping to an advertised value never produces a rejected one. The converse fails: at least one model has been observed accepting a level absent from its own list. So an advertised list is a floor on capability, not a description of it, and code should derive from it rather than hardcode model names — a new model then works without a code change.
+The relationship is asymmetric, and the asymmetry is what makes it usable. The dated probes show that advertised values are conservative targets for *narrowing* a request: clamping to an advertised value avoids the rejection seen for unsupported values. But absence from the list is not proof of rejection — `gpt-5.3-codex` and `grok-4.5` have accepted unadvertised efforts. So an advertised list is a safe floor on capability, not an exact description of it, and code should derive conservative targets from it rather than hardcode model names.
 
 An advertised set is also not an ordered ladder every model implements a prefix of. Two models may advertise overlapping-but-incomparable sets, so "supports the highest tier, therefore supports the one below" is not a valid inference.
 
@@ -51,13 +51,13 @@ Dropping the schema and answering anyway is the failure mode this guards against
 A self-contained handler for one request path — it owns body preparation, upstream endpoint selection, response processing, and error mapping. Route handlers are thin orchestrators that pick a strategy from a registry rather than branching inline.
 
 ### Native Messages
-The strategy that forwards an Anthropic Messages request directly to Copilot's native `/v1/messages` endpoint with no protocol translation. Preferred when the model supports the endpoint and the payload carries nothing the native path cannot represent — a structured output request is the standing exception, since the native path cannot carry the schema.
+The strategy that forwards an Anthropic Messages request directly to Copilot's native `/v1/messages` endpoint with no protocol translation. Preferred when the model supports the endpoint and the payload can be represented without weakening its semantics. For structured output, native routing additionally requires the model to advertise `structured_outputs` and the format to be safely reducible to Copilot's accepted `{ type, schema }` shape: an optional `name` may be removed as a label, but `description` and `strict` keep the request off this path because dropping either would change the caller's contract.
 
 ### Responses Translation
-The strategy that translates an Anthropic Messages request into an OpenAI Responses request, calls Copilot's `/responses` endpoint, and translates the result back to Anthropic. Used when a payload feature can only be preserved through the Responses representation, which today means a structured output request.
+The strategy that translates an Anthropic Messages request into an OpenAI Responses request, calls Copilot's `/responses` endpoint, and translates the result back to Anthropic. Used when native Messages is unavailable or when the payload cannot be served there without semantic loss and the model exposes `/responses`. A structured output request carrying `description` or `strict` is the clearest payload-sensitive case.
 
 ### Chat Completions Fallback
-The strategy that translates an Anthropic Messages request into an OpenAI Chat Completions request and back. The universal fallback when a model supports neither native Messages nor Responses; it cannot represent every Anthropic feature, so requests that would lose meaning on this path — a structured output request among them — are rejected upstream of it instead.
+The strategy that translates an Anthropic Messages request into an OpenAI Chat Completions request and back. It is selected when neither native Messages nor Responses can serve the request. It cannot represent every Anthropic feature, so requests that would lose meaning on this path — a structured output request among them — are rejected instead of being silently reduced.
 
 ## Routing
 

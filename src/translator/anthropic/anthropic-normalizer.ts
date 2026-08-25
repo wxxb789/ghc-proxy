@@ -18,6 +18,7 @@ import type {
 
 import { formatDocumentBlock } from '~/translator/anthropic/document'
 import { formatSearchResultBlock } from '~/translator/anthropic/search-result'
+import { isAnthropicBuiltinTool } from '~/translator/anthropic/types'
 import { assertNever } from '~/util/assert-never'
 
 function textBlock(text: string): NormalizedTextBlock {
@@ -215,11 +216,16 @@ export function normalizeAnthropicRequest(
     topP: payload.top_p,
     topK: payload.top_k,
     userId: payload.metadata?.user_id,
-    tools: payload.tools?.map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.input_schema,
-    })),
+    tools: payload.tools?.flatMap(tool =>
+      !isAnthropicBuiltinTool(tool)
+      && tool.name !== undefined
+      && tool.input_schema !== undefined
+        ? [{
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.input_schema,
+          }]
+        : []),
     toolChoice: normalizeToolChoice(payload.tool_choice),
     thinking: normalizeThinking(payload.thinking),
     outputEffort: payload.output_config?.effort ?? undefined,

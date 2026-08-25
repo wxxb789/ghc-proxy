@@ -1,7 +1,7 @@
 ---
 title: Claude Code Messages startup payload compatibility
 date: 2026-06-02
-last_updated: 2026-07-27
+last_updated: 2026-08-25
 category: integration-issues
 module: Anthropic Messages routing
 problem_type: integration_issue
@@ -33,15 +33,18 @@ tags:
 >
 > - The **routing rule** — divert every `output_config.format` payload away from
 >   native Messages — was over-generalized from one model's Vertex organization
->   policy. Native serves structured output on most models. See the superseded
->   note in Solution, and
+>   policy. Native serves structured output on most models when the payload can
+>   be reduced without changing meaning: only `name` may be removed;
+>   `description` and `strict` keep the request off the native path. See the
+>   superseded note in Solution, and
 >   `docs/solutions/conventions/policy-rejection-is-not-a-protocol-limit.md` for
 >   why the mistake happened.
 > - The **`output_config` container** was `.strict()`; it is now `.loose()`.
 >
 > Everything else here still holds, and the part this doc got most right — never
-> strip a caller's schema guarantee to fit an upstream shape — is what the
-> replacement routing preserves.
+> strip caller-visible semantics to fit an upstream shape — is what the
+> replacement routing preserves. `strict` is a guarantee; `description` is
+> model guidance. Neither is a disposable annotation.
 
 
 ## Problem
@@ -132,10 +135,12 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
 > `docs/research/structured-output-native.md`) found 6 of 8 models serve a bare
 > `{ type, schema }`. `claude-opus-5` and `claude-sonnet-5` have no `/responses`
 > endpoint, so the rule left their structured-output requests with no path at
-> all — a local 400. Native now handles them when the model advertises
-> `structured_outputs`; `strict` requests still route away, since dropping that
-> key would silently discard a caller guarantee, which is the failure this doc
-> got right.
+> all — a local 400. Native now handles a bare `{ type, schema }` format, or one
+> carrying only `name`, when the model advertises `structured_outputs`; the
+> reducer removes `name` because it is only a label. Requests carrying
+> `description` or `strict` still route away. Dropping `description` would remove
+> guidance that can change the model's reply, and dropping `strict` would discard
+> a caller guarantee — both are the semantic-loss failure this doc got right.
 
 Translate Anthropic JSON Schema output config to Responses `text.format`:
 
@@ -179,7 +184,11 @@ if (hasOutputConfigFormat(ctx.anthropicPayload)) {
 
 The public Anthropic boundary and the Copilot upstream boundary have different compatibility contracts. Claude Code can send newer Anthropic payload features before Copilot native Messages supports the same beta header or provider feature. Treating ghc-proxy as a translation boundary means each field must either be preserved, intentionally translated, or rejected before it reaches an incompatible upstream endpoint.
 
-The final routing policy keeps the useful native path for ordinary Messages traffic, but diverts structured-output requests to the only current path that can preserve schema intent. When that path is unavailable, the local `400` is more correct than an upstream Vertex policy error or a successful unconstrained request.
+The original routing policy kept the useful native path for ordinary Messages
+traffic, but diverted every structured-output request to what was believed to be
+the only path that could preserve schema intent. When that path was unavailable,
+the local `400` was still more correct than a successful unconstrained request;
+the mistake was assuming native could not preserve any structured-output shape.
 
 > **Superseded 2026-07-27.** "The only current path" was the error. Native
 > Messages had never been tested with `output_config.format` — the probe that
@@ -187,6 +196,12 @@ The final routing policy keeps the useful native path for ordinary Messages traf
 > The reasoning that survives is the ranking: a local 400 beats a silently
 > unconstrained response. What changed is that most models need neither, because
 > native serves the schema directly.
+
+The current rule is narrower: native Messages may serve the format when the
+model advertises `structured_outputs` and the only unsupported optional field is
+`name`; the proxy removes that label and preserves `{ type, schema }`. Formats
+carrying `description` or `strict` use Responses translation when available and
+otherwise reach the explicit unsupported fallback rather than losing meaning.
 
 The generated Responses schema name is also intentional. Anthropic's raw `output_config.format` example only requires `type: json_schema` and `schema`, while Responses `text.format.json_schema` requires `name`. Supplying a stable default name lets valid Anthropic structured-output requests map to valid Responses payloads without asking the caller for a Responses-specific field.
 

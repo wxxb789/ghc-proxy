@@ -266,9 +266,9 @@ function normalizeResponseFunctionTool(
 function applyResponsesInputPolicies(
   payload: ResponsesPayload,
 ): { storeDisabled: boolean, filteredItems: number, filteredPhases: number } {
-  // Force store=false so Copilot never returns opaque item IDs that it
-  // cannot resolve on subsequent requests (→ 404). Clients should also
-  // set { "store": false } in their Provider Options.
+  // Copilot's GPT Responses boundary rejects store=true and remains stateless
+  // when the field is omitted. Send the one explicitly supported mode; IDs in
+  // successful responses are identities, not durable resource references.
   const storeDisabled = payload.store !== false
   payload.store = false
 
@@ -280,7 +280,7 @@ function applyResponsesInputPolicies(
 
 /**
  * Remove input items that Copilot cannot resolve and would trigger 404:
- * - `item_reference` items (opaque IDs from store=true sessions)
+ * - `item_reference` items (Copilot does not resolve returned item IDs later)
  * - `function_call_output` items whose `call_id` has no matching prior
  *   `function_call` in the same input array (orphaned outputs)
  */

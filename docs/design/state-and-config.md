@@ -9,12 +9,12 @@ singletons under `src/state/`, each re-exported from `~/state`:
 
 ```typescript
 import {
-  authStore, // Authentication tokens + server runtime settings
+  authStore, // Authentication/token lifecycle + request guard settings
   configStore, // Feature-flag / config query interface
   modelCache, // Cached model list and VS Code version
   rateLimiter, // Local request throttling
   responsesEmulatorState, // Optional in-memory Responses emulator state
-  runtimeStore, // Process-local debug flags
+  runtimeStore, // Process-local debug flags + observability state
 } from '~/state'
 ```
 
@@ -31,6 +31,10 @@ class AuthStore {
   copilotApiBase?: string // Copilot API base URL
   gheDomain?: string // GitHub Enterprise domain (optional)
   githubLogin?: string // Cached GitHub username
+  githubValidatedAt?: number // Last successful GitHub validation (Unix ms)
+  copilotTokenExpiresAt?: number // Copilot token expiry (Unix ms)
+  copilotTokenLastRefreshAt?: number // Last refresh attempt (Unix ms)
+  copilotTokenLastRefreshSucceeded?: boolean
   accountType: 'individual' | 'business' | 'enterprise' = 'individual'
   manualApprove = false // Require manual approval for requests
   rateLimitSeconds?: number // Min seconds between requests
@@ -73,10 +77,17 @@ interface RunServerOptions {
 ```typescript
 class RuntimeStore {
   dumpFailedPayloads = false // Enable /responses upstream 400 payload dumps
+  readonly startedAt: string // Process-local ISO timestamp
+  readonly requests: RequestActivityStore // Dashboard lifecycle projection
+
+  recordStreamError(requestId: string, error: unknown): void
 }
 ```
 
-Process-local debug flags are not persisted to `config.json` and are read only by the code path that needs them.
+`RuntimeStore` is not persisted to `config.json`. It owns the process start time,
+the request-activity projection used by the dashboard (with a fixed completed
+history), and the `dumpFailedPayloads` debug flag. `recordStreamError()`
+sanitizes a stream failure before storing it; raw errors are not retained.
 
 ### ModelCache (`src/state/model-cache.ts`)
 
@@ -91,7 +102,11 @@ Tracks the next allowed request time internally (Unix ms) and exposes
 
 ### ConfigStore (`src/state/config-store.ts`)
 
-`ConfigStore` is a typed singleton class that provides a centralized query interface for all feature flags and configuration values derived from the config file. Instead of scattered standalone getter functions (e.g. `shouldUseNativeMessages()`, `shouldUseResponsesApi()`), all config queries go through the `configStore` singleton:
+`ConfigStore` is a typed singleton class that centralizes route-facing feature
+and model-policy queries derived from the config file. Authentication, GHE, and
+upstream queue startup still read `getCachedConfig()` directly. Instead of
+adding scattered standalone feature getters, route code uses the
+`configStore` singleton:
 
 ```typescript
 import { configStore } from '~/state'
@@ -104,10 +119,16 @@ configStore.isFunctionApplyPatchEnabled() // useFunctionApplyPatch
 configStore.isAutoCompactResponsesInputEnabled() // responsesApiAutoCompactInput
 configStore.isContextManagementEnabled() // responsesApiAutoContextManagement
 configStore.isContextManagementModel(model) // responsesApiContextManagementModels
+configStore.getContextManagementModels()
 configStore.getReasoningEffort(model) // modelReasoningEfforts
+configStore.getResponsesParameterFilters() // responsesApiParameterFilters
+configStore.shouldReplaceDefaultParameterFilters()
 configStore.getModelRewrites() // modelRewrites
+configStore.getChatCompletionsMaxCompletionTokensModels()
 configStore.getModelFallback() // modelFallback
 configStore.getOverloadFallback(sourceModel) // exact overloadFallbacks entry
+configStore.getOverloadFallbacks() // defensive copy of all mappings
+configStore.hasOverloadFallbacks()
 ```
 
 Feature/model queries read from `getCachedConfig()` and apply their local defaults. Queue startup values deliberately do not have `ConfigStore` getters: `src/start.ts` merges CLI values with `getCachedConfig()` once and passes milliseconds/counts directly to `configureUpstreamRequestQueue()` in `src/clients/factory.ts`.
@@ -140,6 +161,11 @@ interface ConfigFile {
   responsesApiAutoCompactInput?: boolean // Auto-trim input to the latest compaction item
   responsesApiAutoContextManagement?: boolean // Auto-inject context_management for selected models
   responsesApiContextManagementModels?: string[] // Models eligible for auto-injected context management
+  responsesApiParameterFilters?: Array<{
+    models: string[] // Non-empty model glob list
+    params: string[] // Non-empty parameter list
+  }>
+  responsesApiParameterFiltersReplaceDefault?: boolean // Replace, rather than extend, built-in filters
   responsesOfficialEmulator?: boolean // Opt-in local stateful /responses emulator
   responsesOfficialEmulatorTtlSeconds?: number // In-memory TTL for emulator state
 
@@ -168,15 +194,16 @@ The `start` command maps CLI flags onto `authStore` and the upstream queue:
 
 | CLI Flag                | Config Field              | Default        |
 |-------------------------|---------------------------|----------------|
-| `--port` / `-p`        | (server port)             | `4141`         |
+| `--port` / `-p`        | (server port)             | `4141` (`1..65535`) |
 | `--verbose`            | (consola log level)       | `false`        |
 | `--account-type`       | `accountType`             | `individual`   |
 | `--rate-limit`         | `rateLimitSeconds`        | (none)         |
 | `--wait`               | `rateLimitWait`           | `false`        |
-| `--manual-approve`     | `manualApprove`           | `false`        |
+| `--manual`            | `manualApprove`           | `false`        |
 | `--show-token`         | `showToken`               | `false`        |
 | `--dump-failed-payloads` / `-D` | `runtimeStore.dumpFailedPayloads` | `false` |
-| `--upstream-timeout`   | `upstreamTimeoutSeconds`  | (none)         |
+| `--idle-timeout`       | (server adapter option)   | `120`          |
+| `--upstream-timeout`   | `upstreamTimeoutSeconds`  | `1800`; `0` disables |
 | `--upstream-queue-concurrency` | `upstreamQueueConcurrency` | `10`     |
 | `--upstream-queue-retries` | `upstreamQueueMaxRetries` | `1` (`0..2`) |
 | `--upstream-recovery-budget` | `upstreamRecoveryBudgetSeconds` | `60` (`1..120`) |
@@ -184,6 +211,8 @@ The `start` command maps CLI flags onto `authStore` and the upstream queue:
 | `--upstream-queue-max-delay` | `upstreamQueueMaxDelaySeconds` | `60` (computed backoff only) |
 | `--proxy-env`          | (http proxy setup)        | `false`        |
 | `--claude-code`        | (interactive setup)       | `false`        |
+| `--github-token` / `-g` | `authStore.githubToken`  | persisted config/device flow |
+| `--ghe-domain` / `--ghe` | `authStore.gheDomain`   | persisted config |
 
 ## Environment Variables
 
@@ -207,18 +236,31 @@ the container, not for the bare binary.
 
 Priority for queue settings is CLI argument > config file > queue default; there are no queue environment variables. `DUMP_FAILED_PAYLOADS` is a runtime debug flag only and is not persisted to `config.json`.
 
+`--upstream-queue-concurrency` accepts only an integer greater than zero. An
+invalid CLI value logs a warning and is treated as absent, so a valid
+`config.json` value can still win before the queue default of 10. The config
+schema applies the same positive-integer rule and drops an invalid field while
+retaining other individually valid fields.
+
 ## Startup Sequence
 
 ```text
 1. Parse CLI arguments
-2. Read config file (~/.local/share/ghc-proxy/config.json)
-3. Merge queue CLI/config values and call `configureUpstreamRequestQueue()` directly
-4. Initialize remaining state singletons (`authStore`, etc.)
-5. Authenticate with GitHub (device code flow or provided token)
-6. Obtain Copilot API token from GitHub token
-7. Cache VS Code version and Copilot model list
-8. Start Elysia HTTP server (Bun-native adapter or @elysiajs/node fallback)
-9. (Optional) Interactive Claude Code setup
+2. Initialize proxy/logging options and apply CLI-derived `authStore` and
+   `runtimeStore` settings
+3. Ensure data paths exist, then read
+   `~/.local/share/ghc-proxy/config.json`
+4. Merge queue CLI/config values and call
+   `configureUpstreamRequestQueue()` directly
+5. Apply persisted GHE domain, with the CLI value taking precedence
+6. Cache the VS Code version
+7. Resolve the GitHub token (explicit CLI token, persisted token, or device
+   flow), then obtain and schedule refresh for the Copilot token
+8. Create the Copilot client and cache the upstream model list
+9. Optionally prompt for Claude Code model choices and print its launch command
+10. Print the startup banner, create the Elysia app, and call `listen()` using
+    the Bun-native adapter or `@elysiajs/node` fallback
+11. Register `SIGTERM`/`SIGINT` cleanup for token refresh and the HTTP server
 ```
 
 ## Responses Official Emulator

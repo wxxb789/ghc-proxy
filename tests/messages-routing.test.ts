@@ -163,6 +163,189 @@ describe('messages routing', () => {
     expect(calls[0]?.payload.context_management).toBeUndefined()
   })
 
+  test('/v1/messages rejects server tools before Responses translation', async () => {
+    const app = createApp()
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] })))
+
+    let upstreamCalls = 0
+    CopilotClient.prototype.createResponses = (async () => {
+      upstreamCalls++
+      throw new Error('Responses upstream must not receive Anthropic server tools')
+    }) as typeof CopilotClient.prototype.createResponses
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'Search the web.' }],
+        tools: [{
+          type: 'web_search_future',
+          name: 'web_search',
+          input_schema: { type: 'object', properties: {} },
+          max_uses: 3,
+        }],
+      }),
+    }))
+
+    const json = await response.json() as {
+      type?: string
+      error?: { type?: string, code?: string, message?: string }
+    }
+    expect(response.status).toBe(400)
+    expect(json.type).toBe('error')
+    expect(json.error?.type).toBe('translation_error')
+    expect(json.error?.code).toBe('unsupported_server_tool')
+    expect(json.error?.message).toContain('web_search_future')
+    expect(upstreamCalls).toBe(0)
+  })
+
+  test('/v1/messages translates a typed custom client tool through Responses', async () => {
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_custom_tool',
+      model: 'gpt-5',
+      status: 'completed',
+      output: [],
+    }), calls)
+
+    const inputSchema = { type: 'object', properties: { value: { type: 'string' } } }
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'Run the custom tool.' }],
+        tools: [{
+          type: 'custom',
+          name: 'custom_tool',
+          input_schema: inputSchema,
+        }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.tools).toEqual([{
+      type: 'function',
+      name: 'custom_tool',
+      parameters: inputSchema,
+    }])
+  })
+
+  test('/v1/messages translates a typed custom client tool through Chat Completions', async () => {
+    const app = createApp()
+    const calls: Array<CapturedChatCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('chat-only')))
+
+    CopilotClient.prototype.createChatCompletions = mockChatCompletions({
+      id: 'chat_custom_tool',
+      object: 'chat.completion',
+      created: 1,
+      model: 'chat-only',
+      choices: [{
+        index: 0,
+        finish_reason: 'stop',
+        logprobs: null,
+        message: { role: 'assistant', content: 'ok' },
+      }],
+    }, calls)
+
+    const inputSchema = { type: 'object', properties: { value: { type: 'string' } } }
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'chat-only',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'Run the custom tool.' }],
+        tools: [{
+          type: 'custom',
+          name: 'custom_tool',
+          input_schema: inputSchema,
+        }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.tools?.[0]).toMatchObject({
+      type: 'function',
+      function: {
+        name: 'custom_tool',
+        parameters: inputSchema,
+      },
+    })
+  })
+
+  test('/v1/messages rejects server tools before Chat Completions translation', async () => {
+    const app = createApp()
+    modelCache.cacheModels(buildModelsResponse(buildModel('chat-only')))
+
+    let upstreamCalls = 0
+    CopilotClient.prototype.createChatCompletions = (async () => {
+      upstreamCalls++
+      throw new Error('Chat Completions upstream must not receive Anthropic server tools')
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'chat-only',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'Search the web.' }],
+        tools: [{ type: 'web_search_future', name: 'web_search', max_uses: 3 }],
+      }),
+    }))
+
+    const json = await response.json() as {
+      type?: string
+      error?: { type?: string, code?: string, message?: string }
+    }
+    expect(response.status).toBe(400)
+    expect(json.type).toBe('error')
+    expect(json.error?.type).toBe('translation_error')
+    expect(json.error?.code).toBe('unsupported_server_tool')
+    expect(json.error?.message).toContain('web_search_future')
+    expect(upstreamCalls).toBe(0)
+  })
+
+  test('/v1/messages rejects service_tier before Chat Completions translation', async () => {
+    const app = createApp()
+    modelCache.cacheModels(buildModelsResponse(buildModel('chat-only')))
+
+    let upstreamCalls = 0
+    CopilotClient.prototype.createChatCompletions = (async () => {
+      upstreamCalls++
+      throw new Error('Chat Completions upstream must not receive Anthropic service_tier')
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'chat-only',
+        max_tokens: 256,
+        service_tier: 'auto',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }))
+
+    const json = await response.json() as {
+      type?: string
+      error?: { type?: string, code?: string, message?: string }
+    }
+    expect(response.status).toBe(400)
+    expect(json.type).toBe('error')
+    expect(json.error?.type).toBe('translation_error')
+    expect(json.error?.code).toBe('unsupported_service_tier')
+    expect(upstreamCalls).toBe(0)
+  })
+
   // Regression: the Anthropic -> Responses translator emits `phase` on
   // assistant messages (translator/responses/response-items.ts), but `phase`
   // is an output-only annotation that some models reject as input — this repo
@@ -303,6 +486,41 @@ describe('messages routing', () => {
 
     expect(response.status).toBe(200)
     expect(calls).toHaveLength(1)
+  })
+
+  test('/v1/messages native path forwards a name-less server toolset unchanged', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+
+    const tool = {
+      type: 'browser_toolset_20260801',
+    }
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-5',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'Use the browser.' }],
+        tools: [tool],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.payload.tools as unknown).toEqual([tool])
   })
 
   test('/v1/messages native path does not inject thinking or output_config', async () => {
@@ -1649,6 +1867,28 @@ describe('POST /v1/messages/count_tokens', () => {
     // which can only happen if the overhead constant is being added.
     const diff = withToolsJson.input_tokens - rawCount
     expect(diff).toBeGreaterThanOrEqual(200)
+  })
+
+  test.each([
+    { type: 'browser_toolset_20260801', minimum: 7_500 },
+    { type: 'computer_toolset_20260801', minimum: 4_500 },
+  ])('counts $type without translating it to Chat tools', async ({ type, minimum }) => {
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('claude-opus-5')))
+    const app = createApp('messages')
+
+    const response = await app.handle(new Request('http://localhost/v1/messages/count_tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-5',
+        messages: [{ role: 'user', content: 'Use the browser.' }],
+        tools: [{ type }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    const json = await response.json() as { input_tokens: number }
+    expect(json.input_tokens).toBeGreaterThanOrEqual(minimum)
   })
 
   test('returns 400 when model cannot be resolved', async () => {

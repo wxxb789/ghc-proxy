@@ -15,14 +15,15 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 - **Runtime:** Bun >= 1.3 (first-class), Node.js >= 24 LTS compatible via `@elysiajs/node` fallback
 - **Language:** TypeScript (ESNext, strict mode)
 - **Framework:** Elysia (HTTP server), citty (CLI), Zod (validation)
-- **Published as:** `ghc-proxy` npm package (single-file CLI at `dist/main.mjs`)
+- **Published as:** `ghc-proxy` npm package (`dist/main.mjs` entry plus generated
+  `.mjs` dynamic chunks; `package.json#files` ships the complete import graph)
 
 ## Commands
 
 ```bash
 bun install                          # Install dependencies (frozen lockfile in CI)
 bun run dev                          # Start with --watch (hot reload)
-bun run build                        # Bundle with tsdown -> dist/main.mjs
+bun run build                        # Build dist/main.mjs plus dynamic chunks
 bun run lint                         # ESLint with cache
 bun run lint:all                     # ESLint full scan (used in CI)
 bun run typecheck                    # tsc --noEmit
@@ -35,9 +36,12 @@ bun run smoke:packaged               # Smoke test the packaged CLI (selfcheck un
 bun run release:patch                # Bump patch, commit, tag, and push (bumpp 11 pushes branch + tag automatically)
 ```
 
-**CI pipeline order:** `lint:all → typecheck → test → build → smoke:packaged`
+**CI topology:** `.github/workflows/ci.yml` runs `lint`, `typecheck`, `test`, and
+`build` as independent jobs. The `build` job runs `build` then
+`smoke:packaged`; there is no cross-job execution order.
 
-**Local validation after non-trivial changes:** `bun run lint:all && bun run typecheck && bun test && bun run build` (same order as CI — fails fast before the slowest step).
+**Local full gate:** `bun run lint:all && bun run typecheck && bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts && bun run build && bun run smoke:packaged`.
+The `/verify` skill carries the same command in a readable multi-line form.
 
 ## Compatibility Contract
 
@@ -54,11 +58,24 @@ Client → Guard → Ingest → Transform → Dispatch → Deliver → Client
                  (parse)  (model chain) (strategy) (SSE/JSON)
 ```
 
-Every route handler is a thin orchestrator of this 5-layer pipeline. Routes live in `src/routes/<endpoint>/` as a `route.ts` + `handler.ts` + `strategy.ts` triple (`messages/` has multiple strategies under `strategies/`).
+Route plugins live under `src/routes/<endpoint>/`; their internal shape follows
+the endpoint. Simple endpoints use `route.ts` + `handler.ts`. Strategy-backed
+endpoints add a strategy and registry, while Messages keeps its strategies
+under `strategies/` and Responses also has resource/emulator modules.
+
+`src/server.ts` is the route-registration source of truth:
+
+- Chat Completions, Models, Embeddings, and all Responses create, input-token,
+  and resource routes are available both at the root and under `/v1`.
+- Messages and Messages count-tokens are `/v1`-only.
+- `/token` and `/usage` are root-only proxy routes.
+- Health and the Dashboard assets/APIs are root-only; Dashboard access is
+  enforced by its route guard.
 
 `/v1/messages` has three execution strategies the registry picks between per model: **Native Messages** (direct passthrough), **Responses Translation** (Anthropic → Responses → Anthropic), and **Chat Completions Fallback** (Anthropic → OpenAI Chat → Anthropic).
 
-For everything beyond this overview — module map, abstractions, strategy details, routing logic, and translation coverage — see the design docs:
+For everything beyond this overview, start with `docs/design/README.md`, then
+read the relevant design docs:
 
 - `docs/design/execution-strategy.md` — strategy pattern and error handling
 - `docs/design/model-routing.md` — model pipeline and fallback/rewrite mechanics
@@ -72,10 +89,14 @@ When making architectural changes, update the relevant design doc in the same ch
 
 ## Adding a New Route
 
-1. Create `src/routes/<endpoint>/{route,handler,strategy}.ts` (use an existing simple route like `models/` or `embeddings/` as the template).
-2. Implement an `ExecutionStrategy` (`src/lib/execution-strategy.ts`) — body prep, endpoint selection, response processing, error mapping.
-3. Register the strategy in the route's `StrategyRegistry` and the route in the Elysia app (see `src/main.ts`).
-4. Add a test under `tests/` and ensure `bun test tests/contract-smoke.test.ts` still passes.
+1. Copy the nearest endpoint shape under `src/routes/`; do not add a strategy
+   layer unless the endpoint needs model-dependent dispatch.
+2. For strategy-backed endpoints, implement `ExecutionStrategy` and register it
+   in that endpoint's `StrategyRegistry`.
+3. Register the route plugin in `src/server.ts` at the contractually correct
+   root and/or `/v1` surface.
+4. Add route and contract tests; keep
+   `bun test tests/contract-smoke.test.ts` passing.
 
 If the route translates between protocols, add an entry to `docs/anthropic-translation-matrix.md` so coverage stays auditable.
 
@@ -90,7 +111,7 @@ If the route translates between protocols, add an entry to `docs/anthropic-trans
 - **CLI:** `start` must remain an explicit subcommand. No default command.
 - **Complexity:** Favor direct implementation over unnecessary abstractions. Three similar lines is better than a premature helper.
 - **Scope discipline:** Fix only the issue the change targets. Don't refactor pre-existing duplication or "while you're there" — small, focused diffs review better and revert cleaner.
-- **Runtime APIs:** Bun-native APIs (`Bun.file`, `Bun.serve`, `Bun.sleep`, etc.) are fine in `scripts/` and `tests/`. **Route code under `src/` must work on both Bun and Node** — use Web/Node standard APIs (`fetch`, `Response`, `crypto.subtle`, etc.). The CI smoke test packs the published tarball and runs `ghc-proxy selfcheck` against the bundled CLI under both `bun` and `node`, so Node-only *module-loading* regressions in `dist/main.mjs` are caught at publish time. That gate is `selfcheck`'s tokenizer probes and nothing more — it never constructs a `fetch`, an error, a stream, or a `Response`, and the test suite itself runs only under Bun. When a change's risk is Node-shaped, add a hand-rolled fixture for the Node shape to the Bun suite; see `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md`.
+- **Runtime APIs:** Bun-native APIs (`Bun.file`, `Bun.serve`, `Bun.sleep`, etc.) are fine in `scripts/` and `tests/`. **Route code under `src/` must work on both Bun and Node** — use Web/Node standard APIs (`fetch`, `Response`, `crypto.subtle`, etc.). `smoke:packaged` packs the npm artifact and runs tokenizer and runtime-contract selfchecks under both runtimes. The unit suite still runs only under Bun, so add a Node-shaped fixture when the risk is not covered by those probes; see `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md`.
 
 ## Testing
 
@@ -98,7 +119,8 @@ See `tests/AGENTS.md` for the test-runner conventions, helper inventory, and fix
 
 ## Don't / Gotchas
 
-- **`dist/` is build output.** Never hand-edit; `bun run build` regenerates it from `src/`.
+- **`dist/` is build output.** Never hand-edit; `bun run build` regenerates the
+  entry module, dynamic `.mjs` chunks, and source maps from `src/`.
 - **`bun run matrix:live` burns real Copilot quota.** Don't run it as a sanity check; use `bun test` or `bun run smoke:packaged` instead.
 - **`shouldUse*()` helpers are legacy.** New feature-flag queries go through `ConfigStore` (`src/state/config-store.ts`). Don't add new `shouldUse*` call sites.
 - **Don't silently drop unsupported fields in translators.** Use `TranslationPolicy` to mark behavior `exact`/`lossy`/`unsupported`; validation returns 400 for `unsupported`. Silent drops mask client bugs and bite later.
@@ -129,7 +151,8 @@ Single-context: `CONCEPTS.md` (glossary) + `docs/design/` (decisions) + `docs/so
 
 ## Release Automation
 
-- **Tag-triggered pipeline:** `.github/workflows/release-npm.yml` handles changelog + npm publish.
+- **Tag-triggered pipeline:** `.github/workflows/release-npm.yml` handles ordered
+  validation, package checks, changelog generation, and npm publish in one job.
 - **Version contract:** Workflow validates `vX.Y.Z` matches `package.json` `version` before publish.
 - **Auth model:** npm Trusted Publishing (GitHub OIDC). No long-lived npm tokens.
 - **Typical flow:** `bun run release:patch` (or `:minor` / `:major`) bumps the version, commits, tags, and pushes branch + tag in one step (bumpp 11 default). The pushed tag triggers `.github/workflows/release-npm.yml`, which validates and publishes.

@@ -25,7 +25,8 @@ LiteLLM **does not provide** an Anthropic-format output interface at all. For cl
 - Per-model endpoint detection (`/v1/messages` vs `/responses`)
 - Per-model vision, tool call, and thinking capability detection
 - Automatic fallback to available execution strategies
-- Small model routing (compact requests auto-routed to Haiku)
+- Optional small-model routing for recognized compact/summarization requests
+  (`compactUseSmallModel: true` plus a configured `smallModel`; disabled by default)
 
 LiteLLM's model routing relies on global configuration with no per-model automatic discovery.
 
@@ -47,15 +48,15 @@ LiteLLM's model routing relies on global configuration with no per-model automat
 ### 6. Complete CLI Experience
 - Interactive Claude Code integration (`-c` flag auto-generates launch commands)
 - `auth`, `debug`, `check-usage`, `selfcheck` standalone subcommands
-- Rich runtime options (port, timeout, proxy, manual approval, etc.)
+- Rich runtime options (host/port, upstream timeout, proxy, recovery queue, dashboard access, etc.)
 
 ### 7. Advanced Responses API Support
 - Full CRUD endpoints (GET/DELETE response, input items)
 - SignatureCodec for structured data encoding/decoding
-- Automatic context compaction (configurable threshold)
+- Opt-in Responses input trimming and context-management injection (both disabled by default)
 
 ### 8. Deep Extended Thinking Support
-- Reasoning effort levels (none -> xhigh)
+- Reasoning effort support through `max`
 - Thinking block filtering strategies
 - Cross-format thinking preservation
 
@@ -110,18 +111,19 @@ LiteLLM added WebSocket support in March 2026 (`github_copilot/ws/` prefix) for 
 | Python SDK embedding | No | Yes |
 | Standalone CLI tool | Yes | No |
 | Claude Code one-click integration | Yes | No |
-| Automatic context compaction | Yes | No |
+| Automatic context compaction | Optional (off by default) | No |
 
 ---
 
 ## Anthropic Prompt Caching: Deep Comparison
 
-### ghc-proxy: Full Coverage Across All Three Paths
+### ghc-proxy: Cache Coverage Across All Three Paths
 
 **Native Messages passthrough path:**
-- Client `cache_control` fields preserved as-is, forwarded directly to Copilot `/v1/messages`
+- Client `cache_control` blocks are forwarded after sanitization; every sub-field
+  except `type` is removed before Copilot `/v1/messages`
 - Upstream `cache_read_input_tokens` and `cache_creation_input_tokens` returned as-is
-- Zero translation loss
+- Usage is passthrough, but request-side cache metadata beyond `type` is lossy
 
 **Chat Completions fallback path:**
 - Automatic injection of `copilot_cache_control: { type: \"ephemeral\" }` (all models, profile-controlled)
@@ -131,7 +133,11 @@ LiteLLM added WebSocket support in March 2026 (`github_copilot/ws/` prefix) for 
 
 **Responses API translation path:**
 - `input_tokens_details.cached_tokens` -> `cache_read_input_tokens`
-- Streaming and non-streaming both supported
+- Final `input_tokens_details.cache_write_tokens` ->
+  `cache_creation_input_tokens` when the write count is non-zero
+- Cache-read accounting is supported in streaming and non-streaming responses;
+  terminal streaming usage carries the same cache-write mapping as
+  non-streaming output
 
 Key files:
 - `src/core/capi/plan-builder.ts` — `applyCacheCheckpoints()`, `stripTransportFields()`
@@ -153,11 +159,11 @@ Note: LiteLLM's **native Anthropic provider** (direct API) supports cache, but t
 
 | Cache Feature | ghc-proxy | LiteLLM (Copilot) |
 |--------------|:---------:|:-----------------:|
-| Client `cache_control` passthrough | Yes (native path) | No |
+| Client `cache_control` passthrough | Native path preserves only `type` | No |
 | Automatic ephemeral cache injection | Yes (all models) | No |
 | Smart cache site selection | 3 sites | No |
 | `cache_read_input_tokens` returned | All paths | No |
-| `cache_creation_input_tokens` returned | Yes (native path) | No |
+| `cache_creation_input_tokens` returned | Native passthrough; Responses non-stream when reported | No |
 | `input_tokens` subtracts cached portion | Yes | No |
 | Streaming cache token tracking | Yes | No |
 | Per-model profile cache control | Yes | No |
@@ -166,7 +172,7 @@ Note: LiteLLM's **native Anthropic provider** (direct API) supports cache, but t
 
 - **Cost**: Anthropic prompt caching can reduce input token costs by up to 90% for repeated context. ghc-proxy enables this automatically; LiteLLM completely wastes this capability.
 - **Latency**: Cached tokens process faster, yielding lower latency in multi-turn conversations.
-- **Transparency**: ghc-proxy correctly separates cached/uncached token counts so users can accurately assess cache hit rates; LiteLLM provides no visibility.
+- **Transparency**: ghc-proxy exposes cached/uncached token counts on supported paths so users can assess cache hits; LiteLLM provides no Copilot cache visibility.
 
 ---
 
@@ -188,15 +194,19 @@ The three are **additive** and non-overlapping. Total cost = read *0.1 + creatio
 
 **Streaming side:**
 - `message_start` event carries full cache usage (input_tokens + cache_*)
-- `message_delta` event carries only output_tokens
+- Anthropic's usual incremental `message_delta` carries output usage, but
+  ghc-proxy's terminal Responses translation emits the complete final mapped
+  usage from `response.completed` / `response.incomplete`
 
 ### Per-Path Correctness Analysis
 
 #### Native Messages Path — Mostly Correct
 - File: `src/routes/messages/strategies/native-messages.ts`
-- Request: client `cache_control` passed through with normalization — extra sub-fields like `scope` are stripped because Copilot does not yet accept them (see `sanitizeCacheControl` in `strategy-registry.ts`)
+- Request: client `cache_control` is normalized to `{ type }`; all other
+  sub-fields are stripped (see `sanitizeCacheControl` in
+  `src/transform/sanitize.ts`)
 - Response: `cache_creation_input_tokens` + `cache_read_input_tokens` passed through as-is
-- Minimal translation loss: only `cache_control.scope` is dropped
+- Request-side loss is not limited to `scope`: every key other than `type` is dropped
 
 #### Chat Completions Fallback Path — Two Known Issues
 
@@ -210,41 +220,55 @@ The three are **additive** and non-overlapping. Total cost = read *0.1 + creatio
 - File: `src/core/capi/plan-builder.ts:242-272`
 - `applyCacheCheckpoints()` overwrites all sites with hardcoded `{ type: 'ephemeral' }`
 - Client's original `cache_control` (e.g., custom TTL) is discarded
-- **Low severity**: Copilot's `copilot_cache_control` likely only supports ephemeral
+- **Low severity**: the proxy's injected `copilot_cache_control` transport field is fixed to `ephemeral`
 
 **Correct aspects:**
 - `input_tokens = prompt_tokens - cached_tokens` — matches Anthropic semantics
 - `cache_read_input_tokens` correctly mapped
 - Cache enabled for all models (profile-controlled)
 
-#### Responses Translation Path — One Known Issue
+#### Responses Translation Path — Final Usage Mapped
 
-**Issue: `cache_creation_input_tokens` missing**
-- File: `src/translator/responses/responses-to-anthropic.ts:207-219`
-- `mapResponsesUsage()` only maps `cache_read_input_tokens`
-- Responses API's `input_tokens_details` does not include creation tokens
-- **Same upstream API limitation**
+- File: `src/translator/responses/responses-to-anthropic.ts`
+- `mapResponsesUsage()` maps `cached_tokens` to `cache_read_input_tokens`
+- When upstream reports `cache_write_tokens`, non-streaming and terminal
+  streaming translation map it to `cache_creation_input_tokens` and omit a zero
+  write
+- Streaming `message_start` uses preliminary usage from `response.created`;
+  terminal `message_delta` translates the final response through the same
+  `mapResponsesUsage()` path as non-streaming output
 
 **Correct aspects:**
 - `input_tokens = inputTokens - cachedTokens`
 - `cache_read_input_tokens` correctly mapped
-- Streaming `message_start` cache tokens correct (`responses-stream-translator.ts:117-132`)
+- Cache-write tokens are mapped when final upstream usage supplies them
+- Streaming `message_start` cache-read tokens are mapped
+- Terminal streaming usage carries the full final mapped usage
 
-**Streaming edge case:**
-- `responses-stream-translator.ts:132` — when `cachedTokens` is 0, still outputs `cache_read_input_tokens: 0`
-- Anthropic spec: when no cache hit, this field should be **omitted**
-- Low impact but technically non-spec-compliant
+**Zero-value edge case:**
+- Non-streaming and terminal streaming translation emit
+  `cache_read_input_tokens: 0` only when upstream explicitly reports
+  `cached_tokens: 0`; they omit the field when upstream omits `cached_tokens`
+- Preliminary streaming `message_start` currently defaults an absent cached
+  count to `cache_read_input_tokens: 0`
+
+**Request-side distinction:**
+- Anthropic `cache_control` is not translated into a Responses cache key
+- `prompt_cache_key` on the Anthropic-to-Responses path is derived from the
+  `session_*` component of `metadata.user_id`; direct Responses clients may
+  provide `prompt_cache_key`, `prompt_cache_options`, and cache breakpoints
+  explicitly
 
 ### Correctness Summary
 
 | Check | Native | Chat Comp | Responses |
 |-------|:------:|:---------:|:---------:|
-| `cache_control` passthrough | Correct | Overwritten | N/A (becomes cache_key) |
+| `cache_control` passthrough | Only `type` preserved | Overwritten | Not translated to a cache key |
 | `input_tokens` semantics | Correct | Correct | Correct |
 | `cache_read_input_tokens` | Correct | Correct | Correct |
-| `cache_creation_input_tokens` | Correct | Missing | Missing |
-| Omit field when no cache | Correct | Correct | Outputs 0 |
-| Streaming cache tokens | Correct | Correct | 0-value issue |
+| `cache_creation_input_tokens` | Correct | Missing | Mapped from final usage when reported |
+| Omit read field when no cache | Correct | Correct | Final usage omits when absent; `message_start` defaults to 0 |
+| Streaming cache tokens | Correct | Correct | Preliminary read + complete terminal usage |
 
 ---
 
@@ -252,7 +276,7 @@ The three are **additive** and non-overlapping. Total cost = read *0.1 + creatio
 
 Test file: `tests/cache-correctness.test.ts`
 
-8 test cases covering:
+14 test cases covering:
 
 1. **Chat Completions — non-streaming cache token mapping**: Verifies `prompt_tokens_details.cached_tokens` correctly maps to `cache_read_input_tokens` and is subtracted from `input_tokens`
 2. **Chat Completions — no cache hit**: Verifies `cache_read_input_tokens` is omitted (not set to 0) when upstream returns no cached tokens
@@ -262,6 +286,12 @@ Test file: `tests/cache-correctness.test.ts`
 6. **Responses — streaming cache in message_start**: Verifies `message_start` event contains correct `cache_read_input_tokens` and adjusted `input_tokens`
 7. **Responses — no cache omission**: Verifies `cache_read_input_tokens` is absent when no cached tokens
 8. **All models — cache injection**: Verifies all models (including GPT) receive `copilot_cache_control` on messages and tools
+9. **Responses — cache write mapping**: Verifies `cache_write_tokens` maps to `cache_creation_input_tokens`
+10. **Responses — no cache write**: Verifies `cache_creation_input_tokens` is omitted when the write count is zero
+11. **Responses — explicit cache controls**: Verifies direct `prompt_cache_key`, `prompt_cache_options`, and content breakpoints are forwarded
+12. **Responses — unsupported TTL**: Rejects a cache TTL that upstream does not accept
+13. **Responses — supported TTL**: Accepts the supported `30m` TTL
+14. **Responses — invalid mode**: Rejects an unknown `prompt_cache_options.mode`
 
 ---
 

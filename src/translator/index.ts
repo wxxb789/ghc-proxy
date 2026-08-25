@@ -1,4 +1,5 @@
 export { AnthropicStreamTranslator } from './anthropic/anthropic-stream-transducer'
+export { isAnthropicBuiltinTool } from './anthropic/types'
 export type {
   AnthropicAssistantContentBlock,
   AnthropicAssistantMessage,

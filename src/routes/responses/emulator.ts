@@ -19,7 +19,7 @@ import type {
 import { randomUUID } from 'node:crypto'
 
 import { HTTPError, throwInvalidRequestError } from '~/lib/error'
-import { estimateResponsesInputTokens } from '~/lib/tokenizer'
+import { estimateSerializedTokens } from '~/lib/tokenizer'
 import { responsesEmulatorState } from '~/state'
 
 function cloneValue<T>(value: T): T {
@@ -178,7 +178,7 @@ export async function estimateEmulatorInputTokens(
   selectedModel: Model,
 ): Promise<ResponseInputTokensResult> {
   const effectiveInputItems = resolveEffectiveInputForInputTokens(payload)
-  const inputTokens = await estimateResponsesInputTokens(effectiveInputItems, selectedModel)
+  const inputTokens = await estimateSerializedTokens(effectiveInputItems, selectedModel)
   return {
     object: 'response.input_tokens',
     input_tokens: inputTokens,

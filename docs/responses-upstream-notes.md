@@ -11,11 +11,25 @@ Live upstream verification matters here. On March 11, 2026, a full local scan ac
 
 The proxy does not currently disable Responses vision wholesale because the same models still advertise vision capability in Copilot model metadata. Treat Responses vision as upstream-contract-sensitive and verify it with `matrix:live` before relying on it.
 
-## Stateful Routes (March 11, 2026)
+## Stateful Routes
 
 On March 11, 2026, `POST /responses` succeeded against the current enterprise Copilot endpoint, but `POST /responses/input_tokens`, `GET /responses/{id}`, `GET /responses/{id}/input_items`, and `DELETE /responses/{id}` all returned upstream `404`. The proxy exposes those routes because they are part of the official Responses surface, but current Copilot upstream support is not there yet. The same live matrix also showed `previous_response_id` returning upstream `400 previous_response_id is not supported` on the tested model.
 
 Re-verified April 30, 2026 with `gpt-5.5` — same results: `input_tokens` and resource routes still return `404`, `previous_response_id` still rejected.
+
+Re-verified August 25, 2026 by sending raw requests directly to
+`api.enterprise.githubcopilot.com` with `gpt-5.6-sol` and `gpt-5.4`:
+
+- `store: true` returned `400 store is not supported` on both models.
+- `store: false` and an omitted `store` field both created responses with
+  HTTP 200 and returned response/item IDs.
+- Those IDs were not durable: retrieve and `input_items` returned 404,
+  `previous_response_id` returned `400 previous_response_id is not supported`,
+  and a real returned item ID used as `item_reference` returned 404.
+
+The observed Copilot Responses boundary is therefore stateless even when
+`store` is omitted. A returned ID is stream/response identity, not evidence
+that the server supports later retrieval or continuation.
 
 ## Input Sanitization Policies
 
@@ -23,11 +37,21 @@ The proxy applies several input mutations before forwarding `/v1/responses` requ
 
 ### `store=false`
 
-Every outgoing Responses request has `store` forced to `false`. Copilot cannot resolve opaque item IDs from `store=true` sessions on subsequent requests (→ 404), so the proxy disables server-side storage unconditionally.
+Every outgoing Responses request has `store` forced to `false`. Current
+Copilot GPT Responses models reject explicit `store: true`, while omission is
+accepted but remains stateless. Sending `false` makes the supported upstream
+mode explicit. The coercion is not itself visible to a caller: without the
+emulator, a request that asked for storage still receives a successful stateless
+response. This is a deliberate proxy-wide stateless policy rather than a
+per-model capability toggle; the optional local emulator is the only supported
+source of retrieve/delete/continuation semantics.
 
 ### `item_reference` and orphaned `function_call_output` stripping
 
-Input items of type `item_reference` are removed because they reference server-side stored IDs that Copilot cannot resolve. Additionally, `function_call_output` items whose `call_id` has no matching `function_call` in the same input array are stripped as orphaned outputs.
+Input items of type `item_reference` are removed because Copilot cannot resolve
+returned item IDs on a later request. Additionally, `function_call_output`
+items whose `call_id` has no matching `function_call` in the same input array
+are stripped as orphaned outputs.
 
 ### `phase` field stripping
 
@@ -49,4 +73,3 @@ Implemented in `applyResponsesParameterFilters()` (`src/transform/parameter-filt
 - **`responsesApiParameterFiltersReplaceDefault`:** disables the default rule so only user rules apply.
 
 Keys are deleted entirely (never sent as `null`) because upstream rejects the presence of the key, not just non-null values. Matching is against the **resolved** model (post model-rewrite).
-

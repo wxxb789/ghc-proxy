@@ -57,7 +57,9 @@ Workflow({ scriptPath: ".claude/workflows/upgrade-deps.js", args: { outdated, di
 bun run scripts/dev/extract-workflow-report.ts <workflow-task-output-path>
 ```
 
-A worked example of the output lives at `docs/upgrade-plan.md`.
+`docs/upgrade-plan.md` is a historical worked-output snapshot. It is not the
+current dependency state or an active task list; collect fresh inputs and rerun
+the workflow before proposing upgrades.
 
 ### When NOT to use
 

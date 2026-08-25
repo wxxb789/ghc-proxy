@@ -1,7 +1,7 @@
 ---
 title: "A regression test that never failed is not a regression test"
 date: 2026-07-25
-last_updated: 2026-07-29
+last_updated: 2026-08-25
 category: testing
 module: tests
 problem_type: convention
@@ -132,8 +132,8 @@ across the exact operation under test is not.
     went red, at 6 failures. The five fixtures added later in the same PR close
     it: every one of those mutants now dies. When a fix adds more than one
     branch, delete each on its own and re-run.
-  - *Watch for fixtures that carry redundant signals.* The classifier checks
-    `name` before `code` (`src/lib/timeout-error.ts:63-66`) and both Node
+  - *Watch for fixtures that carry redundant signals.* `isTimeoutLikeError`
+    checks `name` before `code` in `src/lib/timeout-error.ts`, and both Node
     fixtures set **both**, so the `name` check short-circuited and the `code`
     branch never ran. A fixture exercises only the first signal the
     implementation reads; over-specifying it hides every branch behind that one.

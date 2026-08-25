@@ -188,21 +188,19 @@ export const anthropicToOpenAIFixtures: Array<AnthropicToOpenAIFixture> = [
   },
   {
     // top_k is forwarded as a Copilot extension — probed 2026-07-26, accepted
-    // by every reachable model on every boundary. service_tier remains
-    // unsupported (no upstream field, and not probed).
-    name: 'top-k-forwarded-service-tier-unsupported',
+    // by every reachable model on every boundary.
+    name: 'top-k-forwarded',
     input: {
       model: 'gpt-4o',
       messages: [{ role: 'user', content: 'Hello' }],
       max_tokens: 64,
       top_k: 16,
-      service_tier: 'auto',
     },
     expected: {
       model: 'gpt-4o',
       messages: [{ role: 'user', content: 'Hello' }],
       top_k: 16,
     },
-    expectedIssues: ['unsupported_service_tier'],
+    expectedIssues: [],
   },
 ]

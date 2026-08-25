@@ -12,6 +12,25 @@ import { HTTPError, withTranslationErrors } from '~/lib/error'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { REASONING_EFFORT_VALUES } from '~/types'
 
+function expectUnsupportedTopK(run: () => unknown, apiName: string) {
+  try {
+    run()
+  }
+  catch (error) {
+    expect(error).toBeInstanceOf(HTTPError)
+    const httpError = error as HTTPError
+    expect(httpError.status).toBe(400)
+    expect(httpError.body.error.details).toContainEqual({
+      path: ['top_k'],
+      message: `top_k is not supported by the ${apiName}`,
+      code: 'custom',
+    })
+    return
+  }
+
+  throw new Error('Expected top_k validation to fail')
+}
+
 describe('OpenAI payload validation', () => {
   test('accepts optional embedding fields', () => {
     const payload = parseEmbeddingRequest({
@@ -60,6 +79,14 @@ describe('OpenAI payload validation', () => {
     expect(payload.response_format).toEqual({ type: 'json_object' })
     expect(payload.seed).toBe(42)
     expect(payload.reasoning_effort).toBe('high')
+  })
+
+  test('rejects the non-standard top_k field', () => {
+    expectUnsupportedTopK(() => parseOpenAIChatPayload({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Hello!' }],
+      top_k: 40,
+    }), 'OpenAI Chat Completions API')
   })
 
   test('rejects malformed completion option types', () => {
@@ -199,6 +226,72 @@ describe('Anthropic payload validation', () => {
     expect(payload.model).toBe('claude-haiku-4.5')
     expect(payload.messages).toHaveLength(1)
     expect(payload.max_tokens).toBeUndefined()
+  })
+
+  test('accepts type-tagged server tools without input_schema', () => {
+    const tool = {
+      type: 'web_search_future',
+      name: 'web_search',
+      max_uses: 3,
+    }
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-opus-5',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Search the web.' }],
+      tools: [tool],
+    })
+
+    expect(payload.tools as unknown).toEqual([tool])
+  })
+
+  test('accepts name-less server toolsets', () => {
+    const tool = { type: 'browser_toolset_20260801' }
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-opus-5',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Use the browser.' }],
+      tools: [tool],
+    })
+
+    expect(payload.tools as unknown).toEqual([tool])
+  })
+
+  test('accepts nullable type on ordinary function tools', () => {
+    const tool = {
+      type: null,
+      name: 'lookup',
+      input_schema: { type: 'object', properties: {} },
+    }
+    const payload = parseAnthropicMessagesPayload({
+      model: 'claude-opus-5',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Run the tool.' }],
+      tools: [tool],
+    })
+
+    expect(payload.tools as unknown).toEqual([tool])
+  })
+
+  test('still requires input_schema for ordinary function tools', () => {
+    expect(() =>
+      parseAnthropicMessagesPayload({
+        model: 'claude-opus-5',
+        max_tokens: 16,
+        messages: [{ role: 'user', content: 'Run the tool.' }],
+        tools: [{ name: 'lookup' }],
+      }),
+    ).toThrow('Invalid request payload')
+  })
+
+  test('requires input_schema for typed custom function tools', () => {
+    expect(() =>
+      parseAnthropicMessagesPayload({
+        model: 'claude-opus-5',
+        max_tokens: 16,
+        messages: [{ role: 'user', content: 'Run the tool.' }],
+        tools: [{ type: 'custom', name: 'lookup' }],
+      }),
+    ).toThrow('Invalid request payload')
   })
 
   test('accepts output_config effort values', () => {
@@ -533,6 +626,20 @@ describe('Anthropic payload validation', () => {
 })
 
 describe('Responses payload validation', () => {
+  test('rejects the non-standard top_k field on create and input_tokens', () => {
+    expectUnsupportedTopK(() => parseResponsesPayload({
+      model: 'gpt-5',
+      input: 'Hello!',
+      top_k: 40,
+    }), 'OpenAI Responses API')
+
+    expectUnsupportedTopK(() => parseResponsesInputTokensPayload({
+      model: 'gpt-5',
+      input: 'Hello!',
+      top_k: 40,
+    }), 'OpenAI Responses API')
+  })
+
   test('accepts function tool references declared by tool_choice', () => {
     const payload = parseResponsesPayload({
       model: 'gpt-5',

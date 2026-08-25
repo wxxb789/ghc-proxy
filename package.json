@@ -27,7 +27,7 @@
   },
   "scripts": {
     "build": "tsdown",
-    "dev": "bun run --watch ./src/main.ts",
+    "dev": "bun run --watch ./src/main.ts start",
     "knip": "knip-bun",
     "lint": "eslint --cache",
     "lint:all": "eslint --cache .",
@@ -42,7 +42,7 @@
     "smoke:packaged": "bun run scripts/smoke/packaged-cli.ts",
     "smoke:translation": "bun run scripts/smoke/translation.ts",
     "serve": "NODE_ENV=production bun run ./src/main.ts start --wait --idle-timeout=255 --upstream-timeout=1800",
-    "start": "NODE_ENV=production bun run ./src/main.ts",
+    "start": "NODE_ENV=production bun run ./src/main.ts start",
     "typecheck": "npx tsc --project tsconfig.json"
   },
   "dependencies": {

@@ -2,6 +2,10 @@
 
 Research into every environment variable referenced in the README, verifying whether each one actually affects program behavior.
 
+**Initial audit:** 2026-03-13. **Implementation alignment checked:**
+2026-08-25. Historical changes below describe what was changed at the time of
+the initial audit, not the repository's current model-default values.
+
 ## Summary
 
 All proxy-side environment variables (`MODEL_FALLBACK_*`, `GH_TOKEN`, `DUMP_FAILED_PAYLOADS`, `HTTP_PROXY`/`HTTPS_PROXY`) are functional, though some have caveats about scope. One widely-circulated Claude Code variable (`DISABLE_NON_ESSENTIAL_MODEL_CALLS`) turned out to be fake and was removed. Another (`ANTHROPIC_SMALL_FAST_MODEL`) is deprecated and was also removed from the `--claude-code` output.
@@ -129,9 +133,10 @@ The variable is widely copied across blog posts and configuration guides on the 
 
 The official docs page lists `ANTHROPIC_SMALL_FAST_MODEL` with a "(deprecated)" annotation. `ANTHROPIC_DEFAULT_HAIKU_MODEL` serves the same purpose and is the current recommended variable. The `--claude-code` codegen was setting both to the same value, which was redundant.
 
-## Changes Made
+## Historical Changes Made (2026-03-13)
 
-Based on this research, the following corrections were applied:
+Based on the initial audit, the following corrections were applied at that
+time:
 
 ### `src/start.ts`
 - Removed `ANTHROPIC_SMALL_FAST_MODEL` from `--claude-code` env generation (deprecated, redundant with `ANTHROPIC_DEFAULT_HAIKU_MODEL`)
@@ -139,6 +144,9 @@ Based on this research, the following corrections were applied:
 
 ### `README.md`
 - Removed `DISABLE_NON_ESSENTIAL_MODEL_CALLS` from `settings.json` example and variable table
-- Updated `claude-sonnet` default fallback from `4.5` to `4.6` (three occurrences: default table, env example, config.json example)
+- Updated the then-current `claude-sonnet` default fallback from `4.5` to `4.6`
+  (three occurrences: default table, env example, config.json example). This is
+  a historical change note, not the current default; as of the 2026-08-25 code
+  alignment check, `DEFAULT_FALLBACKS.claudeSonnet` is `claude-sonnet-5`.
 - Clarified `--proxy-env` description: Node.js only; Bun reads proxy env natively
 - Added note that model fallbacks only apply to the chat completions translation path

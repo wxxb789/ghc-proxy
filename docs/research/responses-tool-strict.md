@@ -5,7 +5,9 @@ as a function of the `strict` flag.
 
 **Date:** 2026-08-06. **Boundary:** `/responses` only. **Method:**
 `scripts/probes/tool-strict.ts` — a standing probe, re-runnable rather than
-transcribed. Reproduction at the bottom.
+transcribed. Reproduction at the bottom. The results below are the dated run;
+the script selecting today's advertised models does not retroactively expand
+that snapshot.
 
 ## Why this was worth measuring
 
@@ -28,9 +30,10 @@ the evidence, hence the standing probe.
 | `extraRequiredKey` — `required` names a key `properties` does not declare | 200 | **400** `schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level` | 400 `'required' is required to be supplied and to be an array including every key in properties. Extra required key 'params' supplied.` |
 | `refAtRoot` — `$ref` at the schema root beside a sibling `required` | 200 | 200 | 400 |
 
-Measured across all 10 advertised `/responses` models for the shapes above;
-the table cells are identical on every model except where noted under
-[Model-specific](#model-specific).
+On 2026-08-06, the validation matrix covered the 10 models that then advertised
+`/responses`; the table cells were identical except where noted under
+[Model-specific](#model-specific). This is not evidence for models added after
+that date.
 
 **Omitting `strict` is not the same as sending `false`.** The `extraRequiredKey`
 row is the whole finding: 200 with the key absent, 400 with `strict: false`.
@@ -54,9 +57,11 @@ gpt-5.3-codex  strict=omitted  200  CALLED args={"city":"Paris","units":"c"}
 grok-4.5       strict=omitted  200  CALLED args={"city":"Paris"}
 ```
 
-The tool is invoked, and the **optional** `units` property survives into the
-emitted arguments on two of three models — which is the semantics the removed
-`required` rewrite used to destroy by making `units` mandatory.
+The functional invocation evidence recorded here covers only the three models
+shown above, not all 10 matrix models. On those three, the tool is invoked, and
+the **optional** `units` property survives into the emitted arguments on two —
+which is the semantics the removed `required` rewrite used to destroy by
+making `units` mandatory.
 
 ## The reported failure, before and after
 
@@ -123,6 +128,8 @@ not "never needed", and deleting it is maximum risk for minimum gain.
   nothing here transfers to them.
 - **Whether a large toolset degrades selection quality.** One tool per request
   throughout.
+- **Models added after 2026-08-06.** Re-run the standing probe before extending
+  the matrix verdict to a newer inventory.
 
 ## Reproducing
 

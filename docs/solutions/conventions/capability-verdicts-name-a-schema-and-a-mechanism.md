@@ -1,6 +1,7 @@
 ---
 title: "A capability verdict names a schema and a mechanism, not just a boundary"
 date: 2026-08-06
+last_updated: 2026-08-25
 category: conventions
 module: upstream capability modeling
 problem_type: convention
@@ -95,7 +96,7 @@ results on both. Full writeup in `docs/research/claude-5-tool-schemas.md`.
 All eight probed names — `WebSearch`, `WebFetch`, `web_search`, `web_fetch`,
 `Bash`, `shell`, `computer`, `Read` — were accepted *and invoked* as function
 tools on both `/v1/messages` and `/chat/completions`
-(`docs/research/claude-5-tool-schemas.md:33-50`). The gate is on the builtin
+(`docs/research/claude-5-tool-schemas.md`). The gate is on the builtin
 type tag, not on the word.
 
 That distinction has a blast radius attached. A blocked *tag* is narrow: a
@@ -105,7 +106,7 @@ Code client silently loses `WebSearch`, every Codex client loses `web_search`,
 and no config change helps. Those two worlds produce the same user-visible
 symptom, and until this round nothing in the repo distinguished them. That
 reasoning is now recorded in the probe itself
-(`scripts/lib/tool-cases.ts:42-58`).
+(`NAME_FILTER_SUSPECTS` in `scripts/lib/tool-cases.ts`).
 
 **B. A malformed payload masquerading as a verdict.** Round 1 cross-posted the
 raw Anthropic tool object to `/chat/completions` and recorded the 400 as
@@ -122,7 +123,7 @@ models was empty — because the probe had posted an Anthropic-shaped object int
 an OpenAI-shaped slot. It is a statement about the probe's payload, not about
 whether the boundary supports builtins. Recording it as a capability verdict
 would have been a fourth entry in the taxonomy above, invented on the spot
-(`docs/research/claude-5-tool-schemas.md:77-90`).
+(`docs/research/claude-5-tool-schemas.md`).
 
 **C. A functional probe whose prompt demanded nothing.** Round 1 declared a tool
 and then prompted:
@@ -136,7 +137,7 @@ compatible with "upstream blocks this tool" and with "the model correctly
 answered a question that needed no tool," and nothing in the run separates them.
 Round 2 paired each name with a prompt that cannot be satisfied without the tool
 and forced `tool_choice`. **Every previously "silent" case produced a real call**
-(`docs/research/claude-5-tool-schemas.md:105-114`).
+(`docs/research/claude-5-tool-schemas.md`).
 
 **D. `/chat/completions` does not validate tool `type` at all.** Probed on
 `claude-opus-5`:
@@ -150,24 +151,24 @@ and forced `tool_choice`. **Every previously "silent" case produced a real call*
 A deliberately nonsensical type returns 200. So a 200 on a builtin tag on that
 boundary is **not** evidence of builtin support — the field is ignored and the
 tool is handled as a plain function
-(`docs/research/claude-5-tool-schemas.md:94-103`). B and D are the same mistake
+(`docs/research/claude-5-tool-schemas.md`). B and D are the same mistake
 with opposite signs: B would have recorded a capability the boundary *has* as
 missing; D would have recorded a capability the boundary *does not have* as
 present.
 
-**E. The deliberate non-change.** `README.md:68` recommends, for Claude Code:
+**E. The deliberate non-change.** The Claude Code example in `README.md`
+recommends:
 
 ```json
 { "permissions": { "deny": ["WebSearch"] } }
 ```
 
-Finding A looks like it contradicts that line. It does not. Claude Code's
-`WebSearch` is Anthropic's server-side builtin — the same tag `/v1/messages`
-refuses — not a function tool that happens to share the name. Same word,
-different mechanism, opposite verdict. The README line was left in place, and
-`docs/research/claude-5-tool-schemas.md:141-168` records *why*, specifically so
-that a future reader does not "fix" the README from the name table two sections
-above it.
+Finding A does not justify deleting that line. The probe distinguished a
+client-executed function tool named `WebSearch` from Anthropic's server-side
+`web_search_20250305` builtin, but no captured Claude Code payload establishes
+which shape Claude Code sends. The README deny remains a conservative
+recommendation until that mechanism is observed directly; the name-table result
+alone cannot settle it.
 
 ## Guidance
 
@@ -177,7 +178,7 @@ that leaves any of them implicit can manufacture the answer.**
 
 ### 1. A 400 that describes your payload is not a verdict
 
-Classify the error text before recording anything. `docs/research/builtin-tool-support.md:96-105`
+Classify the error text before recording anything. `docs/research/builtin-tool-support.md`
 already splits `/v1/messages` rejections into three layers that age differently:
 
 - `does not support tool types: X` — the model knows the tag and declines it.
@@ -198,7 +199,8 @@ you sent, and the only thing it establishes is that you sent it wrong.
 ### 2. A functional probe needs a prompt the tool is necessary for
 
 This is now written on the type every future case is declared against, rather
-than in a doc someone might not read (`scripts/lib/tool-cases.ts:12-17`):
+than in a doc someone might not read (the `ToolCase` comment in
+`scripts/lib/tool-cases.ts`):
 
 ```text
  * **The prompt is load-bearing.** A probe that declares a tool and then asks
@@ -208,7 +210,7 @@ than in a doc someone might not read (`scripts/lib/tool-cases.ts:12-17`):
  * Cost one probe round on 2026-08-05 (`docs/research/claude-5-tool-schemas.md`).
 ```
 
-`ToolCase` (`scripts/lib/tool-cases.ts:29-40`) makes the requirement structural:
+`ToolCase` in `scripts/lib/tool-cases.ts` makes the requirement structural:
 every case must supply `prompt` (*"A prompt that cannot be answered without the
 tool"*), `proof` (the item/block types that appear when it runs), and `kind` (who
 executes it). None of the three is optional, so a case that cannot answer
@@ -216,7 +218,7 @@ executes it). None of the three is optional, so a case that cannot answer
 
 ### 3. Name the mechanism, because the name does not
 
-`ToolKind` (`scripts/lib/tool-cases.ts:20-27`) exists because "did the tool work"
+`ToolKind` in `scripts/lib/tool-cases.ts` exists because "did the tool work"
 means different things depending on who runs it:
 
 ```ts
@@ -237,8 +239,8 @@ the two makes a `client` tool look broken because upstream never ran it, and
 makes a `server` tool look supported because the model emitted a call upstream
 then refused.
 
-`classify()` enforces the name check as well as the type check
-(`scripts/probes/tool-support.ts:151-158`):
+`classify()` in `scripts/probes/tool-support.ts` enforces the name check as well
+as the type check:
 
 ```ts
 const traced = kase.proof.some(p => types.includes(p))
@@ -264,14 +266,14 @@ The remedy is a **negative control**: send something that must fail if the field
 is being validated. `totally_not_a_tool_9000` is that control, and it is what
 turned an ambiguous 200 into a finding. The existing suite already had the
 positive equivalent — the `function (control)` case on both boundaries
-(`scripts/lib/tool-cases.ts:121-133` and `226-236`), which proves the harness
+in `scripts/lib/tool-cases.ts`, which proves the harness
 itself works before any real case is believed. Findings D shows the pair is
 needed: a control that must pass, and a control that must fail.
 
 ### 5. Keep the two questions separable in the standing probe
 
 `--names` exists so the tag-versus-name distinction is re-measurable rather than
-a one-run finding (`scripts/probes/tool-support.ts:65`), and it composes rather
+a one-run finding (`withNames` in `scripts/probes/tool-support.ts`), and it composes rather
 than replaces:
 
 ```text
@@ -280,21 +282,21 @@ cases: withNames
   : MESSAGES_TOOL_CASES,
 ```
 
-(`scripts/probes/tool-support.ts:262-264`; the `/responses` wiring is the same
-shape at `:237-239` with `responsesFunctionTool` and `['function_call']`.)
+(`buildBoundaries` in `scripts/probes/tool-support.ts`; the `/responses` wiring
+uses the same shape with `responsesFunctionTool` and `['function_call']`.)
 
 The name cases are generated from one list of suspects and one boundary-specific
-shape function (`nameFilterCases`, `scripts/lib/tool-cases.ts:85-97`), so the
+shape function (`nameFilterCases` in `scripts/lib/tool-cases.ts`), so the
 same eight names are asked the same question on each boundary in that boundary's
 own schema — which is precisely the discipline finding B violated by hand.
 
 Note what is *not* covered, and say so out loud: `buildBoundaries`
-(`scripts/probes/tool-support.ts:231-281`) returns exactly two boundaries,
+in `scripts/probes/tool-support.ts` returns exactly two boundaries,
 `/responses` and `/v1/messages`. `/chat/completions` is not among them, so
 finding D — the one that most needs a standing guard, because it makes 200s
 unreadable — is currently only reproducible by hand. The comment recording the
 8/8 result claims both `/v1/messages` and `/chat/completions`
-(`scripts/lib/tool-cases.ts:54-56`); the standing probe can re-measure the first
+(`NAME_FILTER_SUSPECTS` in `scripts/lib/tool-cases.ts`); the standing probe can re-measure the first
 half of that claim only.
 
 ## Why This Matters
@@ -303,8 +305,8 @@ half of that claim only.
 places.** A false negative (B) removes a tool the client could have used and
 leaves an authoritative-sounding "not supported" in a table. A false positive (D)
 advertises a tool that will silently do nothing — the `inert` verdict
-`summarize()` exists to name (`scripts/probes/tool-support.ts:94-104`), where the
-field is tolerated and never invoked. `docs/research/builtin-tool-support.md:22-24`
+`summarize()` exists to name in `scripts/probes/tool-support.ts`, where the
+field is tolerated and never invoked. `docs/research/builtin-tool-support.md`
 records that nothing came back `inert` in that sweep, which is only meaningful
 *because* the probe could have reported it.
 
@@ -327,21 +329,21 @@ looks like a detail until you notice one branch means every Claude Code user
 silently loses a tool.
 
 **A correct doc can still mislead through adjacency.** The name table in
-`docs/research/claude-5-tool-schemas.md:33-42` is accurate and the README's
+`docs/research/claude-5-tool-schemas.md` is accurate and the README's
 `deny: ["WebSearch"]` is also correct, and a reader who takes the first as
 license to delete the second breaks their own setup. The doc carries a section
-titled *"Do NOT read this as 'Claude Code's WebSearch works'"* (`:141`) for
+titled *"Do NOT read this as 'Claude Code's WebSearch works'"* for
 exactly that reason. When a finding is one inference step away from a wrong
 action, write the wrong inference down and refute it — do not rely on the reader
 not making it.
 
 **The open question is honestly open, and the suggested way to close it does not
-cover the boundary it needs to.** `docs/research/claude-5-tool-schemas.md:172-177`
+cover the boundary it needs to.** `docs/research/claude-5-tool-schemas.md`
 says the one thing that would change a README recommendation is *what shape
 Claude Code actually sends `WebSearch` in*, and suggests `--dump-failed-payloads`
 as the capture tool. At the current tree that flag only dumps `/responses`
-payloads on upstream 400 (`src/routes/responses/strategy.ts:95`, described that
-way in `README.md:119`); `claude-opus-5` has no `/responses` endpoint, so a
+payloads on upstream 400 (see `src/routes/responses/strategy.ts` and the CLI
+option table in `README.md`); `claude-opus-5` has no `/responses` endpoint, so a
 Claude Code request carrying `WebSearch` would not be dumped by it. Anyone
 picking this up needs a `/v1/messages`-side capture, not that flag.
 
@@ -373,10 +375,10 @@ which works.
 - **A boundary returns 200 for a field you suspect it ignores.** Add a garbage
   value. If garbage also returns 200, no 200 on that field is evidence of
   anything, and the whole column of results needs re-reading.
-- **A capability claim mentions a tool by name.** Ask who executes it.
-  `WebSearch` the Anthropic server builtin and `WebSearch` the Claude Code
-  function tool are different objects with opposite verdicts on the same
-  endpoint on the same day.
+- **A capability claim mentions a tool by name.** Ask who executes it. A
+  function tool named `WebSearch` and Anthropic's server-side web-search builtin
+  are different objects with opposite measured verdicts. Do not label either
+  one "Claude Code's" until a real Claude Code payload identifies the mechanism.
 
 Not needed when the constraint comes from the client-facing spec the proxy
 exposes rather than from upstream — those are properties of the protocol and hold
@@ -417,10 +419,11 @@ Both true at the current tree, on `/v1/messages`, for `claude-opus-5`:
 | `{"type":"web_search_20250305","name":"web_search"}` | server-executed builtin | 400 `The use of the web search tool is not supported.` |
 | `{"name":"web_search","description":...,"input_schema":{...}}` | client-executed function tool | 200, `tool_use` block named `web_search` |
 
-`README.md:68` denies `WebSearch` for Claude Code because Claude Code's
-`WebSearch` is the first row, not the second. Reproduction for both rows —
-including the `tool_choice` forcing that makes the second row conclusive — is at
-`docs/research/claude-5-tool-schemas.md:186-202`.
+The Claude Code example in `README.md` conservatively denies `WebSearch` because
+the first row is rejected and the repo has not captured which row Claude Code
+actually sends. Reproduction for both measured rows — including the
+`tool_choice` forcing that makes the second row conclusive — is at
+`docs/research/claude-5-tool-schemas.md`.
 
 ### The prompt change, in the cases themselves
 
@@ -430,7 +433,7 @@ Before (round 1) — every case shared the accept-level prompt:
 "Reply with the single word OK."   → observed: ["text"]   → recorded silent
 ```
 
-After (`scripts/lib/tool-cases.ts:89-96`) — the prompt is generated per name from
+After, in `nameFilterCases` in `scripts/lib/tool-cases.ts`, the prompt is generated per name from
 a task the tool is required for, and the expected call name travels with it:
 
 ```ts
@@ -446,21 +449,21 @@ return NAME_FILTER_SUSPECTS.map(({ name, task }) => ({
 
 The task strings are deliberately concrete —
 `'search for the latest Bun release version'`, `'run \`uname -a\`'`,
-`'take a screenshot'` (`scripts/lib/tool-cases.ts:64-73`) — because a vague task
+`'take a screenshot'` (`NAME_FILTER_SUSPECTS` in `scripts/lib/tool-cases.ts`) — because a vague task
 is answerable in prose and puts you back in round 1.
 
-Note the two-level structure this sits inside
-(`scripts/probes/tool-support.ts:184-227`): level 1 declares the tool and records
+Note the two-level structure this sits inside `probeCase` in
+`scripts/probes/tool-support.ts`: level 1 declares the tool and records
 the HTTP status, and level 2 runs only if level 1 accepted. That ordering is what
 keeps an accept-level 400 (a real rejection) from being confused with a
 functional-level silence (no proof of use), and `--accept-only`
-(`scripts/probes/tool-support.ts:64`) makes the cheap half runnable on its own —
+in the same probe makes the cheap half runnable on its own —
 as long as the person reading its output remembers it answers the weaker
 question.
 
 ### The verdict vocabulary that keeps the distinctions visible
 
-`summarize()` (`scripts/probes/tool-support.ts:94-104`) refuses to collapse the
+`summarize()` in `scripts/probes/tool-support.ts` refuses to collapse the
 axes into a boolean:
 
 ```ts
@@ -479,17 +482,17 @@ Five words, and each names a different epistemic state: `supported` (it ran or
 was called), `accepted` (declaration took, execution not measured), `inert`
 (accepted and never invoked), `unsupported` (upstream refused), `unmeasured` (a
 capacity or gateway fault carrying no signal —
-`scripts/lib/probe-harness.ts:30` treats 408/429/5xx/529 as unmeasured and
-`sendRawWithRetry` retries them without ever retrying a 400,
-`scripts/lib/probe-harness.ts:111-129`). The probe then prints the `unmeasured`
+`isUnmeasuredStatus` in `scripts/lib/probe-harness.ts` treats
+408/429/5xx/529 as unmeasured and `sendRawWithRetry` retries them without ever
+retrying a 400). The probe then prints the `unmeasured`
 cells with an explicit instruction not to publish them as unsupported
-(`scripts/probes/tool-support.ts:373-379`). Round 1's `observed: ["text"]` had no
+(in `scripts/probes/tool-support.ts`). Round 1's `observed: ["text"]` had no
 vocabulary slot at all, which is part of how it got written down as a fact.
 
 ### What the fix touched, and what it deliberately did not
 
-On the unmerged branch `fix/responses-web-search-unblock` (commits `f7e2e0b`,
-`8db42c3`, `8a5db2d` — pending, not on `main`):
+PR #73 merged the `fix/responses-web-search-unblock` work as `653a90c`
+(the branch history included commits `f7e2e0b`, `8db42c3`, and `8a5db2d`):
 
 - `scripts/lib/tool-cases.ts` — `nameFilterCases()`, `anthropicFunctionTool()`,
   `responsesFunctionTool()`, `NAME_FILTER_SUSPECTS`, and the module/`ToolCase`
@@ -500,10 +503,9 @@ On the unmerged branch `fix/responses-web-search-unblock` (commits `f7e2e0b`,
   round-1 defects, which are kept rather than quietly corrected.
 - Verified live: `--names` against `claude-sonnet-5` returned 8/8 `supported`.
 - **No proxy behavior changed.** The proxy filters no tool names on either
-  boundary — `grep -rn web_search src/` at the current tree finds only Anthropic
-  *result* block types, the `/responses` `tool_choice` enum
-  (`src/ingest/validation/responses.ts:218-231`), and `ToolChoiceBuiltin`
-  (`src/types/responses.ts:66-68`) — so the correct outcome of the probe was a
+  boundary — `rg web_search src` at the current tree finds schema/event type
+  declarations and result-block translation, but no predicate that rejects a
+  function tool by name. The correct outcome of the probe was therefore a
   documented non-change plus a re-runnable probe.
 
 The earlier commit on the same branch is the one that removed real code:
@@ -545,5 +547,5 @@ distinguishes it from a bias toward deleting guards.
   probe. `--names` re-measures the tag-versus-name distinction on `/responses`
   and `/v1/messages`; `/chat/completions` is not a boundary it covers.
 - PR #62, #63 (parameter verdicts), PR #68 (the policy-layer fix), PR #70 (the
-  runtime-scope fix). The web-search unblock and the probe rework described here
-  are pending on `fix/responses-web-search-unblock` and have no PR number yet.
+  runtime-scope fix), and PR #73 (`653a90c`, the web-search unblock and probe
+  rework described here). All are merged.

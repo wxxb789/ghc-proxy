@@ -1,6 +1,7 @@
 ---
 title: "A green suite is evidence about the runtime you ran it on"
 date: 2026-07-29
+last_updated: 2026-08-25
 category: testing
 module: upstream timeout classification across Bun and Node
 problem_type: convention
@@ -32,7 +33,7 @@ tags:
 
 ## Problem
 
-`AGENTS.md:93` commits this repo to a two-runtime contract: "Route code under
+`AGENTS.md` commits this repo to a two-runtime contract: "Route code under
 `src/` must work on both Bun and Node." The test suite runs on one of them.
 `.github/workflows/ci.yml` runs `bun test` under Bun; nothing in CI executes the
 suite under Node.
@@ -82,14 +83,22 @@ still live. The second commit is where the actual fix landed. Both were squashed
 into `09ef208`, so the pre-squash SHAs no longer exist on any checkout — read
 the PR for the two-step sequence.
 
-**Reading the Node lane of CI as coverage.** `AGENTS.md:93` used to claim
+**Reading the Node lane of CI as coverage.** `AGENTS.md` used to claim
 "Node-only regressions in `dist/main.mjs` are caught at publish time," with no
-qualifier. The gate behind that sentence is `runSelfcheck('node', ...)` at
-`scripts/smoke/packaged-cli.ts:118`, which runs `src/selfcheck.ts` — five
-gpt-tokenizer encoding probes (`PROBE_ENCODINGS`, `src/selfcheck.ts:19-25`). It
-proves the bundle loads and resolves under Node. It never constructs a `fetch`,
-an error, a stream, or a `Response`. That sentence now says *module-loading*
-regressions, which is what it actually gates.
+qualifier. At the time of PR #69, the gate behind that sentence was
+`runSelfcheck('node', ...)` in `scripts/smoke/packaged-cli.ts`, and
+`src/selfcheck.ts` contained only the five gpt-tokenizer encoding probes in
+`PROBE_ENCODINGS`. It proved the bundle loaded and resolved under Node, but it
+never constructed a `fetch`, an error, a stream, or a `Response`.
+
+**Current state (2026-08-25).** Packaged smoke still runs `selfcheck` under both
+Bun and Node, but `selfcheck` now contains 13 probes: five tokenizer probes and
+eight entries in `RUNTIME_PROBES`. Those runtime probes cover the HTTP error
+`Response` contract, connection-error classification, response-body
+cancellation, response commit boundaries, caller cancellation, protocol
+payloads, the Dashboard bundle, and the Node Dashboard listener boundary. This
+materially widens the Node gate; it does not turn the Bun-native test suite into
+a Node test suite or prove every route behavior under Node.
 
 ## Solution
 
@@ -128,8 +137,8 @@ meaning. It cannot distinguish a classifier that handles Node shapes from one
 that does not, because it never carries a Node shape in the first place. The
 plausible response to a red test is to weaken the assertion or drop the case,
 and the Node branch ends up unpinned either way.
-`tests/reliability.test.ts:76-97` hand-rolls the shapes instead, and says why in
-the doc comment.
+The timeout-classification fixtures in `tests/reliability.test.ts` hand-roll the
+shapes instead, and say why in their doc comments.
 
 ## Why This Works
 
@@ -152,8 +161,8 @@ the same each time: **an error path that returns early bypasses the
 instrumentation the normal path carries.** Here `onError` returned a fresh
 `Response` instead of falling through Elysia's normal path, so `set.status`
 still held its pre-throw value when `onAfterResponse` read it — every error
-logged as 500, including the ones the client received as 504 (`src/server.ts:27-30`,
-`:47`, `:60`, read back at `:93`). The same thread runs through
+logged as 500, including the ones the client received as 504 (the `onError` and
+`onAfterResponse` hooks in `src/server.ts`). The same thread runs through
 `duplicated-semantic-rules` ("local rejections were invisible in logs") and
 `policy-rejection-is-not-a-protocol-limit` ("a local 400 produces no upstream
 signal to investigate"). A wrong status in the access log is not cosmetic; it is
@@ -203,28 +212,31 @@ both.
 - **A clean grep is not coverage evidence.** It bounds how many places implement
   the rule. It says nothing about the input space, and the runtime axis lives
   entirely in the input space.
-- **Know what the Node lane actually runs.** Today it is `selfcheck`'s five
-  tokenizer probes and nothing else. The suite cannot simply be pointed at Node
-  — `rtk grep -rl "bun:test" tests/ | wc -l` returns 22, so every test file
-  imports Bun's runner and closing the gap that way is a test-runner migration,
-  not a CI flag. When a change's risk is Node-shaped, add a hand-rolled fixture
-  for the Node shape to the Bun suite, which is what `tests/reliability.test.ts`
-  now does.
+- **Know what the Node lane actually runs.** As of 2026-08-25 it runs the five
+  tokenizer probes and eight targeted runtime probes in `src/selfcheck.ts`, not
+  the repository test suite. A current `rg -l "bun:test" tests -g "*.ts"`
+  finds 27 test/helper modules tied to Bun's runner; the exact count will grow,
+  but the architectural point is stable: closing the remaining gap is a
+  test-runner migration or another deliberately scoped cross-runtime probe, not
+  a CI flag. When a change's risk is Node-shaped and `selfcheck` does not exercise
+  it, add a hand-rolled Node-shape fixture to the Bun suite or a focused runtime
+  probe, as the risk warrants.
 - **When a runtime-dependent belief reaches a doc comment, record the semantics,
   not the magnitude.** "~300s ceiling" is true and useless: idle-resetting and
   total-duration are opposite predictions for a proxy whose workload is long
   streams, and the number alone does not distinguish them. Cite what was
-  measured and on which versions — `src/lib/timeout-error.ts:1-26` names both
-  runtimes' shapes and where the signal sits.
+  measured and on which versions — the module comment in
+  `src/lib/timeout-error.ts` names both runtimes' shapes and where the signal
+  sits.
 
 ## Related
 
 - `docs/solutions/conventions/duplicated-semantic-rules-diverge-silently.md` —
   the rule this one sits directly behind. Its diagnostic is a grep for multiple
-  implementations, and here the grep was clean: `isTimeoutLikeError`
-  (`src/lib/timeout-error.ts:78`) has exactly one implementation, called from
-  `src/server.ts:46` and
-  `src/translator/anthropic/anthropic-stream-transducer.ts:330`. That doc's
+  implementations, and here the grep was clean: `isTimeoutLikeError` in
+  `src/lib/timeout-error.ts` has exactly one implementation, called from
+  `src/server.ts` and
+  `src/translator/anthropic/anthropic-stream-transducer.ts`. That doc's
   lesson is quoted almost verbatim in the module's own header comment. It was
   applied, the consolidation was correct, and the defect survived it. Its scope
   ends at implementation count; this one starts at input-space count.

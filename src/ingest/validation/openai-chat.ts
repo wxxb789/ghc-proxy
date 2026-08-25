@@ -99,6 +99,7 @@ const openAIChatPayloadSchema = z.object({
   messages: z.array(openAIMessageSchema).min(1),
   temperature: finiteNumberSchema.min(0).max(2).nullable().optional(),
   top_p: finiteNumberSchema.min(0).max(1).nullable().optional(),
+  top_k: z.unknown().optional(),
   max_tokens: nonNegativeIntegerSchema.nullable().optional(),
   stop: z.union([z.string(), z.array(z.string())]).nullable().optional(),
   n: z.number().int().positive().nullable().optional(),
@@ -115,6 +116,14 @@ const openAIChatPayloadSchema = z.object({
   reasoning_effort: z.enum(REASONING_EFFORT_VALUES).nullable().optional(),
   thinking_budget: z.number().int().positive().nullable().optional(),
 }).loose().superRefine((payload, ctx) => {
+  if (Object.hasOwn(payload, 'top_k')) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'top_k is not supported by the OpenAI Chat Completions API',
+      path: ['top_k'],
+    })
+  }
+
   const toolChoice = payload.tool_choice
 
   if (

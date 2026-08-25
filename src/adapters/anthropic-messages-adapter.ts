@@ -24,7 +24,9 @@ import { normalizeAnthropicRequest } from '~/translator/anthropic/anthropic-norm
 import { AnthropicStreamTranslator } from '~/translator/anthropic/anthropic-stream-transducer'
 import { mapOpenAIResponseToAnthropic } from '~/translator/anthropic/openai-anthropic-mapper'
 import { normalizeOpenAIResponse } from '~/translator/anthropic/openai-normalizer'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { defaultTranslationPolicy, TranslationContext } from '~/translator/anthropic/translation-policy'
+import { isAnthropicBuiltinTool } from '~/translator/anthropic/types'
 
 export interface ModelCapabilities {
   supportsThinkingBudget: boolean
@@ -99,17 +101,6 @@ export function recordAnthropicRequestIssues(
   request: NormalizedAnthropicRequest,
   context: TranslationContext,
 ) {
-  if (request.serviceTier !== undefined) {
-    context.record(
-      {
-        kind: 'unsupported_service_tier',
-        severity: 'warning',
-        message: 'Anthropic service_tier is not supported by the upstream Copilot CAPI payload and was dropped.',
-      },
-      { fatalInStrict: true },
-    )
-  }
-
   for (const turn of request.turns) {
     if (turn.role === 'user') {
       for (const block of turn.blocks) {
@@ -202,6 +193,27 @@ export function normalizeAnthropicConversation(
   policy: TranslationPolicy,
 ): NormalizedAnthropicConversation {
   const context = new TranslationContext(policy)
+  if (payload.service_tier !== undefined) {
+    throw new TranslationFailure(
+      'Anthropic service_tier cannot be translated to Chat Completions.',
+      {
+        status: 400,
+        kind: 'unsupported_service_tier',
+      },
+    )
+  }
+
+  const builtinTool = payload.tools?.find(isAnthropicBuiltinTool)
+  if (builtinTool) {
+    throw new TranslationFailure(
+      `Anthropic built-in/toolset "${builtinTool.type ?? builtinTool.name ?? 'unknown'}" cannot be translated to Chat Completions.`,
+      {
+        status: 400,
+        kind: 'unsupported_server_tool',
+      },
+    )
+  }
+
   const normalized = normalizeAnthropicRequest(payload)
   recordAnthropicRequestIssues(normalized, context)
 

@@ -14,7 +14,7 @@ Tracked items for future work. Items are roughly ordered by priority.
 
 - [ ] **Re-probe `/responses` + `/chat/completions` (gpt/gemini) upstream surface**
   - The 2026-07-25 refresh covered only the Claude `/v1/messages` surface (models, output_config/effort, cache threshold, official tools). The `/responses` and gpt/gemini rows in `docs/design/model-routing.md` "Model Endpoint Map" are still the 2026-06-17 baseline and may be stale.
-  - New models observed in the 2026-07-25 listing but NOT behavior-probed: `gpt-5.6-terra` / `-sol` / `-luna` (1050k ctx), `gemini-3.6-flash`, `mai-code-1-flash-picker`, `trajectory-compaction`.
+  - These models now have partial, topic-specific probe coverage, but not one comprehensive surface refresh: `gpt-5.6-terra` / `-sol` / `-luna` (prompt caching, sampling, web search), `gemini-3.6-flash` (Gemini capability probes), and `mai-code-1-flash-picker` (web-search acceptance). `trajectory-compaction` still lacks a usable baseline.
   - Re-run sequentially (shared rate-limited upstream, burns real quota): `scripts/probes/responses-resilience.ts`, `scripts/probes/tool-support.ts` (responses models), `scripts/matrix/live-compat-matrix.ts` as needed.
   - Confirm June-17 `/responses` findings still hold: `store:true` → 400 (ZDR org), `previous_response_id` → 400, encrypted_content round-trip, gemini-3.1-pro-preview cache-miss.
   - Update the endpoint map + `docs/messages-routing-and-translation.md` and refresh the `project-copilot-upstream-status` memory snapshot.
@@ -33,17 +33,12 @@ Tracked items for future work. Items are roughly ordered by priority.
   - Set coverage thresholds (e.g., 80%) as CI gate
   - Gives visibility into which modules lack tests
 
-- [ ] **Add `"sideEffects": false` to `package.json`**
-  - Enables tree-shaking optimizations in bundler
-  - Codebase appears side-effect-free at module scope
-
 ### Medium Priority
 
 - [ ] **Expand test coverage for under-tested modules**
-  - Clients (`CopilotClient`, `GitHubClient`, `VSCodeClient`) — only mocked, never directly tested
+  - VS Code version discovery (`src/clients/vscode-client.ts`) — local command and package-file fallbacks are only mocked by consumers
   - Rate limiting (`src/state/rate-limiter.ts`) — no dedicated tests
   - Request guard middleware (`src/routes/middleware/request-guard.ts`) — tested indirectly through routes only
-  - Request logger (`src/lib/request-logger.ts`) — no isolated tests
   - Concurrent request / race condition scenarios
 
 - [ ] **Reduce route registration duplication in `src/server.ts`**
@@ -60,19 +55,15 @@ Tracked items for future work. Items are roughly ordered by priority.
   - `src/lib/error.ts` `throwUpstreamError()` silently swallows JSON parse failures
   - Consider logging parse failures at debug level
 
-- [ ] **Reduce emulator branching duplication**
-  - `src/routes/responses/resource-handler.ts` has repeated `if (shouldUseResponsesOfficialEmulator())` checks
-  - Could consolidate with strategy pattern or early return
-
 ## Research
 
 - [ ] **Evaluate `ai-tokenizer` as a replacement for `gpt-tokenizer`**
   - Project: https://github.com/coder/ai-tokenizer
-  - Current tokenizer: `gpt-tokenizer` (v3.4.0) — used in `src/lib/tokenizer.ts` for local token estimation in `count_tokens` endpoint and chat completions usage
+  - Current tokenizer: `gpt-tokenizer` (v3.4.0) — used by `src/lib/tokenizer.ts` for Anthropic `count_tokens`, Chat Completions request logging, Responses official-emulator `input_tokens`, and packaged selfcheck tokenizer probes
   - Current usage: lazy-loaded encoders (`o200k_base`, `cl100k_base`, `p50k_base`, `p50k_edit`, `r50k_base`) cached per encoding type, with model-specific constants for tool/message token calculation
   - Questions to answer:
     - Does `ai-tokenizer` support the same encoding types?
-    - How does bundle size compare? (`gpt-tokenizer` contributes to the single-file `dist/main.mjs`)
+    - How does bundle size compare? (`gpt-tokenizer` contributes the tokenizer chunks shipped beside `dist/main.mjs`)
     - Performance: encoding speed, memory footprint
     - Does it support Bun natively?
     - Does it handle Claude/Anthropic tokenization or is it OpenAI-only like `gpt-tokenizer`?

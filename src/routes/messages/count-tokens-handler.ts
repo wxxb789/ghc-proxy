@@ -1,10 +1,11 @@
-import type { AnthropicCountTokensPayload } from '~/translator'
+import type { AnthropicCountTokensPayload, AnthropicTool } from '~/translator'
 import consola from 'consola'
 
 import { inferModelFamily } from '~/core/capi/profile'
 import { protocolRegistry } from '~/ingest'
 import { resolveModelOrThrow, withTranslationErrors } from '~/lib/error'
-import { getTokenCount } from '~/lib/tokenizer'
+import { estimateSerializedTokens, getTokenCount } from '~/lib/tokenizer'
+import { isAnthropicBuiltinTool } from '~/translator'
 
 import { createAnthropicAdapter } from './shared'
 
@@ -19,6 +20,17 @@ const ESTIMATION_FACTOR: Record<string, number> = {
   claude: 1.15,
   grok: 1.03,
   gpt: 1.10,
+}
+
+// Conservative maximums from Anthropic's documented August 2026 toolset
+// costs. Browser includes the Sonnet 5 default plus all optional members.
+const BUILTIN_TOOLSET_TOKENS: Record<string, number> = {
+  browser_toolset_20260801: 7_550,
+  computer_toolset_20260801: 4_590,
+}
+
+function getBuiltinToolsetTokens(tool: AnthropicTool): number | undefined {
+  return tool.type ? BUILTIN_TOOLSET_TOKENS[tool.type] : undefined
 }
 
 export interface CountTokensCoreParams {
@@ -39,20 +51,33 @@ export async function handleCountTokensCore(
     headers,
   )
 
+  const builtinTools = anthropicPayload.tools?.filter(isAnthropicBuiltinTool) ?? []
+  const functionTools = anthropicPayload.tools?.filter(tool => !isAnthropicBuiltinTool(tool))
+  const calibratedBuiltinTokens = builtinTools.reduce(
+    (total, tool) => total + (getBuiltinToolsetTokens(tool) ?? 0),
+    0,
+  )
+  const uncalibratedBuiltinTools = builtinTools.filter(tool => getBuiltinToolsetTokens(tool) === undefined)
+  const countPayload = builtinTools.length > 0
+    ? { ...anthropicPayload, tools: functionTools }
+    : anthropicPayload
+
   const adapter = createAnthropicAdapter()
-  const openAIPayload = withTranslationErrors(() => adapter.toTokenCountPayload(anthropicPayload))
+  const openAIPayload = withTranslationErrors(() => adapter.toTokenCountPayload(countPayload))
   const selectedModel = resolveModelOrThrow(openAIPayload.model)
 
   const tokenCount = await getTokenCount(openAIPayload, selectedModel)
+  if (uncalibratedBuiltinTools.length > 0)
+    tokenCount.input += await estimateSerializedTokens(uncalibratedBuiltinTools, selectedModel)
 
   if (anthropicPayload.tools && anthropicPayload.tools.length > 0) {
     let mcpToolExist = false
     if (anthropicBeta?.startsWith('claude-code')) {
       mcpToolExist = anthropicPayload.tools.some(tool =>
-        tool.name.startsWith('mcp__'),
+        tool.name?.startsWith('mcp__') ?? false,
       )
     }
-    if (!mcpToolExist) {
+    if (!mcpToolExist && calibratedBuiltinTokens === 0) {
       const overhead = TOOL_OVERHEAD_TOKENS[inferModelFamily(anthropicPayload.model)]
       if (overhead) {
         tokenCount.input = tokenCount.input + overhead
@@ -65,6 +90,7 @@ export async function handleCountTokensCore(
   if (factor) {
     finalTokenCount = Math.round(finalTokenCount * factor)
   }
+  finalTokenCount += calibratedBuiltinTokens
 
   consola.info('Token count:', finalTokenCount)
 

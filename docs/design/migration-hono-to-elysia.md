@@ -1,5 +1,10 @@
 # Migration Plan: Hono → Elysia
 
+> **Historical implementation record (completed 2026-03-13).** This document
+> preserves the migration work units and the verification evidence captured at
+> completion. Counts such as "105 tests" describe that snapshot; they are not
+> the current suite totals or the current runtime/route contract.
+
 ## Status Tracking
 
 | WU | Description | Status | Notes |

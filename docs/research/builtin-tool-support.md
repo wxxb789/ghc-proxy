@@ -110,7 +110,7 @@ returns `code_execution_tool_result`, while `20250825` and `20260120` return
 `bash_code_execution_tool_result`. A translator matching only the former would
 silently drop the newer results.
 
-## The two boundaries disagree, permanently
+## The two boundaries disagreed in the August 4, 2026 probe
 
 Same day, same account, opposite answers:
 

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/ghc-proxy)](https://www.npmjs.com/package/ghc-proxy)
 [![CI](https://github.com/wxxb789/ghc-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/wxxb789/ghc-proxy/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/wxxb789/ghc-proxy/blob/master/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/wxxb789/ghc-proxy/blob/main/LICENSE)
 
 A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic compatible API. Use it to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://www.cursor.com/), or any tool that speaks the OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages protocol.
 
@@ -107,13 +107,13 @@ bunx ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node runti
 
 | Option | Alias | Default | Description |
 |--------|-------|---------|-------------|
-| `--port` | `-p` | `4141` | Port to listen on |
+| `--port` | `-p` | `4141` | Port to listen on (`1..65535`; malformed or zero values fail before startup) |
 | `--verbose` | `-v` | `false` | Enable verbose logging |
 | `--account-type` | `-a` | `individual` | `individual`, `business`, or `enterprise` |
 | `--rate-limit` | `-r` | -- | Minimum seconds between requests |
 | `--wait` | `-w` | `false` | Queue requests instead of rejecting with 429 when `--rate-limit` cooldown has not elapsed (requires `--rate-limit`) |
 | `--manual` | -- | `false` | Manually approve each request |
-| `--github-token` | `-g` | -- | Pass a GitHub token directly (from `auth`) |
+| `--github-token` | `-g` | -- | Use a GitHub token for this process only (normally obtained with `auth`); this flag does not persist it to `config.json` |
 | `--claude-code` | `-c` | `false` | Generate a Claude Code launch command |
 | `--show-token` | -- | `false` | Display tokens on auth and refresh |
 | `--dump-failed-payloads` | `-D` | `false` | Dump failed `/responses` payloads on upstream 400 errors for debugging. Can also be enabled with `DUMP_FAILED_PAYLOADS=1`. |
@@ -189,30 +189,31 @@ All fields are optional. The full schema:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `githubToken` | `string` | -- | Persisted GitHub token. Normally written automatically by `auth` / `--github-token`; you rarely set this by hand |
-| `modelRewrites` | `{ from, to }[]` | -- | Glob-pattern model substitution rules (see [Model Rewrites](#model-rewrites)) |
-| `modelFallback` | `object` | -- | Override default model fallbacks (see [Customizing Fallbacks](#customizing-fallbacks)) |
+| `githubToken` | `string` | unset | Persisted GitHub token. The device-code flow (`auth` or first startup) writes it automatically; `start --github-token` is runtime-only and does not write this field |
+| `modelRewrites` | `{ from, to }[]` | `[]` | Glob-pattern model substitution rules (see [Model Rewrites](#model-rewrites)) |
+| `modelFallback` | `object` | built-in family defaults | Override default model fallbacks (see [Customizing Fallbacks](#customizing-fallbacks)) |
 | `modelFallback.claudeOpus` | `string` | `claude-opus-5` | Fallback for `claude-opus-*` models |
 | `modelFallback.claudeSonnet` | `string` | `claude-sonnet-5` | Fallback for `claude-sonnet-*` models |
 | `modelFallback.claudeHaiku` | `string` | `claude-haiku-4.5` | Fallback for `claude-haiku-*` models |
-| `smallModel` | `string` | -- | Target model for compact request routing (see [Small-Model Routing](#small-model-routing)) |
+| `smallModel` | `string` | unset | Target model for compact request routing (see [Small-Model Routing](#small-model-routing)) |
 | `compactUseSmallModel` | `boolean` | `false` | Route compact/summarization requests to `smallModel` |
 | `useFunctionApplyPatch` | `boolean` | `true` | Rewrite `apply_patch` custom tool as function tool on Responses path |
 | `responsesApiAutoCompactInput` | `boolean` | `false` | Automatically trim Responses `input` to the latest `compaction` item |
 | `responsesApiAutoContextManagement` | `boolean` | `false` | Automatically inject Responses `context_management` for selected models |
-| `responsesApiContextManagementModels` | `string[]` | -- | Models eligible for auto-injected Responses `context_management` |
-| `responsesApiParameterFilters` | `{ models, params }[]` | -- | Extra rules to strip request parameters on the Responses boundary (see [Responses Parameter Filters](#responses-parameter-filters)) |
+| `responsesApiContextManagementModels` | `string[]` | `[]` | Models eligible for auto-injected Responses `context_management` |
+| `responsesApiParameterFilters` | `{ models, params }[]` | `[]` | Extra rules to strip request parameters on the Responses boundary; the built-in reasoning-model rule remains active unless replaced (see [Responses Parameter Filters](#responses-parameter-filters)) |
 | `responsesApiParameterFiltersReplaceDefault` | `boolean` | `false` | Disable the built-in reasoning-model default rule so only your `responsesApiParameterFilters` apply |
+| `chatCompletionsUseMaxCompletionTokens` | `string[]` | `[]` | Extra model globs that rename Chat Completions `max_tokens` to `max_completion_tokens`; adds to the built-in `gpt-5.4` / `gpt-5.4-*` rules |
 | `responsesOfficialEmulator` | `boolean` | `false` | Enable local OpenAI-style Responses state emulation for `previous_response_id`, `conversation`, retrieve, input_items, delete, and input_tokens |
 | `responsesOfficialEmulatorTtlSeconds` | `number` | `14400` | In-memory TTL for locally emulated Responses state |
-| `modelReasoningEfforts` | `Record<string, string>` | -- | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (ascending) |
+| `modelReasoningEfforts` | `Record<string, string>` | `{}`; unlisted models use `high` | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (ascending) |
 | `upstreamQueueConcurrency` | `number` | `10` | Maximum concurrent Copilot upstream requests |
 | `upstreamQueueMaxRetries` | `number` | `1` | Maximum retries across capacity and approved pre-connection failures (`0..2`) |
 | `upstreamRecoveryBudgetSeconds` | `number` | `60` | Shared recovery deadline after the first retryable outcome or active-cooldown encounter (`1..120` seconds) |
-| `overloadFallbacks` | `Record<string, string>` | -- | Exact effective-model mappings for one opt-in fallback dispatch after terminal model `529`; absent means disabled |
+| `overloadFallbacks` | `Record<string, string>` | `{}` (disabled) | Exact effective-model mappings for one opt-in fallback dispatch after terminal model `529` |
 | `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream retry backoff when `Retry-After` is absent |
 | `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum computed backoff (seconds); does not clamp `Retry-After` |
-| `gheDomain` | `string` | -- | GitHub Enterprise Cloud company domain (persisted automatically after GHE.com auth) |
+| `gheDomain` | `string` | unset | GitHub Enterprise Cloud company domain (persisted automatically after GHE.com auth) |
 
 Example:
 
@@ -231,6 +232,7 @@ Example:
   "responsesApiAutoCompactInput": false,
   "responsesApiAutoContextManagement": false,
   "responsesApiContextManagementModels": ["gpt-5", "gpt-5-mini"],
+  "chatCompletionsUseMaxCompletionTokens": [],
   "responsesOfficialEmulator": false,
   "responsesOfficialEmulatorTtlSeconds": 14400,
   "modelReasoningEfforts": {
@@ -361,7 +363,9 @@ When the Copilot token response includes `endpoints.api`, `ghc-proxy` now prefer
 
 Incoming requests hit an [Elysia](https://elysiajs.com/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use a native Responses path with explicit compatibility policies. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
 
-For Anthropic `search_result` blocks, current live probes show Copilot native `/v1/messages` accepts top-level search results and pure search-result tool outputs, but rejects top-level `citations` and mixed text/search-result tool output arrays. The native path sanitizes those known rejection cases, while translated paths flatten search results to text.
+The built-in, read-only Dashboard projects process health, model routing, behavior, and recent request lifecycle metadata without storing request or response content. See [Dashboard Observability](./docs/design/dashboard-observability.md).
+
+For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-opus-4.6` on Copilot native `/v1/messages` accepted top-level search results and pure search-result tool outputs, but rejected top-level `citations` and mixed text/search-result tool output arrays. The native path sanitizes those observed rejection cases, while translated paths flatten search results to text; re-run the probe before treating that dated upstream result as universal.
 
 ### Request Routing
 
@@ -410,13 +414,28 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | `GET`  | `/usage` | Copilot quota / usage monitoring |
 | `GET`  | `/token` | Inspect the current Copilot token |
 
-> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses`, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility endpoints (`/health`, `/usage`, `/token`) are root-only and not exposed under `/v1`.
+**Local Dashboard (read-only):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/dashboard` | Dashboard application |
+| `GET` | `/dashboard/styles.css` | Dashboard stylesheet |
+| `GET` | `/dashboard/app.js` | Dashboard client script |
+| `GET` | `/dashboard/api/overview` | Process, authentication, quota, request, and queue summary |
+| `GET` | `/dashboard/api/models` | Upstream model metadata and effective proxy capabilities |
+| `GET` | `/dashboard/api/behavior` | Active routing, compatibility policies, strategies, and effect counters |
+| `GET` | `/dashboard/api/requests` | Active requests and the most recent 256 completed request summaries |
+
+Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. They are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection and security contract.
+
+> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses`, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
 
 ## Responses Compatibility
 
 `/v1/responses` is designed to stay close to the OpenAI wire format while making Copilot limitations explicit:
 
 - requests are validated before any mutation
+- client-supplied `top_k` is rejected with `400` on the OpenAI Chat Completions and Responses boundaries because neither official OpenAI schema defines it; clients that send it by mistake receive an explicit error instead of a silent drop. Anthropic Messages `top_k` remains supported and is preserved when the proxy translates that request internally for Copilot
 - common official request fields such as `conversation`, `previous_response_id`, `max_tool_calls`, `truncation`, `user`, `prompt`, and `text` are now modeled explicitly instead of relying on loose passthrough alone
 - official `text.format` options are modeled explicitly, including `text`, `json_object`, and `json_schema`
 - an opt-in `responsesOfficialEmulator` mode adds in-memory OpenAI-style state for `previous_response_id`, `conversation`, `GET /responses/{id}`, `GET /responses/{id}/input_items`, `DELETE /responses/{id}`, and `POST /responses/input_tokens`
@@ -427,9 +446,9 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 - automatic trimming of Responses `input` to the latest `compaction` item is disabled by default and only applies when `responsesApiAutoCompactInput` is `true`
 - reasoning defaults for Anthropic -> Responses translation can be tuned with `modelReasoningEfforts`
 - request parameters that a model rejects (e.g. `temperature`/`top_p` on reasoning models) are stripped on the Responses boundary rather than leaked upstream as a `400`; see [Responses Parameter Filters](#responses-parameter-filters)
-- built-in web search (`web_search`, `web_search_preview`, and their dated variants) is forwarded to Copilot rather than blocked; every `/responses` model probed accepts it and runs a real search, see [docs/research/responses-web-search.md](docs/research/responses-web-search.md)
+- built-in web search (`web_search`, `web_search_preview`, and their dated variants) is forwarded to Copilot rather than blocked; every `/responses` model reached by the August 4, 2026 acceptance sweep accepted the tool, while functional search execution was verified on `gpt-5.6-sol` and `gpt-5.6-terra`, see [docs/research/responses-web-search.md](docs/research/responses-web-search.md)
 - external image URLs on the Responses path fail explicitly with `400`; use `file_id` or data URL image input instead
-- official `input_file` and `item_reference` input items are modeled explicitly and validated before forwarding
+- official `input_file` and `item_reference` input items are modeled explicitly and validated, but the verified Copilot GPT Responses boundary is stateless: it rejects `store: true` and cannot resolve returned item IDs on later requests. The proxy deliberately applies a proxy-wide `store: false` policy, removes all `item_reference` items before dispatch, and removes `function_call_output` items whose `call_id` has no matching `function_call` in the same input array. Without the optional emulator, a caller that requested storage still receives a successful stateless response; retrieve/delete/continuation semantics are available only from the local emulator
 
 Example opt-in configuration for these two Responses-specific policies:
 
@@ -451,7 +470,7 @@ Some Copilot models reject request parameters that the OpenAI wire format allows
 
 This is expressed as a small rule engine that runs on both the native `/v1/responses` path and the `/v1/messages` → Responses translation path:
 
-- **Built-in default rule:** any model that advertises `reasoning_effort` has `temperature` and `top_p` stripped. This covers the whole reasoning family (including future point releases like `gpt-5.4-mini`) with no configuration.
+- **Built-in default rule:** any model that advertises `reasoning_effort` has `temperature` stripped. It also has `top_p` stripped except for `*-codex` / `*-codex-*` models, which are exempt because the July 26, 2026 probe found the tested Codex model accepted `top_p` while its reasoning-model siblings rejected it. This exemption narrows only the built-in rule; an operator rule can still strip `top_p`.
 - **`responsesApiParameterFilters`:** add your own rules. Each rule is `{ "models": [glob, ...], "params": [name, ...] }`; every rule whose `models` glob matches the resolved model contributes its `params`. Rules are **added** to the default (the union of parameters is stripped). Model globs use the same `*` wildcard as `modelRewrites`.
 - **`responsesApiParameterFiltersReplaceDefault`:** set to `true` to disable the built-in reasoning-model rule, so only your `responsesApiParameterFilters` apply — use this to fully **overwrite** the default behavior.
 
@@ -461,7 +480,7 @@ Stripped parameters are removed entirely (never sent as `null`), because upstrea
 {
   "responsesApiParameterFilters": [
     { "models": ["gpt-5*", "o1*"], "params": ["temperature", "top_p"] },
-    { "models": ["some-model"], "params": ["top_k"] }
+    { "models": ["some-model"], "params": ["service_tier"] }
   ],
   "responsesApiParameterFiltersReplaceDefault": false
 }
@@ -517,7 +536,9 @@ services:
 git clone https://github.com/wxxb789/ghc-proxy.git
 cd ghc-proxy
 bun install
-bun run dev
+bun run dev              # Start with --watch
+# Or use the production-style source command:
+bun run start
 ```
 
 ## Development
@@ -525,6 +546,7 @@ bun run dev
 ```bash
 bun install              # Install dependencies
 bun run dev              # Start with --watch
+bun run start            # Start without --watch
 bun run build            # Build with tsdown
 bun run lint             # ESLint
 bun run typecheck        # tsc --noEmit

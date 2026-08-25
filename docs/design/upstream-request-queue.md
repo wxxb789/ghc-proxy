@@ -74,8 +74,22 @@ A `200` stream that fails before its first downstream event is still committed. 
 
 CLI values override the corresponding config fields for that process. Migrating from releases that defaulted to five retries requires no config change: absent `upstreamQueueMaxRetries` now means one. Values above two are rejected rather than silently preserving the old retry multiplier.
 
+The concurrency CLI parser accepts only an integer greater than zero. Zero,
+negative, fractional, blank, and non-numeric values log a warning and are
+treated as absent; resolution then continues to a valid config value or the
+default of 10. `config.json` applies the same positive-integer constraint and
+omits an invalid field while preserving other individually valid fields. The
+queue's programmatic constructor/update boundary additionally normalizes direct
+numeric inputs to at least one active slot.
+
 ## Diagnostics and Public Errors
 
 Recovery events retain the existing request ID and allowlisted structured fields for tests and injected loggers. The default human console renders only compact one-line summaries, omits zero-wait grants and duplicate cooldown/retry detail, and labels upstream `429` as rate limited and `529` as overloaded. The model trace records a successful substitution as `OVERLOAD_FALLBACK`.
+
+Recovery-effect projection is currently a direct queue side effect:
+`recordRecoveryEffect()` writes `recovery.queued`, `recovery.retry`,
+`recovery.cooldown`, and qualifying `recovery.budget_exhausted` counters into
+the process-global `runtimeStore.requests` before logging. Constructing a queue
+with an injected logger does not isolate or replace that global write.
 
 Logs do not serialize prompts, payloads, tools, authorization data, tokens, or credential-derived account IDs. Public errors keep their Anthropic/OpenAI-compatible payload and safe standard `Retry-After`; the queue does not add retry-progress SSE events, custom recovery headers, or a metrics endpoint.

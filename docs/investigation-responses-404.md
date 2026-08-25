@@ -41,11 +41,11 @@
 - `effort=medium/high` → reasoning + `encrypted_content` consistently returned
 - 5/5 consistency check → all returned `encrypted_content`
 
-## Root Cause (Confirmed)
+## Historical Root Cause (Confirmed for the 2026-04 Incident)
 
 The 404 was caused by **AI SDK sending back opaque item IDs** from previous responses:
 
-1. When `store=true` (or unset), Copilot returns response items with opaque IDs
+1. A successful create with `store` omitted returns response items with opaque IDs
 2. AI SDK caches these and sends them back as `item_reference` items or includes them in follow-up requests
 3. Copilot Enterprise cannot resolve these IDs → 404
 4. Additionally, orphaned `function_call_output` items (whose matching `function_call` was dropped during context windowing) can also trigger 404
@@ -58,20 +58,39 @@ The 400 `invalid_request_body` was likely caused by the `phase` field (`commenta
 
 Applied in `src/routes/responses/handler.ts` (`applyResponsesInputPolicies`):
 
-1. **`store = false`** — Force on all requests. Prevents Copilot from returning opaque item IDs in the first place.
+1. **`store = false`** — Force the explicitly supported stateless mode. Current
+   GPT Responses models reject `store=true`; successful stateless responses can
+   still contain IDs, but those IDs are not retrievable or continuable.
 
 2. **`stripUnresolvableInputItems`** — Defense-in-depth:
-   - Strip `item_reference` items (opaque IDs from `store=true` sessions)
+   - Strip `item_reference` items because Copilot cannot resolve returned item
+     IDs on a later request
    - Strip orphaned `function_call_output` items (no matching `function_call` in input)
 
-3. **`stripPhaseFromInputMessages`** — Strip `phase` field from input messages (output-only annotation).
+3. **`stripPhaseFromInputMessages`** — Strip `phase` from input messages (output-only annotation). The reusable implementation now lives in `src/transform/responses-input.ts` and is also used by the Messages-to-Responses strategy.
+
+When the optional official Responses emulator is enabled, it keeps the caller's original `store` intent for local retrieve/delete/continuation semantics while still sending `store=false` upstream. Without the emulator, resource semantics are not supplied locally.
 
 Applied in `src/routes/responses/strategy.ts`:
 
 4. **400 payload dump** -- When `--dump-failed-payloads` or `DUMP_FAILED_PAYLOADS=1` is enabled, upstream 400 errors dump the full request payload to `$APP_DIR/dumps/400-{timestamp}.json` for diagnosis. Dumps are disabled by default.
 
-## Verification
+## Verification Scope
 
-- Unit tests: `responses-routing.test.ts` and `responses-emulator.test.ts` cover all safety net behaviors
-- Live probe: `scripts/probes/responses-resilience.ts` verifies all evidence chains against Copilot upstream
-- Post-deployment: no further 404 or 400 errors observed
+### Raw upstream revalidation (2026-08-25)
+
+The canonical result is recorded in [Responses Upstream Notes](responses-upstream-notes.md#storefalse). It confirms that the raw Enterprise Responses endpoint was stateless for `gpt-5.6-sol` and `gpt-5.4` on this date and supports the proxy-wide `store=false` policy plus `item_reference` filtering. Stateful retrieve/delete/continuation behavior, when enabled, is supplied by the local emulator rather than by this upstream endpoint.
+
+### Historical incident evidence
+
+The following statements describe the evidence gathered for the April 2026 incident, not a perpetual upstream guarantee:
+
+- The live probe in `scripts/probes/responses-resilience.ts` exercised the evidence chains against the then-current Copilot upstream.
+- Post-deployment observation at that time found no further instances of the investigated 404/400 signatures.
+
+Current automated coverage is split by responsibility:
+
+- `tests/responses-routing.test.ts` directly covers forcing `store=false`, filtering `item_reference`, filtering orphaned `function_call_output`, combined filtering, and stripping `phase` before dispatch.
+- `tests/responses-emulator.test.ts` covers emulator create/retrieve, `input_items`, streaming and non-streaming persistence, continuation, delete/TTL behavior, pagination, and `input_tokens` estimation.
+
+Those emulator tests establish the resource lifecycle, but they do not by themselves prove that every array-replacing input transform is reflected in the persisted `effectiveInputItems` snapshot; that remaining distinction is tracked in [review-responses-sanitization.md](review-responses-sanitization.md).

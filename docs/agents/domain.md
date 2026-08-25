@@ -7,10 +7,16 @@ Single-context repo — one glossary at the root, design docs under `docs/`. The
 ## Before exploring, read these
 
 - **`CONCEPTS.md`** at the repo root — the glossary. Shared domain vocabulary: proxy boundary, execution strategies, routing terms. This is the `CONTEXT.md` equivalent for this repo.
-- **`docs/design/`** — the architectural-decision surface (`execution-strategy.md`, `model-routing.md`, `translation-pipeline.md`). Read the ones that touch the area you're about to work in. These are the ADR equivalent here: they record the decision, not just the description.
+- **`docs/design/README.md`** — index of the current architecture and design
+  documents. Follow it to the documents that touch the area you're about to
+  change; do not rely on a hard-coded three-file subset.
 - **`docs/solutions/`** — documented solutions to past problems, organized by category (`conventions/`, `integration-issues/`, `testing/`) with YAML frontmatter (`module`, `tags`, `problem_type`). Check for an entry matching the module you're touching before diagnosing something that may already be solved.
 
-If any of these don't cover the area you need, **proceed silently**. Don't flag the gap or suggest creating docs upfront. `/domain-modeling` (reached via `/grill-with-docs` and `/improve-codebase-architecture`) adds terms lazily when they actually get resolved — append to `CONCEPTS.md` rather than creating a new `CONTEXT.md`.
+If these do not cover the area you need, proceed with the code. Use
+`domain-modeling` when a domain term is actually resolved, and append it to
+`CONCEPTS.md` rather than creating a new context file. Use `codebase-design`
+when the task is to sharpen a module interface; architectural changes update
+the relevant document indexed by `docs/design/README.md`.
 
 ## File structure
 
@@ -19,10 +25,8 @@ If any of these don't cover the area you need, **proceed silently**. Don't flag 
 ├── CONCEPTS.md              ← glossary (CONTEXT.md equivalent)
 ├── AGENTS.md                ← agent instructions (CLAUDE.md is a symlink to it)
 ├── docs/
-│   ├── design/              ← architectural decisions (ADR equivalent)
-│   │   ├── execution-strategy.md
-│   │   ├── model-routing.md
-│   │   └── translation-pipeline.md
+│   ├── design/              ← indexed architecture and design decisions
+│   │   └── README.md        ← current design-doc index
 │   └── solutions/           ← documented past problems, by category
 │       ├── conventions/
 │       ├── integration-issues/
@@ -34,7 +38,8 @@ If any of these don't cover the area you need, **proceed silently**. Don't flag 
 
 When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONCEPTS.md`. Don't drift to synonyms the glossary explicitly avoids — "Native Messages", "Responses Translation", and "Chat Completions Fallback" are the strategy names; "proxy boundary" and "translation policy" are the boundary terms.
 
-If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
+If the concept you need is not in the glossary, either reuse existing project
+language or record the resolved gap through `domain-modeling`.
 
 ## Flag design-doc conflicts
 

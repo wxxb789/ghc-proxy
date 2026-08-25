@@ -1,39 +1,48 @@
 ---
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: implementation-ready
+artifact_readiness: completed
 execution: code
 product_contract_source: ce-plan-bootstrap
 title: "fix: honor real error statuses on unmatched routes and stop forcing tool strict mode"
 date: 2026-08-06
 type: fix
 depth: standard
+implemented: 2026-08-06
+implementation_commit: 653a90c0962474a8d33b138afb720278167088df
 ---
 
 # fix: honor real error statuses on unmatched routes and stop forcing tool strict mode
 
+> **Status: completed.** Implemented on 2026-08-06 by commit
+> `653a90c0962474a8d33b138afb720278167088df` (`fix: stop the proxy deciding for
+> the caller on unknown paths and tool schemas (#73)`). This document is a
+> historical implementation record, not an active work queue. References below
+> to "today", "currently", or planned future work describe the 2026-08-06
+> pre-implementation baseline unless explicitly dated otherwise.
+
 ## Summary
 
-Two independent defects observed in production use of ghc-proxy v0.9.1, both
-reproduced locally and both measured against real upstream before this plan was
-written.
+Two independent defects were observed in production use of ghc-proxy v0.9.1,
+both reproduced locally and both measured against real upstream before this
+plan was written.
 
-**Defect A** — every request that does not match a registered route returns
-`500` and logs the literal string `NaNs` as its duration. The real status
-(`404`, `400`) is discarded and the elapsed-time computation reads an undefined
-start timestamp.
+**Defect A** — at the pre-fix baseline, every request that did not match a
+registered route returned `500` and logged the literal string `NaNs` as its
+duration. The real status (`404`, `400`) was discarded and the elapsed-time
+computation read an undefined start timestamp.
 
-**Defect B** — the `/responses` route forces `strict: true` on every function
-tool the caller did not explicitly mark, which makes upstream enforce schema
-rules ordinary client schemas do not satisfy, producing a 400 the client cannot
-work around. A companion schema-rewrite block silently promotes optional
-parameters to required.
+**Defect B** — at the pre-fix baseline, the `/responses` route forced
+`strict: true` on every function tool the caller did not explicitly mark. That
+made upstream enforce schema rules ordinary client schemas did not satisfy,
+producing a 400 the client could not work around. A companion schema-rewrite
+block silently promoted optional parameters to required.
 
 Both fixes are deletions or narrowings of proxy-side behavior that was asserting
 something upstream never asked for.
 
 ---
 
-## Problem Frame
+## Historical Problem Frame (pre-implementation baseline)
 
 ### Defect A: unmatched routes report 500 NaNs
 
@@ -60,7 +69,7 @@ into a bare Elysia app. The probe printed
 `afterResponse requestStart= undefined => elapsed NaN` — byte-for-byte the
 reported symptom.
 
-Two independent causes, both live:
+Two independent causes were present in that baseline:
 
 1. **Status flattening.** `handleRouteError` (`src/server.ts:35-65`) returns
    early only for `code === 'HTTP'` and timeout-like errors. Everything else
@@ -892,21 +901,25 @@ read, not three branches — they need one mutation check between them, not thre
 
 ## Definition of Done
 
-- [ ] Unmatched route returns and logs 404; parse failure 400; a constructed
+**Completion status:** satisfied by commit `653a90c0962474a8d33b138afb720278167088df`
+on 2026-08-06. This checklist records the merge-time result and is not an
+outstanding task list.
+
+- [x] Unmatched route returns and logs 404; parse failure 400; a constructed
       `ValidationError` maps to 422 at the exported seam
-- [ ] Unknown error still 500; timeout still 504; `HTTPError` passthrough intact
-- [ ] No access-log line can render `NaNs`; unmatched routes show a real duration
-- [ ] Strict-mode matrix landed as standing probe cases and cited from
+- [x] Unknown error still 500; timeout still 504; `HTTPError` passthrough intact
+- [x] No access-log line can render `NaNs`; unmatched routes show a real duration
+- [x] Strict-mode matrix landed as standing probe cases and cited from
       `function-schema.ts`
-- [ ] `/responses` omits `strict` when the caller sent none (both `undefined`
+- [x] `/responses` omits `strict` when the caller sent none (both `undefined`
       and `null`), forwards it when they did
-- [ ] Anthropic→Responses omits `strict`
-- [ ] A caller's `required` array and `additionalProperties` cross the boundary unmodified
-- [ ] Metadata-annotation stripping still works at every nesting depth
-- [ ] Each of the four behavioral edits independently verified to fail its test when reverted
-- [ ] `bun run lint:all && bun run typecheck && bun test && bun run build` green
-- [ ] `docs/research/responses-tool-strict.md` written with a `## Not covered` section
-- [ ] Solutions entry written, linking the research entry, and cross-linked
+- [x] Anthropic→Responses omits `strict`
+- [x] A caller's `required` array and `additionalProperties` cross the boundary unmodified
+- [x] Metadata-annotation stripping still works at every nesting depth
+- [x] Each of the four behavioral edits independently verified to fail its test when reverted
+- [x] `bun run lint:all && bun run typecheck && bun test && bun run build` green
+- [x] `docs/research/responses-tool-strict.md` written with a `## Not covered` section
+- [x] Solutions entry written, linking the research entry, and cross-linked
 
 ---
 

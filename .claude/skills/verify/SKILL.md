@@ -1,12 +1,20 @@
 ---
 name: verify
-description: Run the full CI validation pipeline locally (lint, typecheck, build, test) to catch issues before pushing.
+description: Run the ordered local release gate, including packaged Bun and Node selfchecks, before pushing or releasing.
 ---
 
-Run the full local validation pipeline matching CI order:
+Run the release workflow's validation gate in order. Keep the two
+`mock.module()` tests in their isolated process, matching CI:
 
 ```bash
-bun run lint:all && bun run typecheck && bun run build && bun test
+bun run lint:all \
+  && bun run typecheck \
+  && bun test \
+    --path-ignore-patterns='**/token-file-removal.test.ts' \
+    --path-ignore-patterns='**/token-refresh-retry.test.ts' \
+  && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts \
+  && bun run build \
+  && bun run smoke:packaged
 ```
 
 Report results clearly:

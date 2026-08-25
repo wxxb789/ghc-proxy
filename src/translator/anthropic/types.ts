@@ -184,9 +184,14 @@ export interface AnthropicSystemMessage {
 export type AnthropicMessage = AnthropicUserMessage | AnthropicAssistantMessage | AnthropicSystemMessage
 
 export interface AnthropicTool {
-  name: string
+  type?: string | null
+  name?: string
   description?: string
-  input_schema: Record<string, unknown>
+  input_schema?: Record<string, unknown>
+}
+
+export function isAnthropicBuiltinTool(tool: AnthropicTool): boolean {
+  return typeof tool.type === 'string' && tool.type !== 'custom'
 }
 
 export interface AnthropicResponse {

@@ -4,18 +4,46 @@ This document describes how ghc-proxy resolves model identifiers and routes requ
 
 ## Model Resolution
 
-### Fallback Chain
+### Request Resolution Order
 
-When a client requests a model ID (e.g., `claude-sonnet-4.6`), the resolver checks:
+The common request pipeline resolves the model before selecting an execution
+strategy. The order is load-bearing:
 
-1. **Exact match** -- If the model ID exists in Copilot's cached model list, use it directly
-2. **Family fallback** -- If no exact match, map by model family prefix:
+1. **Configured rewrite** -- The first matching `modelRewrites` rule wins. Its
+   target is canonicalized to an advertised ID when dash/dot equivalence finds
+   one.
+2. **Built-in correction** -- If no configured rule matched, dash/dot
+   equivalence is checked against the cached Copilot model list (for example,
+   a dotted client spelling can resolve to the advertised dashed spelling).
+3. **Compact routing** -- Only `POST /v1/messages` applies the optional compact
+   small-model policy. It runs after rewrite, and is skipped for a `context-*`
+   Anthropic beta request.
+4. **Exact cache lookup** -- The resulting ID is looked up as-is and the route
+   strategy is selected from that model record and the request payload.
+
+An ID that is still unknown after these steps remains unknown. The common
+pipeline does **not** apply Claude family fallback before selecting Native
+Messages or Responses.
+
+### Chat-Adapter Family Fallback
+
+Claude family fallback has a narrower scope: it belongs to the Anthropic ->
+Chat Completions adapter used by the Messages chat fallback and the Messages
+token-count path. When that adapter builds its CAPI plan, it resolves the
+already-rewritten ID as follows:
+
+1. If the ID is in Copilot's cached model list, keep it.
+2. Otherwise map an unknown Claude family ID by prefix:
    - `claude-opus-*` → configured `claudeOpus` fallback
    - `claude-sonnet-*` → configured `claudeSonnet` fallback
    - `claude-haiku-*` → configured `claudeHaiku` fallback
-3. **Pass-through** -- If no family match, forward the ID as-is (let upstream reject it)
+3. Pass every other unknown ID through unchanged.
 
-### Configuration
+Because strategy selection has already happened, this adapter-local fallback
+does not retroactively move a request from Chat Completions to a native
+Messages or Responses strategy.
+
+### Family-Fallback Configuration
 
 Fallbacks can be configured via environment variables or config file (`~/.local/share/ghc-proxy/config.json`):
 
@@ -86,19 +114,31 @@ Claude `/v1/messages` rows re-probed **2026-07-25** (enterprise endpoint `api.en
 
 `claude-opus-5` / `claude-sonnet-5` are the default `claude-opus-*` / `claude-sonnet-*` fallbacks; both are live known models, so exact-match resolution returns them directly (the fallback branch never fires for them).
 
-**Reasoning / effort control** (`/v1/messages`): only `output_config.effort` (string, e.g. `high`/`low`/`max`) is accepted; `effort: null`, `reasoning_effort`, and `reasoning.effort` are rejected under strict validation. `adaptive_thinking` models (`opus-4.6`/`4.7`/`4.8`/`5`, `sonnet-4.6`/`5`) accept `thinking: { type: "adaptive" }` and `output_config.effort`; non-adaptive models (`sonnet-4.5`, `haiku-4.5`) reject both. See `docs/messages-routing-and-translation.md` for how the proxy converts classic `thinking: enabled` to adaptive.
+**Reasoning / effort control** (`/v1/messages`): the modeled Anthropic field is
+`output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`, or `null`). A null
+effort is accepted at ingress and removed before native dispatch; unsupported
+ranked values are normalized per path as described in
+`docs/messages-routing-and-translation.md`. Alternative spellings such as
+top-level `reasoning_effort` or `reasoning.effort` are not part of the
+translation contract: the loose native payload may pass unknown fields through,
+while translated paths do not map them. `adaptive_thinking` models
+(`opus-4.6`/`4.7`/`4.8`/`5`, `sonnet-4.6`/`5`) accept
+`thinking: { type: "adaptive" }` and `output_config.effort`; non-adaptive models
+(`sonnet-4.5`, `haiku-4.5`) reject both upstream. See the routing document for
+the proxy's classic `thinking: enabled` conversion.
 
 **Official tool support** (`/v1/messages`, `opus-5` / `sonnet-5`, 2026-07-25): supported — `standard_function`, `bash_20250124`, `text_editor_20250728`, `memory_20250818`, `custom`, `tool_search_tool_bm25`(+`_20251119`), `tool_search_tool_regex`(+`_20251119`), `code_execution_20250522`/`20250825`/`20260120`. Rejected — older `text_editor` dates, `web_search_*`, `web_fetch_*`, `mcp_*`, `computer_*`. (`code_execution` was `opus-4.8`-only in June; now broadly advertised. `sonnet-4.6` rejected bm25 as Bedrock-served — `sonnet-5` accepts it.)
 
-The web-search verdict above is **`/v1/messages`-only** and does not transfer: on `/responses`, every model probed accepts `web_search` / `web_search_preview` and actually runs the search (2026-08-04, `docs/research/responses-web-search.md`). A tool's support is a property of the boundary, not of the proxy.
+The web-search verdict above is **`/v1/messages`-only** and does not transfer: on `/responses`, the 2026-08-04 acceptance sweep found `web_search` accepted by every reached model and `web_search_preview` accepted in every measured cell; real search execution was verified on `gpt-5.6-sol` and `gpt-5.6-terra`. See `docs/research/responses-web-search.md`. A tool's support is a property of the boundary, model, schema, and execution mechanism, not of the proxy alone.
 
 ## Execution Path Selection
 
-For `POST /v1/messages`, the handler selects a strategy based on the model's `supported_endpoints`:
+For `POST /v1/messages`, the handler selects a strategy from both the resolved
+model metadata and the payload:
 
 ```text
-Does model support /v1/messages?
-  ├── YES → Native Messages Strategy (passthrough)
+Does model support /v1/messages, and can this payload be preserved there?
+  ├── YES → Native Messages Strategy
   └── NO
        ├── Does model support /responses?
        │    ├── YES → Responses Translation Strategy
@@ -106,7 +146,19 @@ Does model support /v1/messages?
        └── (default) → Chat Completions Fallback Strategy
 ```
 
-Priority order matters: native passthrough wins when available. The Responses path is used only when it's the best available. Chat Completions is the universal fallback.
+Native preservation is payload-aware for structured output. A request with no
+`output_config.format` can use native Messages whenever the model advertises
+that endpoint. A request with `output_config.format` can stay native only when
+the model supports structured output and the format can be reduced without
+discarding semantics: `name` may be removed, but `description` and `strict`
+must be preserved by routing through Responses. If Responses is unavailable,
+the Chat Completions strategy rejects the format with `400` instead of silently
+dropping it.
+
+Priority order otherwise remains native Messages, then Responses translation,
+then Chat Completions. The last entry is a strategy fallback, not proof that
+the chosen model actually advertises `/chat/completions`; upstream can still
+reject an unsupported or unknown model.
 
 ## Small-Model Routing
 
@@ -137,7 +189,15 @@ If any check fails, the original model is used.
 
 ## Responses Request Policies
 
-The native OpenAI-style `/v1/responses` route stays close to passthrough by default. Two optional request-mutation policies exist for Copilot `/responses` compatibility and long-session ergonomics:
+The native OpenAI-style `/v1/responses` route stays close to the OpenAI
+boundary, but it always applies the Copilot compatibility policies documented
+in [Messages Routing and Translation](../messages-routing-and-translation.md):
+`store=false`, removal of `item_reference` and orphaned
+`function_call_output` items, assistant-`phase` removal, remote-image
+rejection, function-schema normalization, per-model parameter filtering, the
+16-token output floor, and reasoning-effort normalization.
+
+Two additional request-mutation policies are optional and disabled by default:
 
 | Key | Default | Effect |
 |-----|---------|--------|
@@ -148,14 +208,17 @@ These policies are both disabled by default. They only apply when explicitly ena
 
 ## CAPI Profile Selection
 
-The plan builder selects an API endpoint profile based on model family:
+The CAPI profile is used only while the Anthropic -> Chat Completions adapter
+builds a CAPI execution plan (including its token-count payload). Native
+Messages and Responses requests do not use these profiles. Selection happens
+after the adapter-local family fallback has resolved its effective model:
 
-| Model Family | Profile ID | Purpose                                    |
-|--------------|------------|--------------------------------------------|
-| `claude`     | `claude`   | Claude-specific headers and parameters     |
-| (other)      | `base`     | Standard Copilot API headers               |
+| Model Family | Profile ID | Plan behavior |
+|--------------|------------|---------------|
+| `claude` | `claude` | Emits both `reasoning_effort` and `thinking_budget` for enabled/adaptive thinking. |
+| (other) | `base` | Emits `reasoning_effort` but not the Claude-only `thinking_budget`. |
 
-The profile affects:
-- Request headers sent to Copilot
-- API base URL construction
-- Interaction type defaults
+Both current profiles add cache checkpoints, request streaming usage, and use
+the same request-context/initiator builder. Profile selection does not choose
+the upstream base URL, synthesize model-family headers, or own interaction-type
+defaults.

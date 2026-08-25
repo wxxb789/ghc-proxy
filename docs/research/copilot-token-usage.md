@@ -2,9 +2,21 @@
 
 Research into whether GitHub Copilot's backend returns token usage information, and how ghc-proxy handles it.
 
+**Upstream observation recorded:** 2026-03-30. **Implementation alignment
+checked:** 2026-08-25. The implementation notes below were updated without
+re-probing Copilot, so the upstream examples remain a dated observation rather
+than a claim about future provider behavior.
+
 ## Summary
 
-Copilot **does** return token usage data across all three API paths. The proxy's passthrough architecture correctly translates upstream usage fields into the client's expected format without synthesizing or estimating values. The `gpt-tokenizer` library exists solely for **local estimation** in the `count_tokens` endpoint, not for response usage.
+Copilot returned token usage data across all three API paths in the recorded
+observation. Response usage translation uses those upstream values; it does not
+substitute local estimates. `gpt-tokenizer` is also used for local request
+diagnostics, Anthropic `count_tokens`, Responses emulator input-token
+estimation, and packaged selfcheck probes. The public
+`POST /v1/responses/input_tokens` route is an upstream passthrough by default;
+it uses the local estimator only when the official Responses emulator is
+enabled.
 
 ## Upstream Usage by Endpoint
 
@@ -30,7 +42,7 @@ When proxied to an Anthropic client, `mapOpenAIUsageToAnthropic()` in `src/trans
 |---|---|---|
 | `prompt_tokens - cached_tokens` | `input_tokens` | Cache-adjusted |
 | `completion_tokens` | `output_tokens` | Direct mapping |
-| `prompt_tokens_details.cached_tokens` | `cache_read_input_tokens` | Only present when non-zero |
+| `prompt_tokens_details.cached_tokens` | `cache_read_input_tokens` | Present whenever the upstream field exists, including `0`; omitted only when absent |
 
 ### Responses API (`/v1/responses`)
 
@@ -54,9 +66,22 @@ Copilot returns Responses-format usage:
 |---|---|---|
 | `input_tokens - cached_tokens` | `input_tokens` | Cache-adjusted |
 | `output_tokens` | `output_tokens` | Direct mapping |
-| `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | Only present when non-zero |
+| `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | Present whenever the upstream field exists, including `0`; omitted only when absent |
+| `input_tokens_details.cache_write_tokens` | `cache_creation_input_tokens` | Present only when non-zero |
 
-For streaming, `ResponsesStreamTranslator` extracts usage from the `response.created` event and emits it in the `message_start` Anthropic event. See `src/translator/responses/responses-stream-translator.ts:117-133`.
+For Anthropic translation of a Responses stream,
+`ResponsesStreamTranslator` maps the preliminary usage on `response.created`
+into `message_start`. It then maps the terminal usage from
+`response.completed` or `response.incomplete` into the final
+`message_delta`, immediately before `message_stop`. The terminal event is the
+final usage report; the initial event is not treated as a substitute for it.
+The initial translator normalizes a missing cached count to zero and emits
+`cache_read_input_tokens: 0`; the terminal mapping distinguishes an absent
+field from an upstream field explicitly set to zero.
+
+For a client calling `/v1/responses` directly, the proxy uses the Responses
+passthrough strategy and preserves upstream SSE rather than translating it to
+Anthropic events.
 
 ### Native Messages (`/v1/messages`)
 
@@ -77,30 +102,63 @@ For the Chat Completions path, streaming usage requires explicit opt-in via `str
 
 This is configured per CAPI profile in `src/core/capi/profile.ts`. All profiles set `includeUsageOnStream: true`, meaning streaming usage is automatically requested for all models.
 
-## Local Token Estimation (`gpt-tokenizer`)
+When a Chat Completions stream is translated to Anthropic, the last
+usage-bearing upstream chunk is retained and emitted on the final
+`message_delta`. `message_start` may carry the usage available on the first
+chunk, with `output_tokens` forced to `0`; it is the final delta that carries
+the completed count when upstream supplies it.
 
-The `gpt-tokenizer` library is used **only** for local token estimation in the `count_tokens` endpoint (`src/routes/messages/count-tokens-handler.ts`). It is not involved in response usage reporting.
+## Local Tokenization (`gpt-tokenizer`)
+
+Local tokenization is not involved in response usage reporting. It has four
+current call sites:
+
+1. `POST /v1/messages/count_tokens` estimates an Anthropic request locally.
+2. The Chat Completions handler logs a local `{ input, output }` estimate after
+   model selection; that diagnostic does not replace upstream response usage.
+3. Responses emulator mode estimates `POST /v1/responses/input_tokens`
+   locally from the effective input-item JSON. The default, non-emulator route
+   calls Copilot's upstream Responses input-token API instead.
+4. `selfcheck` exercises tokenizer loading in packaged Bun and Node builds.
 
 ### How `count_tokens` Works
 
 1. The Anthropic `count_tokens` payload is translated to an OpenAI chat-completions payload
 2. `getTokenCount()` in `src/lib/tokenizer.ts` uses `gpt-tokenizer` to estimate token counts locally
-3. A model-specific correction factor is applied to improve accuracy:
-   - **Claude models**: 1.15x multiplier (GPT tokenizers undercount for Claude's tokenizer)
-   - **Grok models**: 1.03x multiplier
-4. Tool overhead is added when tools are present (346 tokens for Claude, 480 for Grok)
+3. If tools are present, a family-specific fixed overhead is added: **Claude
+   346**, **Grok 480**, **GPT 346** tokens. Claude Code requests containing an
+   `mcp__*` tool skip that extra fixed overhead. The typed
+   `browser_toolset_20260801` and `computer_toolset_20260801` definitions instead
+   use conservative documented costs of **7,550** and **4,590** tokens; these
+   avoid the severe undercount produced by serializing only the compact toolset
+   declaration.
+4. The handler sums the estimated input and assistant-output tokens, then
+   applies a family correction factor: **Claude 1.15x**, **Grok 1.03x**, or
+   **GPT 1.10x**, rounding the final result.
 
-This local estimation exists because Copilot provides no upstream token counting API -- the only way to get accurate counts would be to send the full request upstream, which defeats the purpose of a pre-flight count.
+The encoder comes from the selected model's advertised tokenizer and falls
+back to `o200k_base` when the value is missing or unsupported. The fixed
+overheads and correction factors are local calibration policy, not upstream
+usage and not official tokenizer contracts. The two toolset constants are
+conservative ceilings derived from Anthropic's August 2026 toolset token tables;
+browser includes all optional members.
 
-### Why the 1.15x Factor?
+Anthropic `count_tokens` remains local because the proxy does not route that
+Anthropic-shaped preflight request to an upstream Messages token-counting API.
+That is distinct from the Responses API: Copilot does expose the upstream
+`/responses/input_tokens` resource used by the default Responses route.
 
-GPT tokenizers (BPE-based, e.g., `o200k_base`) produce different token counts than Claude's tokenizer. The 1.15x correction factor for Claude models compensates for this difference, erring on the side of overestimation to avoid underreporting to clients that use `count_tokens` for context window management.
+`estimateSerializedTokens()` is intentionally simpler than the Anthropic
+counter: in emulator mode it encodes `JSON.stringify(effectiveInputItems)` and
+does not apply the family factors or fixed tool overhead above.
 
 ## Summary Table
 
 | Path | Upstream Returns Usage? | Translation Function | Streaming Usage |
 |---|---|---|---|
 | Chat Completions | Yes (OpenAI format) | `mapOpenAIUsageToAnthropic()` | Opt-in via `stream_options` |
-| Responses API | Yes (Responses format) | `mapResponsesUsage()` | Included in `response.created` event |
+| Responses API | Yes (Responses format) | `mapResponsesUsage()` | Preliminary usage may appear in `response.created`; final usage comes from `response.completed` / `response.incomplete` and is emitted in the terminal Anthropic `message_delta` |
 | Native Messages | Yes (Anthropic format) | None (passthrough) | Included natively |
-| `count_tokens` | N/A (local estimation) | `getTokenCount()` + correction factor | N/A |
+| Anthropic `count_tokens` | N/A (local estimation) | `getTokenCount()` + family overhead/factor | N/A |
+| Responses `input_tokens` (default) | Yes, dedicated upstream resource | None (passthrough) | N/A |
+| Responses `input_tokens` (emulator) | N/A (local estimation) | `estimateSerializedTokens()` | N/A |

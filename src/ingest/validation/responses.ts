@@ -315,6 +315,7 @@ function createResponsesPayloadSchema(options: {
     tool_choice: responsesToolChoiceSchema.nullable().optional(),
     temperature: finiteNumberSchema.min(0).max(2).nullable().optional(),
     top_p: finiteNumberSchema.min(0).max(1).nullable().optional(),
+    top_k: z.unknown().optional(),
     max_output_tokens: nonNegativeIntegerSchema.nullable().optional(),
     max_tool_calls: nonNegativeIntegerSchema.nullable().optional(),
     metadata: z.record(z.string(), z.string()).nullable().optional(),
@@ -348,6 +349,14 @@ function createResponsesPayloadSchema(options: {
     include: z.array(z.string().min(1)).nullable().optional(),
     service_tier: z.enum(['auto', 'default', 'flex', 'scale', 'priority']).nullable().optional(),
   }).loose().superRefine((payload, ctx) => {
+    if (Object.hasOwn(payload, 'top_k')) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'top_k is not supported by the OpenAI Responses API',
+        path: ['top_k'],
+      })
+    }
+
     if (payload.previous_response_id && payload.conversation) {
       ctx.addIssue({
         code: 'custom',

@@ -4,7 +4,10 @@ This document describes how ghc-proxy handles server-sent event (SSE) streaming 
 
 ## Overview
 
-All three execution paths support streaming. The proxy acts as a streaming translator, reading upstream SSE events and emitting downstream SSE events in the client's expected format.
+All three `/v1/messages` execution paths support streaming. The Responses and
+Chat Completions public routes also stream through the same strategy runner,
+but those protocol-preserving paths do not have the same synthetic error-event
+behavior as the Anthropic translation paths.
 
 ## Streaming Pipeline
 
@@ -36,8 +39,6 @@ interface SSEOutput {
   id?: string
   event?: string
   data: string
-  comment?: string
-  retry?: number
 }
 ```
 
@@ -46,13 +47,20 @@ Translation methods can return:
 - `SSEOutput` -- emit one event
 - `SSEOutput[]` -- emit multiple events (e.g., block_start + delta from one upstream chunk)
 
+`runStrategy()` returns either `{ kind: 'json', data }` or
+`{ kind: 'stream', generator }`. For a stream it translates each chunk, calls
+the optional `onStreamDone()` after a clean iterator close, and calls the
+optional `onStreamError()` after a non-client exception. The runner itself does
+not manufacture a protocol error event; that depends on the selected strategy.
+
 ## Path-Specific Streaming
 
 ### Native Messages Path
 
-Minimal transformation. Upstream Anthropic events flow through nearly unchanged:
-- Filters stale thinking blocks from assistant history
-- Otherwise passes events directly
+Minimal transformation. Assistant-history sanitization happens before the
+upstream call; returned Anthropic events are passed through with their event
+name and data. The native strategy has no `onStreamDone()` or
+`onStreamError()` hook.
 
 ### Chat Completions Fallback Path
 
@@ -131,19 +139,41 @@ The Responses translator is stateful:
 - It accumulates function call arguments across delta events
 - It handles reasoning/thinking block lifecycle
 
+### Protocol-Preserving OpenAI Paths
+
+`/chat/completions` parses each JSON data frame so the adapter can normalize
+the chunk, and passes `[DONE]` through. `/responses` fixes known stream IDs,
+optionally maps terminal response objects, and otherwise preserves upstream
+event data. Neither strategy defines `onStreamError()`, so a stream exception
+is observable internally but does not produce a synthetic OpenAI/Responses
+error frame.
+
 ## Error Recovery
 
-### Principle
+### Path-Specific Behavior
 
-Streaming errors become protocol-level error events, not broken TCP connections. This allows clients to receive structured error information even during streaming.
+| Path | Exception while consuming the stream | Clean EOF without the expected terminal event |
+|---|---|---|
+| Messages via Chat Completions | Emits an Anthropic `error` event | Closes open blocks and emits the normal final `message_delta` / `message_stop` when a message had started |
+| Messages via Responses | Emits an Anthropic `error` event | Records `response_stream_eof` and emits `Responses stream ended without completion` as an Anthropic `error` event |
+| Native Messages | Records the failure for observability; emits no synthetic frame | Passes through the upstream EOF |
+| Public Chat Completions | Records the failure for observability; emits no synthetic frame | Passes through the upstream EOF |
+| Public Responses | Records the failure for observability; emits no synthetic frame | Records `response_stream_eof`; emits no synthetic frame |
 
-### Guarantees
+Malformed JSON throws on the two translated Messages paths and therefore uses
+their Anthropic error hooks. The public Chat Completions path also parses JSON,
+but has no protocol error hook; the public Responses path preserves malformed
+non-terminal event data rather than validating every frame.
 
-1. **Malformed upstream JSON** → Emits Anthropic `error` event with details
-2. **Completed function calls** → Never reopened after `content_block_stop`
-3. **Whitespace-only arguments** → Excessive whitespace in tool call arguments triggers `error` event
-4. **Unfinished streams** → Terminal `error` event instead of silent EOF
-5. **Client abort** → No error events emitted (client disconnected)
+Within the Responses-to-Anthropic translator, completed function-call blocks
+cannot be reopened, and more than 20 consecutive whitespace characters in an
+arguments delta terminate translation with an Anthropic `error` event. A
+terminal upstream `response.failed` event is also translated to an Anthropic
+error and marks the observed request failed.
+
+Client cancellation is a delivery outcome. `runStrategy()` suppresses both the
+stream-error observer and strategy `onStreamError()` when the client signal is
+already aborted.
 
 ### Error Event Format
 
@@ -171,15 +201,21 @@ Client AbortSignal (request disconnection)
 Upstream AbortSignal → passed to CopilotClient fetch
 ```
 
-Cleanup is always called in the `finally` block of `executeStrategy()`, ensuring signal listeners are removed regardless of success or failure.
+Cleanup occurs immediately when `strategy.execute()` throws or a non-streaming
+result is translated. For streams it runs in the generator's `finally` block,
+so listeners remain active for the full consumption lifetime and are removed
+on completion, failure, or cancellation.
 
 ## Timeout Handling
 
 Configurable via `--upstream-timeout` CLI flag:
 
-- Applied per-request to the upstream fetch
+- Defaults to 1800 seconds; `0` disables the proxy-owned total-duration limit
+- Applied per request to the upstream fetch
 - On timeout: AbortSignal fires, stream terminates
-- Client receives appropriate error (504 for non-streaming, error event for streaming)
+- Before an upstream `Response` exists, the client receives HTTP 504
+- Mid-stream, only the two Anthropic translation strategies synthesize an SSE
+  `error` event; protocol-preserving paths terminate without a synthetic frame
 
 Timeouts reach the proxy in several different shapes depending on the runtime, and all of them must be handled:
 
@@ -206,9 +242,9 @@ is also a clean peer hangup — so the classifier walks `.cause` and
 or `code`. The `.errors` walk is load-bearing rather than defensive: on a dual-stack
 connect Node's `NodeAggregateError` takes its `code` from `errors[0]`, so when the
 refused leg loses the race first, the `ETIMEDOUT` leaf is the *only* evidence of a
-timeout and it sits two levels down. It is called on both sides of the stream
-boundary: `handleRouteError` in `src/server.ts` maps a pre-first-byte timeout to a
-`504`, and the Anthropic stream transducer maps a mid-stream one to an SSE `error`
-frame. Keeping one implementation is deliberate: when the rule lived in two places,
-each recognized only one name, and a `fetch` ceiling surfaced to clients as a
-generic `500`.
+timeout and it sits two levels down. The classifier is used before and after the
+stream boundary: `handleRouteError` in `src/server.ts` maps a pre-first-byte
+timeout to a `504`, while the Anthropic Chat and Responses translators receive
+the same timeout object through their `onStreamError()` hooks and emit SSE
+`error` frames. Protocol-preserving paths still record the sanitized stream
+failure but do not synthesize a frame.

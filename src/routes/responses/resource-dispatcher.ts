@@ -61,7 +61,7 @@ class UpstreamResourceDispatcher implements ResourceDispatcher {
   }
 
   createInputTokens(payload: ResponsesInputTokensPayload, options?: ResourceRequestOptions): Promise<unknown> {
-    return this.client.createResponseInputTokens(payload, options)
+    return this.client.createResponseInputTokens({ ...payload, store: false }, options)
   }
 
   delete(responseId: string, options?: ResourceRequestOptions): Promise<unknown> {

@@ -24,10 +24,11 @@ configuration changes, or expose request/response content.
 `RequestActivityStore` uses two structures:
 
 1. `Map<requestId, ActiveRequest>` for in-flight requests. Start and update are
-   O(1), and completion removes the entry in O(1).
+   average O(1) for direct field updates. Recording a model trace is linear in
+   that request's transform-step count.
 2. A fixed 256-slot circular buffer for completed requests. Completion writes
-   one slot and advances one cursor in O(1). A process restart clears both
-   structures.
+   one slot and advances one cursor in O(1), after projecting that request's
+   per-request metadata arrays. A process restart clears both structures.
 
 Active requests are separate from the completed ring so high concurrency does
 not overwrite an entry that still needs lifecycle updates.
@@ -40,12 +41,17 @@ Each request stores only allowlisted metadata:
 - Sanitized requested/effective model IDs and the existing model transform
   trace
 - Selected strategy and stable proxy effect IDs
-- A fixed-category error summary
+- An allowlisted, fixed-shape error summary
 
 Raw URLs, query strings, caller request IDs, headers, tokens, request/response
 bodies, tool payloads, reasoning content, and SSE data never enter the store.
 Unknown paths are recorded as `unmatched`; dynamic response IDs are replaced by
 `:responseId`.
+
+Error storage accepts only fixed summary strings or an HTTP status plus a
+bounded category. Categories extracted from error payloads must match the
+explicit allowlist in `request-store.ts`; unknown text collapses to `Unhandled
+proxy error` rather than entering the ring.
 
 ## Source Instrumentation
 
@@ -62,8 +68,14 @@ Observability is emitted where behavior is actually selected or applied:
   them.
 - The Responses terminal parser marks `response.failed` as a failed lifecycle
   even when the HTTP status is 200.
+- Both the public Responses path and Messages-via-Responses mark a clean stream
+  EOF without a terminal response as `response_stream_eof` (unless the client
+  aborted).
 - The upstream queue exposes a read-only snapshot and emits recovery effects
-  from its existing structured recovery events.
+  from its existing structured recovery events. The current queue
+  implementation records those effects directly into the global
+  `runtimeStore.requests`, including for separately constructed queue
+  instances; an injected logger does not replace that side effect.
 
 The dashboard never parses console output and never infers effects by diffing
 or serializing request bodies.
@@ -104,17 +116,23 @@ reads and adds no frontend dependency or build step.
 Dashboard responses use `Cache-Control: no-store`, a strict self-only Content
 Security Policy, `nosniff`, `no-referrer`, same-origin resource policy, and
 frame denial. On a live server, dashboard routes require the actual peer socket
-address to be loopback; they also accept only loopback Host values, and browser
-requests with a cross-origin `Origin` header receive 403. The peer check means a
-remote client cannot bypass the boundary by spoofing `Host: localhost`. Runtime
-values are inserted with DOM `textContent`, not HTML parsing.
+address to be loopback. The URL hostname must be `localhost`, any
+`*.localhost` name, `0.0.0.0`, or an explicit loopback IPv4/IPv6 address;
+browser requests with a cross-origin `Origin` header receive 403. The peer
+check means a remote client cannot bypass the boundary by spoofing one of those
+Host values. Runtime values are inserted with DOM `textContent`, not HTML
+parsing.
 
 `/dashboard` requests are excluded from both the request ring and access log so
 polling does not displace proxy traffic or create console noise.
 
 ## Performance Boundary
 
-The proxy request path performs only bounded `Map`/record updates and tiny
-counter increments. Snapshot sorting, model projection, quota fetches, and DOM
-rendering occur only on dashboard requests. No request body is cloned or
-serialized for observability.
+The proxy request path performs direct `Map`/record updates, counter increments,
+and work proportional to the small model-transform/effect arrays attached to
+that request. It does not clone or serialize request bodies for observability.
+
+Dashboard snapshots sort the active set in O(a log a), where `a` is the number
+of active observed requests, and copy at most 256 completed entries. Model
+projection, quota fetches, snapshot sorting, and DOM rendering occur only on
+dashboard requests.

@@ -3,7 +3,6 @@ import type {
   ContentPart,
   Message,
   Model,
-  ResponseInputItem,
   Tool,
   ToolCall,
 } from '~/types'
@@ -313,11 +312,7 @@ export async function getTokenCount(payload: ChatCompletionsPayload, model: Mode
   }
 }
 
-export async function estimateResponsesInputTokens(
-  inputItems: Array<ResponseInputItem>,
-  model: Model,
-): Promise<number> {
-  const tokenizer = getTokenizerFromModel(model)
-  const encoder = await getEncoder(tokenizer)
-  return encoder.encode(JSON.stringify(inputItems)).length
+export async function estimateSerializedTokens(value: unknown, model: Model): Promise<number> {
+  const encoder = await getEncoder(getTokenizerFromModel(model))
+  return encoder.encode(JSON.stringify(value)).length
 }

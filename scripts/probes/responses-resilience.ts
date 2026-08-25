@@ -25,7 +25,7 @@ import process from 'node:process'
 import { modelCache, RESPONSES_ENDPOINT } from '~/state'
 
 import { parseProbeArgs } from '../lib/probe-args'
-import { bootstrapProbe, extractErrorMessage, pickFirstResponsesModel, pickModelById, pickResponsesModels, runMain, sendRaw } from '../lib/probe-harness'
+import { bootstrapProbe, extractErrorMessage, pickFirstResponsesModel, pickModelById, pickResponsesModels, runMain, sendRawWithRetry } from '../lib/probe-harness'
 import { printBanner, writeJsonSnapshot } from '../lib/probe-report'
 
 const REQUEST_TIMEOUT_MS = 60_000
@@ -40,6 +40,7 @@ interface ProbeCase {
   chain: string
   /** Expected outcome: 'pass' = 2xx, 'reject' = 4xx (expected rejection) */
   expect: 'pass' | 'reject'
+  rejection?: { statuses: Array<number>, messageIncludes?: string }
   build: (modelId: string, context: ProbeContext) => Record<string, unknown> | null
 }
 
@@ -54,7 +55,7 @@ interface ProbeResult {
   name: string
   chain: string
   expect: 'pass' | 'reject'
-  status: 'pass' | 'expected_reject' | 'unexpected_reject' | 'unexpected_pass' | 'error'
+  status: 'pass' | 'expected_reject' | 'unexpected_reject' | 'unexpected_pass' | 'error' | 'skipped'
   httpStatus?: number
   note: string
 }
@@ -65,6 +66,7 @@ const STATUS_ICONS: Record<ProbeResult['status'], string> = {
   unexpected_reject: '❌',
   unexpected_pass: '⚠️',
   error: '💥',
+  skipped: '⏭',
 }
 
 // ── Probe cases ──
@@ -106,17 +108,21 @@ const cases: ProbeCase[] = [
     }),
   },
 
-  // Chain 2: store=true (Copilot should accept; returned IDs may be opaque)
+  // Chain 2: store=true. Verified rejected on GPT 5.6/5.4 (2026-08-25) and
+  // grok-4.5 (2026-08-14); unknown Responses families are skipped.
   {
     name: 'store_true',
     chain: 'store_behavior',
-    expect: 'pass',
-    build: modelId => ({
-      model: modelId,
-      input: simpleInput(),
-      max_output_tokens: 32,
-      store: true,
-    }),
+    expect: 'reject',
+    rejection: { statuses: [400], messageIncludes: 'store is not supported' },
+    build: modelId => modelId.startsWith('gpt-') || modelId === 'grok-4.5'
+      ? {
+          model: modelId,
+          input: simpleInput(),
+          max_output_tokens: 32,
+          store: true,
+        }
+      : null,
   },
 
   // Chain 3: store=false explicit
@@ -137,6 +143,7 @@ const cases: ProbeCase[] = [
     name: 'item_reference_fake_id',
     chain: 'item_reference',
     expect: 'reject',
+    rejection: { statuses: [404] },
     build: modelId => ({
       model: modelId,
       input: [
@@ -180,6 +187,7 @@ const cases: ProbeCase[] = [
     name: 'encrypted_content_fake',
     chain: 'encrypted_content',
     expect: 'reject',
+    rejection: { statuses: [400] },
     build: modelId => ({
       model: modelId,
       input: [
@@ -217,6 +225,7 @@ const cases: ProbeCase[] = [
     name: 'orphaned_function_call_output',
     chain: 'orphaned_output',
     expect: 'reject',
+    rejection: { statuses: [404] },
     build: modelId => ({
       model: modelId,
       input: [
@@ -256,14 +265,14 @@ const cases: ProbeCase[] = [
 async function sendProbe(
   body: Record<string, unknown>,
 ): Promise<{ httpStatus: number, payload: unknown }> {
-  const { httpStatus, parsed } = await sendRaw(body, {
+  const { httpStatus, parsed } = await sendRawWithRetry(body, {
     endpoint: RESPONSES_ENDPOINT,
     timeoutMs: REQUEST_TIMEOUT_MS,
   })
   return { httpStatus, payload: parsed }
 }
 
-function classifyResult(probe: ProbeCase, httpStatus: number, payload: unknown): ProbeResult {
+export function classifyResult(probe: ProbeCase, httpStatus: number, payload: unknown): ProbeResult {
   const is2xx = httpStatus >= 200 && httpStatus < 300
   const note = is2xx
     ? summarizeSuccess(payload)
@@ -281,12 +290,31 @@ function classifyResult(probe: ProbeCase, httpStatus: number, payload: unknown):
   }
 
   // expect === 'reject'
+  const error = extractErrorMessage(payload)
+  const matchesStatus = probe.rejection?.statuses.includes(httpStatus)
+    ?? (httpStatus >= 400 && httpStatus < 500)
+  const matchesMessage = probe.rejection?.messageIncludes === undefined
+    || error.includes(probe.rejection.messageIncludes)
   return {
     name: probe.name,
     chain: probe.chain,
     expect: probe.expect,
-    status: is2xx ? 'unexpected_pass' : 'expected_reject',
+    status: is2xx
+      ? 'unexpected_pass'
+      : matchesStatus && matchesMessage
+        ? 'expected_reject'
+        : 'unexpected_reject',
     httpStatus,
+    note,
+  }
+}
+
+export function createSkippedResult(probe: ProbeCase, note: string): ProbeResult {
+  return {
+    name: probe.name,
+    chain: probe.chain,
+    expect: probe.expect,
+    status: 'skipped',
     note,
   }
 }
@@ -383,13 +411,7 @@ async function main() {
     const body = probe.build(selectedModel.id, context)
 
     if (!body) {
-      results.push({
-        name: probe.name,
-        chain: probe.chain,
-        expect: probe.expect,
-        status: 'pass',
-        note: 'skipped — prerequisite not available',
-      })
+      results.push(createSkippedResult(probe, 'prerequisite not available'))
       if (!jsonMode) {
         process.stdout.write(`  ${probe.name.padEnd(36)} ⏭  skipped (no prerequisite)\n`)
       }
@@ -425,6 +447,7 @@ async function main() {
   }
 
   // Summary
+  const failed = results.filter(r => r.status === 'unexpected_reject' || r.status === 'unexpected_pass' || r.status === 'error')
   if (jsonMode) {
     writeJsonSnapshot({
       model: selectedModel.id,
@@ -436,9 +459,9 @@ async function main() {
   }
   else {
     const passed = results.filter(r => r.status === 'pass' || r.status === 'expected_reject')
-    const failed = results.filter(r => r.status === 'unexpected_reject' || r.status === 'unexpected_pass' || r.status === 'error')
+    const skipped = results.filter(r => r.status === 'skipped')
 
-    process.stdout.write(`\n── Summary: ${passed.length} ok, ${failed.length} failed (${results.length} total) ──\n`)
+    process.stdout.write(`\n── Summary: ${passed.length} ok, ${skipped.length} skipped, ${failed.length} failed (${results.length} total) ──\n`)
 
     if (failed.length > 0) {
       process.stdout.write('\nFailed cases:\n')
@@ -447,6 +470,10 @@ async function main() {
       }
     }
   }
+
+  if (failed.length > 0)
+    throw new Error(`${failed.length} Responses resilience probe case(s) failed.`)
 }
 
-runMain(main)
+if (import.meta.main)
+  runMain(main)

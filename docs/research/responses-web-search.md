@@ -16,10 +16,13 @@ a tool it never calls.
 
 ## Verdict
 
-`/responses` **supports web search on every model that answered**, under both
-the Codex/ChatGPT built-in type `web_search` and the older
-`web_search_preview`. The proxy's blanket `400 unsupported_tool_web_search`
-was stale and is removed.
+Every `/responses` model reached by the Level 1 sweep accepted the
+Codex/ChatGPT built-in type `web_search`; all measured cells for the older
+`web_search_preview` also returned 200. That is acceptance evidence, not proof
+that every model executes a search. Level 2 functionally verified real search
+execution only on `gpt-5.6-sol` and `gpt-5.6-terra`. The proxy's blanket
+`400 unsupported_tool_web_search` was therefore stale and is removed, while
+the functional claim remains limited to those two models.
 
 `/v1/messages` (Claude family) still rejects it. The two boundaries disagree,
 so a claim must always name which one it is about.
@@ -159,9 +162,11 @@ response.completed
 
 The `url_citation` arrives as `response.output_text.annotation.added` carrying
 `"url": "https://bun.sh/?utm_source=openai"` — the same annotation the
-non-streaming path returns inline. The three `response.web_search_call.*` event
-names already declared in `src/types/responses.ts` are confirmed against a live
-stream.
+non-streaming path returns inline. On the direct `/v1/responses` route these
+events are carried by the generic SSE passthrough; the proxy does not enumerate
+the three `response.web_search_call.*` names in its `ResponseStreamEvent` union.
+Their preservation is therefore passthrough behavior, not typed translation
+coverage.
 
 ## What this changed in the proxy
 

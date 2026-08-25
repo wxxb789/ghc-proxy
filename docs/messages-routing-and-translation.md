@@ -4,31 +4,78 @@ This document describes how `ghc-proxy` handles Anthropic Messages requests now 
 
 ## Routing Order
 
-Incoming `POST /v1/messages` requests are parsed and validated first. After that, `ghc-proxy` picks one of three execution paths based on the selected model's `supported_endpoints`:
+Incoming `POST /v1/messages` requests pass through the common pipeline:
+
+1. Parse and validate the Anthropic payload.
+2. Apply configured model rewrites, dash/dot correction, and optional compact
+   routing, then look up the resulting model exactly.
+3. Select one of three execution strategies from the model metadata **and the
+   payload**.
+4. Apply strategy-specific transforms, dispatch upstream, and translate the
+   result when the selected boundary is not Anthropic-native.
+
+The strategy priority is:
 
 1. Native Copilot `POST /v1/messages`
 2. Copilot `POST /responses` through the Anthropic <-> Responses translators
 3. Copilot `POST /chat/completions` through the existing Anthropic adapter pipeline
 
-The order matters. Native passthrough wins when the model exposes it, except for payloads with `output_config.format`; those require the Responses translator so schema constraints are not silently dropped. The Responses path is otherwise only used when it is the best available endpoint for that model. The chat-completions adapter remains the fallback path.
+Native Messages wins when the model exposes it and the payload can be
+preserved there. Structured output is payload-aware: a model that advertises
+native structured output can receive a format containing `type`, `schema`, and
+an optional `name` (the label is removed upstream), but a format containing
+`description` or `strict` routes through Responses because native Copilot
+rejects those fields and dropping them would change semantics. If Responses is
+unavailable, the Chat Completions strategy returns `400` rather than dropping
+the format.
+
+The configured Claude family fallbacks are not part of this strategy
+selection. They run later, and only if the Chat Completions adapter (or the
+Messages token-count adapter) builds a CAPI plan. See
+[Model Resolution and Routing](design/model-routing.md).
 
 ## Native Messages Path
 
 When a model supports Copilot `POST /v1/messages`, the proxy forwards the Anthropic payload with minimal mutation:
 
 - Existing assistant thinking blocks that only contain placeholder or encoded Responses state are filtered before passthrough.
-- `output_config` is stripped for models that reject it (see `MODELS_REJECTING_OUTPUT_CONFIG` in `model-cache.ts`). Native forwarding only preserves `output_config.effort`; requests with structured-output `output_config.format` are routed through the Responses strategy when the selected model supports `/responses`, where the schema is translated to `text.format`. If `/responses` is unavailable, the proxy returns `400` instead of silently dropping the schema. When the selected model advertises `capabilities.supports.reasoning_effort`, unsupported `output_config.effort` values are clamped to the highest advertised effort before forwarding, e.g. `max`/`xhigh` become `high` for models that only support `low`, `medium`, and `high`.
+- `output_config` is stripped for models that reject it (see `MODELS_REJECTING_OUTPUT_CONFIG` in `model-cache.ts`). For models that accept it, unknown keys are preserved, a null/no-op effort is removed, and an unsupported effort is replaced with the highest-ranked effort the model advertises. Structured `format` stays native only under the payload-aware rule above; native reduction removes `name` but never silently removes `description` or `strict`.
 - `cache_control` fields on system blocks, messages, content blocks, and tools are normalized to `{ type: "ephemeral" }` — extra sub-fields like `scope` are stripped because the upstream Copilot API does not yet accept them. This is a temporary workaround; when Copilot supports `scope`, the filter (`sanitizeCacheControl` in `strategy-registry.ts`) should be removed. The `smoke-cache-control` script includes a direct upstream probe that will fail when `scope` becomes accepted, signalling the filter is no longer needed.
-- `thinking.type: "enabled"` (classic budget-based thinking) is converted to `thinking.type: "adaptive"` for models that advertise `capabilities.supports.adaptive_thinking` (e.g. `claude-sonnet-5`, `claude-opus-5`), whose upstream `/v1/messages` endpoint rejects the classic shape with a `400`. The requested `budget_tokens` is mapped to an `output_config.effort` tier (`>=24000` → `high`, `>=8000` → `medium`, else `low`), unless the request already supplies an explicit effort. The conversion runs before `output_config` sanitization, so the derived effort is still clamped against the model's advertised efforts. Models without `adaptive_thinking` keep the classic `enabled` shape. See `convertEnabledThinkingToAdaptive` in `sanitize.ts`.
+- `thinking.type: "enabled"` (classic budget-based thinking) is converted to `thinking.type: "adaptive"` for models that advertise `capabilities.supports.adaptive_thinking` (e.g. `claude-sonnet-5`, `claude-opus-5`), whose upstream `/v1/messages` endpoint rejects the classic shape with a `400`. Unless the caller supplied an effort, `budget_tokens` maps to `high` at `>=24000`, `medium` at `>=8000`, and `low` below that. The conversion runs before output-config sanitization, so every derived or explicit tier is normalized against the model's advertised list. Models without `adaptive_thinking` keep the classic `enabled` shape. See `convertEnabledThinkingToAdaptive` in `sanitize.ts`.
+- If both `temperature` and `top_p` are present, the native sanitizer keeps `temperature` and removes `top_p`. Copilot rejects the pair on non-reasoning Messages models, and this rule is applied consistently on the native boundary.
+- `max_tokens` above `capabilities.limits.max_output_tokens` is lowered to the advertised ceiling. No ceiling is guessed when model metadata omits it.
+- Standard function tools retain their function semantics, including typed
+  `custom` tools and nullable `type` values when `name` plus `input_schema` are
+  present. Anthropic-defined built-ins and client toolsets use a non-null `type`
+  other than `custom`; they remain typed built-ins/toolsets even if a caller
+  adds an `input_schema`, and a toolset may omit `name`. Those shapes are
+  accepted at ingress and forwarded only on this native path. Whether a
+  particular built-in runs is still
+  model/upstream-specific; local acceptance does not imply upstream support.
 - `search_result` content blocks are forwarded when Copilot accepts the shape. A live upstream probe on April 17, 2026 against `claude-opus-4.6` confirmed that Copilot accepts top-level user `search_result` blocks and pure `tool_result.content[]` arrays of `search_result` blocks. The same probe showed two important native-path sanitizers are still required: top-level `citations` is stripped because Copilot rejects it, and mixed `tool_result.content[]` arrays containing both `search_result` and non-`search_result` blocks are flattened to a single text block because Copilot requires all blocks in that tool result to be `search_result` when any are.
 - Anthropic beta headers that Copilot does not support, such as `context-*` and `mid-conversation-system-*`, are stripped before upstream forwarding. Context betas can still trigger configured context-upgrade routing before they are removed.
 - Other fields are passed through as-is to the upstream endpoint unless a documented sanitizer above handles a known Copilot incompatibility.
+
+`POST /v1/messages/count_tokens` accepts the same function/built-in/toolset
+union. Function tools use the existing Chat-shaped estimator. Known browser and
+computer toolsets use conservative documented token costs; other typed
+definitions are counted from their serialized Anthropic shape rather than being
+relabeled as executable Chat functions.
 
 Run `bun run scripts/probes/messages/search-results.ts --json` to refresh the current Copilot `search_result` support snapshot.
 
 ## Responses Translation Path
 
 When a model supports `/responses` but not native `/v1/messages`, the proxy translates Anthropic Messages into Responses input items, executes the request, and translates the result back into Anthropic shape.
+
+The request-side sequence is: Anthropic -> Responses translation, optional
+context-management injection, optional compaction slicing, removal of
+translator-generated assistant `phase`, per-model Responses parameter
+filtering, and the Copilot `max_output_tokens >= 16` floor. JSON responses use
+the stateless Responses -> Anthropic mapper; SSE uses a stateful transducer that
+tracks content blocks, function-call lanes, terminal state, and protocol-level
+errors. This is separate from the native `POST /v1/responses` handler, even
+though both paths share several request transforms.
 
 ### Exact or Near-Exact Mappings
 
@@ -37,34 +84,41 @@ When a model supports `/responses` but not native `/v1/messages`, the proxy tran
 | `system` | `instructions` | Preserved as text. |
 | User text | `message` with `input_text` | Preserved in order. |
 | User image | `message` with `input_image` | Preserved as data URL input. |
-| User `tool_result` | `function_call_output` | Preserved by `tool_use_id` / `call_id`. |
+| User `tool_result` | `function_call_output` | Preserved by `tool_use_id` / `call_id`; `is_error: true` maps to `status: incomplete`. |
 | User `search_result` | `message` with `input_text` | Flattened to text containing title, source, and content. Citation metadata is not preserved. |
 | `tool_result` `search_result` content | `function_call_output` | Flattened to text containing title, source, and content. |
 | Assistant text | `message` with `output_text` | Preserved as assistant history. |
 | Assistant `tool_use` | `function_call` | Preserved as call ID, name, and JSON arguments. |
-| Assistant reasoning with signature | `reasoning` | Signature is split into encrypted content and item ID. |
-| Encoded compaction carrier | `compaction` | Preserved as opaque encrypted content. |
-| Anthropic tools | Responses function tools | Tool schemas stay object-shaped and otherwise unmodified — `required` and `additionalProperties` are the caller's. No `strict` key is sent. See [research/responses-tool-strict.md](research/responses-tool-strict.md). |
+| Assistant reasoning with proxy replay signature | `reasoning` | A proxy-private carrier is decoded back into the Responses item ID and encrypted content. Missing or malformed replay IDs are not emitted as reasoning input. |
+| Proxy compaction carrier | `compaction` | The proxy's `cm1#...` carrier restores the opaque item ID and encrypted content; it is not a general Anthropic signature decoder. |
+| Anthropic function tools | Responses function tools | The caller's `required` and `additionalProperties` semantics are preserved, while JSON Schema/OpenAPI annotations rejected by the compatibility normalizer (for example `$schema`, `title`, `format`, `default`, and examples) are recursively removed. No `strict` key is invented. See [research/responses-tool-strict.md](research/responses-tool-strict.md). |
 
 ### Intentional Policy Decisions
 
 | Feature | Behavior | Reason |
 | --- | --- | --- |
-| `thinking: disabled` | Maps to `reasoning.effort = none` | Preserves explicit disable intent. |
-| `thinking: adaptive` with no explicit effort | Maps to `reasoning.effort = medium` | Conservative default for a request that asked for adaptive reasoning but did not fix an effort. |
-| `output_config.effort` | Maps to Responses reasoning effort | Preserves explicit caller intent. Clamped to the highest level the resolved model advertises — the canonical order is `low < medium < high < xhigh < max`, and the levels are not a ladder every model implements a prefix of (`claude-opus-4.6` advertises `max` but not `xhigh`). See [research/sampling-parameters.md](research/sampling-parameters.md). |
+| `thinking: disabled` | Maps to `reasoning.effort = none` | Preserves explicit disable intent; `none` is not clamped upward. |
+| `thinking: adaptive` with no explicit effort | Candidate `reasoning.effort = medium` | The candidate is then normalized against the resolved model's advertised efforts. |
+| `thinking: enabled` with no explicit effort | Configured model effort, defaulting to `medium` | The candidate is normalized against the same advertised list. |
+| `output_config.effort` | Maps to Responses reasoning effort | Preserves explicit caller intent when supported. An unsupported ranked tier is replaced by the highest-ranked advertised tier; `none`/`minimal` are Responses-only values and are not clamp targets. The canonical order is `low < medium < high < xhigh < max`, but a model need not advertise a prefix (`claude-opus-4.6` advertises `max` but not `xhigh`). See [research/sampling-parameters.md](research/sampling-parameters.md). |
 | `output_config.format` | Maps JSON Schema structured output to Responses `text.format` | Preserves schema-constrained output when native `/v1/messages` cannot safely carry the field. |
 | `apply_patch` custom tool | Optional shim to function tool | Controlled by `useFunctionApplyPatch`. |
 | Responses context compaction | Optional policy | Disabled by default. Requires `responsesApiAutoContextManagement: true` and a model match in `responsesApiContextManagementModels`. |
 
-### Explicitly Unsupported on the Responses Path
+### Explicitly Unsupported on Translated Paths
 
-These Anthropic fields are rejected with `400` when the request must execute through `/responses`:
+The Responses translation path rejects these Anthropic fields with `400`:
 
 - `stop_sequences`
 - `service_tier`
+- Anthropic built-in/toolset definitions (`unsupported_server_tool`)
 
-They are rejected because the current Responses execution path cannot preserve their semantics safely. The proxy does not silently drop them.
+The Chat Completions fallback likewise rejects `service_tier` and Anthropic
+built-ins/toolsets, while it can represent `stop_sequences`. These fields are rejected
+when the selected translation cannot preserve their semantics safely. Built-in
+tools are not relabeled as ordinary function tools merely because a translated
+endpoint supports functions. Rejection happens before any translated upstream
+request is sent; the proxy does not silently drop or approximate the field.
 
 `top_k` used to be rejected here too. Probing showed Copilot accepts it on every boundary, so it is now forwarded as a Copilot extension — see [research/sampling-parameters.md](research/sampling-parameters.md).
 
@@ -78,13 +132,39 @@ They are rejected because the current Responses execution path cannot preserve t
 - `custom` `apply_patch` can be rewritten into a function tool when enabled.
 - Automatic `context_management` injection is disabled by default and only applies when explicitly enabled in config.
 - Automatic prompt slicing to the latest `compaction` item is disabled by default and only applies when explicitly enabled in config.
-- Built-in web-search tools (`web_search`, `web_search_preview`, and their dated variants) are forwarded, not blocked. Every `/responses` model probed accepts them and actually runs the search. See [research/responses-web-search.md](research/responses-web-search.md).
+- Built-in web-search tools (`web_search`, `web_search_preview`, and their dated variants) are forwarded, not blocked. The 2026-08-04 acceptance sweep found `web_search` accepted by every reached `/responses` model and `web_search_preview` accepted in every measured cell; real search execution was verified on `gpt-5.6-sol` and `gpt-5.6-terra`. See [research/responses-web-search.md](research/responses-web-search.md).
 - Function-tool `strict` is forwarded when the caller sends it and omitted entirely when they do not. The proxy previously defaulted it to `true` and rewrote each schema's `required` to every declared property plus `additionalProperties: false` to make that default survivable, which silently promoted optional parameters to required. Omission is measurably safer than `strict: false`: upstream runs a different validator when the key is present at all. See [research/responses-tool-strict.md](research/responses-tool-strict.md).
+- Function-tool parameter schemas pass through the same recursive compatibility normalizer used by the Anthropic -> Responses translator. Structural constraints are preserved; unsupported descriptive annotations are removed. A caller-sent `strict: null` is normalized to omission.
 - External `input_image.image_url` values that point at remote HTTP(S) URLs fail explicitly with `400`.
 - `max_output_tokens` below Copilot's enforced minimum of 16 is raised to 16 rather than leaking a `400`. The client-facing schema still accepts `0..15` because those are valid OpenAI input; the floor is a Copilot quirk the proxy absorbs. See [research/sampling-parameters.md](research/sampling-parameters.md).
 - Explicit prompt-caching controls (`prompt_cache_options`, and `prompt_cache_breakpoint` on content blocks) are modeled and forwarded. `ttl` is constrained to the single value upstream accepts (`30m`) and an unknown `mode` is rejected locally, turning a wasted round-trip into an immediate `400`. Only gpt-5.6 and later accept these — earlier models return `400 ... is not supported on this model` — so the proxy forwards rather than injects them. See [research/prompt-caching.md](research/prompt-caching.md).
-- Official `input_file` and `item_reference` input items are modeled explicitly and validated before forwarding.
+- `store` is forced to `false` as a proxy-wide stateless policy. The Copilot GPT
+  models re-verified on 2026-08-25 reject `store: true`; successful stateless
+  responses still carry IDs, but upstream cannot retrieve or continue from
+  them later. Without the optional emulator, a caller's `store: true` intent is
+  therefore coerced rather than rejected at the proxy boundary.
+- Official `input_file` items are modeled and forwarded. `item_reference` items are modeled for boundary compatibility but removed before dispatch, as are orphaned `function_call_output` items whose `call_id` has no matching `function_call` in the same input array. This filtering intentionally trades unavailable cross-request state for a request Copilot can execute.
 - Unknown fields are passed through when they do not interfere with proxy-side policies, so newer official fields can continue to flow to Copilot when the upstream endpoint supports them.
+
+### Output, signatures, and usage
+
+- Responses reasoning and compaction items are exposed as Anthropic `thinking`
+  blocks with proxy-private replay signatures. The signatures carry opaque
+  Responses state; they are transport encodings, not cryptographic validation
+  of arbitrary Anthropic signatures. A reasoning carrier is
+  `<encrypted_content>@<item_id>` (split at the final `@`); a compaction carrier
+  is `cm1#<encrypted_content>@<item_id>`. Replay requires non-empty encrypted
+  content and an item ID.
+- When a non-streaming terminal Responses object omits `usage`, the Anthropic
+  schema still requires token counts, so the translator supplies
+  `input_tokens: 0` and `output_tokens: 0`. Those zeroes mean "upstream did not
+  provide usage", not a measured zero-token request.
+- Streaming `message_start` is provisional: `output_tokens` starts at zero and
+  absent input/cache metrics also default to zero. The terminal
+  `message_delta` carries the mapped final usage when upstream provides it.
+- `cache_read_input_tokens` is subtracted from `input_tokens` to match
+  Anthropic's split accounting. A positive `cache_write_tokens` becomes
+  `cache_creation_input_tokens`; zero or absent writes are omitted.
 
 ### Current live upstream note
 

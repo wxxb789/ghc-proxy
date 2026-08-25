@@ -4,6 +4,7 @@ import type {
 } from '~/translator'
 
 import { z } from 'zod'
+import { isAnthropicBuiltinTool } from '~/translator'
 
 import {
   createObjectSchemaDefinitionSchema,
@@ -164,10 +165,27 @@ const anthropicMessageSchema = z.union([
 ])
 
 const anthropicToolSchema = z.object({
-  name: z.string().min(1),
+  type: z.string().min(1).nullable().optional(),
+  name: z.string().min(1).optional(),
   description: z.string().optional(),
-  input_schema: createObjectSchemaDefinitionSchema('tool input_schema must describe an object'),
-}).loose()
+  input_schema: createObjectSchemaDefinitionSchema('tool input_schema must describe an object').optional(),
+}).loose().superRefine((tool, ctx) => {
+  const isBuiltinTool = isAnthropicBuiltinTool(tool)
+  if (!isBuiltinTool && tool.input_schema === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'tool input_schema must describe an object',
+      path: ['input_schema'],
+    })
+  }
+  if (!isBuiltinTool && tool.name === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'function tools require a name',
+      path: ['name'],
+    })
+  }
+})
 
 const anthropicToolChoiceSchema = z.union([
   z.object({

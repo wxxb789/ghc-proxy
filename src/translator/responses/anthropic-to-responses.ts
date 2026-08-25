@@ -16,6 +16,7 @@ import type {
   ToolChoiceOptions,
 } from '~/types'
 import { clampEffortToAdvertised } from '~/transform'
+import { isAnthropicBuiltinTool } from '~/translator'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { normalizeFunctionParametersSchemaForCopilot } from './function-schema'
 
@@ -250,12 +251,34 @@ function convertAnthropicTools(
   // `false`: probed 2026-08-06 (`scripts/probes/tool-strict.ts`), a schema
   // whose `required` names an undeclared key returns 200 with the key absent
   // and 400 with `strict: false`.
-  return tools.map(tool => ({
-    type: 'function',
-    name: tool.name,
-    parameters: normalizeFunctionParametersSchemaForCopilot(tool.input_schema),
-    ...(tool.description ? { description: tool.description } : {}),
-  }))
+  return tools.map((tool) => {
+    if (isAnthropicBuiltinTool(tool)) {
+      throw new TranslationFailure(
+        `Anthropic built-in/toolset "${tool.type ?? tool.name ?? 'unknown'}" cannot be translated to the Responses API.`,
+        {
+          status: 400,
+          kind: 'unsupported_server_tool',
+        },
+      )
+    }
+
+    if (tool.name === undefined || tool.input_schema === undefined) {
+      throw new TranslationFailure(
+        'Anthropic function tools require both name and input_schema.',
+        {
+          status: 400,
+          kind: 'invalid_tool_schema',
+        },
+      )
+    }
+
+    return {
+      type: 'function' as const,
+      name: tool.name,
+      parameters: normalizeFunctionParametersSchemaForCopilot(tool.input_schema),
+      ...(tool.description ? { description: tool.description } : {}),
+    }
+  })
 }
 
 function convertAnthropicToolChoice(

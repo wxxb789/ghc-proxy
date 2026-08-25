@@ -44,15 +44,23 @@ Caught at request ingress via Zod schemas:
 - Referential integrity (e.g., `tool_choice.name` references a declared tool)
 - Positive `thinking.budget_tokens`
 - Object-shaped tool schemas
-- Image block base64 source shape
+- Image block source discriminator, supported media type, and non-empty data
 - `tool_result` content structure
 
-### Translation Errors (400)
+### Translation Errors (400 / 502)
 
 Caught during protocol translation:
 
 - **Strict mode**: Lossy translations that would lose semantics (e.g., thinking history omission)
-- **Always**: Explicitly unsupported fields (e.g., `service_tier` on Responses path, `stop_sequences` on Responses path)
+- **Always**: Explicitly unsupported fields (for example, `service_tier` on either translated Messages path and `stop_sequences` on the Responses path)
+
+Request-direction failures use status 400; response-direction failures use
+502. At the intended route wrapper, `withTranslationErrors()` converts either
+to `error.type: "translation_error"`, with the translation issue kind in
+`error.code` when one is available. They are not reported as
+`invalid_request_error`. An unwrapped `TranslationFailure` reaching the generic
+server error hook still preserves its declared status, but uses the generic
+local error envelope.
 
 ### Upstream Errors (Pass-through)
 
@@ -73,7 +81,8 @@ Capacity scope is separate from error shape: `429` installs an account cooldown,
 
 ### Streaming Errors
 
-During streaming, errors become protocol-level events:
+Only the two `/v1/messages` translation strategies synthesize Anthropic
+protocol errors for stream exceptions:
 
 ```json
 {
@@ -85,7 +94,16 @@ During streaming, errors become protocol-level events:
 }
 ```
 
-This preserves the SSE connection and gives the client structured error information. A successful upstream `Response` is already committed, so a later stream failure -- including before the first downstream event -- never starts a retry or overload fallback.
+Native Messages, public Chat Completions, and public Responses still record a
+sanitized stream failure for the dashboard but do not synthesize a protocol
+frame. Public Responses also records a clean EOF without a terminal response
+as `response_stream_eof`; the translated Messages-via-Responses path both
+records that failure and emits an Anthropic `error` event. See
+[Streaming Architecture](streaming.md) for the full path matrix.
+
+A successful upstream `Response` is already committed, so a later stream
+failure -- including before the first downstream event -- never starts a retry
+or overload fallback.
 
 ## Validation Architecture
 
@@ -104,7 +122,9 @@ Key validations:
 - Tool schemas must be object-typed
 - Tool choice references must match declared tools
 - Thinking budget must be positive
-- Image sources must have valid base64 data
+- Image sources must declare `type: "base64"`, use a supported image media
+  type, and provide a non-empty string. Ingress does not decode the string or
+  prove that its bytes are valid base64.
 - Message roles must follow protocol rules
 - Embeddings accept the official OpenAI-facing `string | string[]` input shape
 - Embedding-specific optional fields such as `dimensions`, `encoding_format`, and `user` are modeled explicitly
@@ -175,6 +195,10 @@ class TranslationFailure extends Error {
 }
 ```
 
+`withTranslationErrors()` converts this internal error into an `HTTPError`
+whose wire type is `translation_error` and whose optional wire code is
+`kind`.
+
 ### `throwInvalidRequestError()`
 
 Convenience for Anthropic-format validation errors:
@@ -213,14 +237,14 @@ Request arrives
 [Zod Validation] ──fail──> 400 { type: invalid_request_error }
     |
     v (valid)
-[Translation Policy Check] ──unsupported──> 400 { type: invalid_request_error }
+[Translation Policy Check] ──unsupported──> 400 { type: translation_error }
     |
     v (ok)
 [Upstream Request]
     |
     +── HTTP error ──> forward upstream status + body
     |
-    +── Network error ──> 502
+    +── Unclassified network/fetch error ──> 500
     |
     +── Timeout ──> 504
     |
@@ -229,7 +253,7 @@ Request arrives
     |
     +── Non-streaming error ──> 502
     |
-    +── Streaming error ──> SSE error event (not TCP break)
+    +── Streaming error ──> path-specific observer and optional SSE error event
     |
     v
 Client Response
@@ -247,7 +271,7 @@ status; everything else becomes 500.
   "status": "ok",
   "copilotToken": true,
   "modelsLoaded": true,
-  "version": "0.6.0"
+  "version": "<package version>"
 }
 ```
 

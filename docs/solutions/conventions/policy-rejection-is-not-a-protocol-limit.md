@@ -1,7 +1,7 @@
 ---
 title: "An upstream rejection names a layer — read it before you generalize"
 date: 2026-07-27
-last_updated: 2026-07-29
+last_updated: 2026-08-25
 category: conventions
 module: upstream capability modeling
 problem_type: convention
@@ -67,7 +67,8 @@ for `claude-opus-4-7`. Recorded honestly in
 `docs/solutions/integration-issues/claude-code-messages-startup-payloads.md`,
 symptom line 11. That doc got the hard part right — it explicitly rejected the
 tempting fix of stripping `format`, on the grounds that a schema-constrained
-request must not silently come back unconstrained (lines 39, 44). It then drew
+request must not silently come back unconstrained (see its "What Didn't Work"
+and "Read this first" sections). It then drew
 the routing conclusion: send **every** Messages payload carrying
 `output_config.format` to the Responses translator, and reject outright when the
 model has no `/responses` endpoint.
@@ -83,9 +84,8 @@ WARN  Rejected request { param: 'output_config.format',
 
 `2ms`. The request never left the proxy. `claude-opus-5` shipped long after the
 rule was written, has no `/responses` endpoint, and so fell through
-`responsesApiEntry` (`src/routes/messages/strategy-registry.ts:73`) into the
-chat-completions guard that throws
-(`src/routes/messages/strategy-registry.ts:118-124`). A rule about one model's
+the Responses strategy into the chat-completions guard in
+`src/routes/messages/strategy-registry.ts`. A rule about one model's
 Vertex deployment had grown to cover a model that did not exist when it was
 written, and left that model's structured-output requests with no path at all.
 
@@ -139,7 +139,7 @@ against it.
 
 A policy error names a model and a project. It licenses an exclusion for that
 model, nothing wider. The proxy already had the right shape for this in
-`MODELS_REJECTING_OUTPUT_CONFIG` (`src/state/model-cache.ts:16-19`) — an
+`MODELS_REJECTING_OUTPUT_CONFIG` in `src/state/model-cache.ts` — an
 explicit ID set with the probe name, the probe date, and an instruction to
 re-run when models change:
 
@@ -161,7 +161,7 @@ such bound, and reviewing it does not surface one.
 
 ### 2. Route on the advertised capability, not on observed behavior
 
-The pending fix keys native structured output on the model record
+The fix merged in PR #68 keys native structured output on the model record
 (`src/state/model-cache.ts`):
 
 ```ts
@@ -178,11 +178,11 @@ class ModelCache {
 The probe found two models — `claude-sonnet-4.5` and `claude-haiku-4.5` — that
 **accept** `format` while advertising `structured_outputs: false`. That
 observation is deliberately *not* exploited
-(`docs/research/structured-output-native.md:87-91`). The advertised list is a
+(`docs/research/structured-output-native.md`, "Resulting proxy behavior"). The advertised list is a
 floor on capability, so routing on it stays safe; routing on observed behavior
 would bind the proxy to an undocumented quirk that upstream never promised. This
-is the same asymmetry `docs/research/sampling-parameters.md:150-154` records for
-`gpt-5.3-codex` accepting an unadvertised `none`.
+is the same asymmetry `docs/research/sampling-parameters.md` records for
+unadvertised parameter acceptance.
 
 That is the mirror image of the mistake this doc is about, and it is worth
 holding both at once: **an observed rejection under-constrains the rule, and an
@@ -192,31 +192,31 @@ one model on one account on one day, in either direction.
 ### 3. Separate what is droppable from what is a caller guarantee
 
 The narrowed rule still has to decide what to do with the fields native rejects.
-The pending change splits the two questions — one pure predicate for selection,
-one mutator for execution (`src/transform/sanitize.ts:103-108` and `126-140`):
+The merged implementation splits the two questions — one pure predicate for
+selection, one mutator for execution (`canReduceOutputFormatForNativeMessages`
+and `reduceOutputFormatForNativeMessages` in `src/transform/sanitize.ts`):
 
 ```ts
 export function canReduceOutputFormatForNativeMessages(
   payload: AnthropicMessagesPayload | undefined,
 ): boolean {
   const format = payload?.output_config?.format
-  return !format || format.strict === undefined
+  return !format || (format.strict === undefined && format.description === undefined)
 }
 ```
 
-`name` and `description` are labels — stripping them costs the caller nothing,
-so the reducer drops them (`src/transform/sanitize.ts:134-139`). `strict` is
-not: it is a promise about the reply. Requests carrying it keep their old
-routing rather than being served natively with the guarantee quietly removed.
-That is exactly the principle the 2026-06-02 doc established and got right
-(`claude-code-messages-startup-payloads.md:44`); this change narrows the routing
-rule without weakening it.
+Only `name` is a disposable label, so the reducer may remove it. `description`
+is guidance that can influence the model's reply, and `strict` is a promise
+about schema enforcement. Requests carrying either keep the translated path
+rather than being served natively with meaning quietly removed. That is exactly
+the principle the 2026-06-02 doc established and got right; this change narrows
+the routing rule without weakening it.
 
 ### 4. Verify the narrowed path end to end — the old rule may be hiding a bug
 
 Narrowing an exclusion sends traffic down a path that has never carried it. That
 path can have its own latent defect the exclusion was masking.
-`sanitizeOutputConfig` did (`src/transform/sanitize.ts:211-222`): on a null
+`sanitizeOutputConfig` did: on a null
 effort it deleted the whole `output_config` container. A structured-output
 request typically sends no effort at all, so the caller's schema would have
 vanished — the exact silent-drop failure the original doc was written to
@@ -252,13 +252,13 @@ landed in PR #67 (merged).
 
 **Tests confirm the rule, not the world.** The 2026-06-02 doc's own prevention
 list asked for a test proving unsupported strategies return a local 400 before
-dispatch (`claude-code-messages-startup-payloads.md:174`). That test existed and
+dispatch (see the startup-payload solution's Prevention section). That test existed and
 passed. It asserted the proxy implemented the rule faithfully, which it did. No
 test can tell you the rule was about someone's GCP project — only re-probing
 upstream can.
 
 **The correct fix was cheap once the layer was read.** A predicate change in
-`canHandle` (`src/routes/messages/strategy-registry.ts:45-48`), one capability
+`canUseNativeMessages` in `src/routes/messages/strategy-registry.ts`, one capability
 accessor, and a reducer. The expensive part was the eight weeks of nobody
 re-reading a sentence that had `Organization Policy constraint` in it.
 
@@ -286,12 +286,13 @@ re-reading a sentence that had `Organization Policy constraint` in it.
 It does **not** apply to protocol errors. `Extra inputs are not permitted`,
 `Field required`, and `not supported by model <id>; supported values: [...]` are
 statements about the contract, and generalizing them to the boundary is correct
-— that is precisely why `reduceOutputFormatForNativeMessages` strips `name` and
-`description` unconditionally rather than per model.
+— that is precisely why `reduceOutputFormatForNativeMessages` strips `name`
+unconditionally rather than per model. It does not strip `description` or
+`strict`; both affect the caller-visible result.
 
 ## Examples
 
-### The rule, before and after (PR #68, open — changes below are pending)
+### The rule, before and after (PR #68, merged as `fb48287`)
 
 Before, in `src/routes/messages/strategy-registry.ts` — payload-shaped, and so
 unbounded over models:
@@ -303,30 +304,33 @@ const nativeMessagesEntry = {
 }
 ```
 
-After, at the current tree (`src/routes/messages/strategy-registry.ts:45-48`),
-with the evidence and its date attached in the comment above it (lines 39-44):
+After, at the current tree in `src/routes/messages/strategy-registry.ts`, with
+the evidence and its date attached to `nativeMessagesEntry`:
 
 ```ts
-const nativeMessagesEntry = {
-  canHandle: (model, ctx) => modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
-    && (!hasOutputConfigFormat(ctx?.anthropicPayload)
+export function canUseNativeMessages(
+  model: Model | undefined,
+  payload?: AnthropicMessagesPayload,
+): boolean {
+  return modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
+    && (!hasOutputConfigFormat(payload)
       || (modelCache.supportsStructuredOutputs(model)
-        && canReduceOutputFormatForNativeMessages(ctx?.anthropicPayload))),
+        && canReduceOutputFormatForNativeMessages(payload)))
 }
 ```
 
 Both clauses of the new condition earn their place: the capability check gates
-on the model record, and the reducibility check keeps `strict` requests off a
-path that cannot carry them.
+on the model record, and the reducibility check keeps `description` and `strict`
+requests off a path that cannot carry them.
 
 The capability check needed one more piece than it first appeared. Writing this
 learning up surfaced the gap: `claude-opus-4.7` and `claude-sonnet-4.6`
 advertise `structured_outputs: true` and are blocked only by the org policy, so
 the advertised flag alone would have routed them straight onto a path that 400s
 upstream. `supportsStructuredOutputs` now excludes them explicitly
-(`src/state/model-cache.ts:37-40`, backed by
-`MODELS_BLOCKING_NATIVE_STRUCTURED_OUTPUT` at `:22-35`) — a bounded, dated ID
-list, which is what §1 above prescribes for a policy-shaped rejection.
+(via `MODELS_BLOCKING_NATIVE_STRUCTURED_OUTPUT` in
+`src/state/model-cache.ts`) — a bounded, dated ID list, which is what §1 above
+prescribes for a policy-shaped rejection.
 
 That gap is itself the doc's thesis applied one level up: the fix narrowed a
 rule correctly but still leaned on an advertised capability to encode a
@@ -335,7 +339,7 @@ written down as a policy exclusion.
 
 Note the ordering constraint in `execute`:
 `reduceOutputFormatForNativeMessages` runs *after* `sanitizeOutputConfig`
-(`src/routes/messages/strategy-registry.ts:52-53`), which is why the container
+in `nativeMessagesEntry`, which is why the container
 must survive the null-effort branch.
 
 ### The silent drop the narrowing exposed
@@ -350,7 +354,7 @@ if (effort == null) {
 }
 ```
 
-After (`src/transform/sanitize.ts:211-222`):
+After, in `sanitizeOutputConfig`:
 
 ```ts
 const effort = payload.output_config.effort
@@ -377,15 +381,15 @@ Worth recording because it is counterintuitive and it is what makes the routing
 decision load-bearing rather than cosmetic. Native Messages rejects
 `format.name` as an extra input; Responses `text.format.json_schema` **requires**
 `name`, so the translator injects a default one
-(`claude-code-messages-startup-payloads.md:123-147`,
-`docs/research/structured-output-native.md:54-66`). The same caller request has
+(`claude-code-messages-startup-payloads.md`, "Translate Anthropic JSON Schema
+output config", and `docs/research/structured-output-native.md`). The same caller request has
 to be reshaped in opposite directions depending on which strategy serves it —
 which is exactly the kind of asymmetry that gets lost when one path is
 unconditionally preferred and the other never exercised.
 
 ### The evidence, dated and bounded
 
-`docs/research/structured-output-native.md:96-101` closes with what was not
+`docs/research/structured-output-native.md` closes with what was not
 established, including:
 
 > Whether the Vertex policy blocking `claude-opus-4.7` and `claude-sonnet-4.6`
@@ -406,16 +410,17 @@ a one-off. The 2026-06-02 change also made `anthropicOutputConfigSchema`
 so every field Anthropic subsequently added arrived as a local 400 before it
 could reach a model that might accept it. At the current tree the container is
 `.loose()` and only `format` keeps `.strict()`
-(`src/ingest/validation/anthropic-messages.ts:207-226`) — an unrecognized key
+(`anthropicOutputConfigSchema` and `anthropicOutputFormatSchema` in
+`src/ingest/validation/anthropic-messages.ts`) — an unrecognized key
 *inside* `format` still means a constraint the proxy cannot carry, which is a
 genuine protocol-level judgement. The original doc carries an amendment note
-recording the change (`claude-code-messages-startup-payloads.md:91-95`).
+recording the change in its Solution section.
 
 ## Related
 
 - `docs/solutions/integration-issues/claude-code-messages-startup-payloads.md` —
   the incident this learning is extracted from. Its routing conclusion is
-  annotated as superseded (lines 108-121); its semantic-preservation principle
+  annotated as superseded in the Solution section; its semantic-preservation principle
   stands and is reused by the fix.
 - `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md` — the
   belief that was never verified. Its remedy (probe before asserting) is
@@ -432,4 +437,4 @@ recording the change (`claude-code-messages-startup-payloads.md:91-95`).
   alongside `output-config.ts`, which covers the same object's `effort` key only;
   when a probe covers part of a field, say which part.
 - PR #66 and PR #67 (both merged) — the reasoning-effort divergences.
-  PR #68 (open) — the change described here.
+  PR #68 (`fb48287`, merged) — the change described here.

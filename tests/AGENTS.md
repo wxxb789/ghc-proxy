@@ -26,10 +26,11 @@ compatibility — if it fails, the package must not ship.
 | Group | Exports |
 |-------|---------|
 | Model builders | `buildModel()`, `buildGptModel()`, `buildVisionModel()`, `buildModelsResponse()`, `buildResponsesResult()` |
-| App factory | `createApp()` — assembles an in-process Elysia app over the real route handlers |
+| App factory | `createApp()` — assembles selected real API route plugins under `/v1`; it is not the full production server |
 | Mock factories | `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()`, `mockChatCompletions()`, `mockGetResponse()`, `mockGetResponseInputItems()`, `mockCreateResponseInputTokens()`, `mockDeleteResponse()`, `mockEmulatorCreateResponses()` |
 | SSE utilities | `parseSse()` |
-| State isolation | `saveStateSnapshot()`, `restoreStateSnapshot()`, `setupDefaultTestState()`, `clearConfig()` |
+| State isolation | `saveStateSnapshot()`, `restoreStateSnapshot()`, `setupDefaultTestState()` |
+| Config isolation | `clearConfig()` — clears only the in-memory cached config object |
 | Assertions | `expectCacheCheckpoints()` |
 
 ## Conventions
@@ -37,10 +38,21 @@ compatibility — if it fails, the package must not ship.
 - **Use typed fixture arrays for parameterized cases** (`test.each` or a
   loop over a typed array of `{ name, input, expected }`). One `test` block
   per case keeps failures localized.
-- **Wrap state-mutating tests in snapshot/restore.** Call
-  `saveStateSnapshot()` in `beforeEach` and `restoreStateSnapshot()` in
-  `afterEach` so cross-test pollution doesn't appear as flaky behavior.
-  `setupDefaultTestState()` covers the common default config.
+- **Use the right isolation seam.** `saveStateSnapshot()` covers selected
+  `AuthStore` fields, model cache state, and `runtimeStore.dumpFailedPayloads`;
+  restore also resets the rate limiter and Responses emulator. It does not
+  snapshot cached config, request/effect observations, Dashboard caches,
+  upstream-queue configuration, globals, or prototype patches. Reset those
+  explicitly in the owning test.
+- **Treat config separately.** `setupDefaultTestState()` establishes common
+  auth/model state but does not clear config or runtime observations.
+  `clearConfig()` mutates only `getCachedConfig()` in memory; it neither
+  snapshots prior values nor removes a config file. Clone and restore cached
+  config when a test must preserve the surrounding process state.
+- **Choose the server fixture deliberately.** `createApp()` mounts selected API
+  plugins under `/v1` and omits production global hooks, root aliases, health,
+  Dashboard, token, and usage routes. Use `createServer()` when those surfaces
+  or request lifecycle hooks are under test.
 - **Don't mock what you can use real.** Prefer `createApp()` over hand-rolled
   Elysia wiring; prefer the SSE parsing helpers over inline string splits.
 - **Intercepting upstream calls.** There are two seams, and which one you use

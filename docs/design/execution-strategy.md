@@ -1,6 +1,8 @@
 # Execution Strategy Pattern
 
-This document describes the `ExecutionStrategy` pattern, the central abstraction that unifies request handling across all route handlers.
+This document describes the `ExecutionStrategy` pattern, the shared execution
+abstraction used by the pipeline-driven generation routes. Small direct routes
+such as models, embeddings, usage, token, and Dashboard do not use it.
 
 ## The Problem
 
@@ -12,7 +14,7 @@ ghc-proxy needs to handle both streaming and non-streaming responses across mult
 - Streaming chunk translation
 - Error handling
 
-Without a shared abstraction, each route handler would duplicate the streaming/non-streaming dispatch, SSE serialization, error recovery, and signal cleanup logic.
+Without a shared abstraction, each route handler would duplicate the streaming/non-streaming dispatch, SSE serialization, optional protocol-error conversion, observability notification, and signal cleanup logic.
 
 ## The Solution
 
@@ -80,11 +82,15 @@ Each translation method returns `SSEOutput | SSEOutput[] | null`:
 routes/chat-completions/strategy.ts
 ```
 
-The simplest strategy. Passes OpenAI Chat format through to Copilot with minimal transformation:
+The public Chat Completions path is adapter-backed rather than a raw proxy:
 
-- `execute()` → `CopilotClient.createChatCompletions()`
-- `translateStreamChunk()` → forward `data: {chunk}` as-is
-- `onStreamDone()` → `data: [DONE]`
+- `OpenAIChatAdapter.toCapiPlan()` normalizes the OpenAI payload through the Conversation model and builds the CAPI execution plan.
+- `execute()` calls `CopilotClient.createChatCompletions()` with that plan and its normalized request context.
+- `translateResult()` calls `OpenAIChatAdapter.fromCapiResponse()` to strip CAPI-only response fields.
+- `translateStreamChunk()` preserves SSE metadata and `[DONE]`, while parsed data chunks pass through `OpenAIChatAdapter.serializeStreamChunk()`.
+
+This passthrough-shaped strategy has no `onStreamError()` hook; `runStrategy()`
+still notifies request observability for non-client-cancellation failures.
 
 ### Messages Strategies
 
@@ -92,11 +98,15 @@ Three strategies in `routes/messages/strategies/`:
 
 #### 1. Native Messages (`native-messages.ts`)
 
-Near-passthrough to Copilot's `/v1/messages` endpoint:
+Near-passthrough to Copilot's `/v1/messages` endpoint. The registry performs
+native compatibility reconciliation before constructing the strategy: thinking
+shape/history, output config/format, mutually exclusive sampling parameters,
+cache-control metadata, and output-token limits. The strategy then removes the
+runtime-only top-level `citations` field and flattens mixed search-result tool
+content before forwarding response events with minimal transformation.
 
-- Filters stale assistant thinking blocks
-- Fills adaptive thinking config if model supports it
-- Forwards response events with minimal transformation
+Native Messages has no `onStreamError()` hook, so a caught stream failure is
+observed but does not synthesize an Anthropic event.
 
 #### 2. Responses API (`responses-api.ts`)
 
@@ -104,7 +114,9 @@ Translates Anthropic Messages ↔ Responses format:
 
 - `execute()` → translates request via `anthropic-to-responses`, calls `CopilotClient.createResponses()`
 - `translateStreamChunk()` → uses `ResponsesStreamTranslator` to emit Anthropic-format SSE events
-- `onStreamDone()` → flushes translator state for any pending events
+- `onStreamDone()` → turns an unterminated stream into a terminal Anthropic error event
+- `onStreamError()` → translates caught stream/parser failures into an Anthropic error event
+- Terminal Responses events are observed so `response.failed` and EOF without a terminal event are visible in request activity
 
 #### 3. Chat Completions Fallback (`chat-completions.ts`)
 
@@ -112,7 +124,8 @@ Full Anthropic ↔ OpenAI translation:
 
 - `execute()` → normalizes via adapter, builds CAPI plan, calls `CopilotClient.createChatCompletions()`
 - `translateStreamChunk()` → uses `AnthropicStreamTranslator` with per-index transducers
-- `onStreamDone()` → emits `message_stop` with final usage
+- `onStreamDone()` → emits `message_delta`/`message_stop` and includes final upstream usage when present
+- `onStreamError()` → uses the stream translator to emit an Anthropic error event
 
 ### Responses Strategy
 
@@ -120,15 +133,27 @@ Full Anthropic ↔ OpenAI translation:
 routes/responses/strategy.ts
 ```
 
-Passes OpenAI Responses format through to Copilot:
+Passes OpenAI Responses format through to Copilot. The route's
+`afterTransform()` hook applies tool normalization, the fixed input policy,
+compaction/context management, per-model parameter filters, and output/reasoning
+clamps before the strategy runs. The strategy itself:
 
-- Can apply context compaction only when explicitly enabled in config
-- Rewrites `apply_patch` custom tools if enabled
-- Forwards response events with minimal transformation
+- calls `CopilotClient.createResponses()`;
+- stabilizes response/item IDs across streamed events;
+- applies optional emulator response decoration and persistence callbacks;
+- recognizes `response.completed`, `response.incomplete`, and `response.failed` as terminal events; and
+- forwards non-JSON data unchanged rather than inventing a protocol error.
+
+The passthrough strategy has no `onStreamError()` hook. An EOF without a
+terminal event is recorded by its callback, and stream exceptions are recorded
+by the shared observer.
 
 ## Pipeline Runner: `runPipeline()`
 
-Route handlers used to manually orchestrate parsing, model transformation, strategy selection, and error recovery inline (~70 lines of boilerplate per handler). The `runPipeline()` function (`src/pipeline/runner.ts`) extracts this into a generic orchestrator.
+Route handlers used to orchestrate parsing, model transformation, strategy
+selection, and error recovery inline. The `runPipeline()` function
+(`src/pipeline/runner.ts`) extracts that repeated lifecycle into a generic
+orchestrator.
 
 ### Signature
 
@@ -146,10 +171,10 @@ The two type parameters let each route keep its own payload and strategy context
 `runPipeline` executes the Ingest -> Transform -> Dispatch stages in order:
 
 1. **Ingest** -- calls `protocolRegistry.ingest()` for the configured protocol ID, producing a validated `payload` and `RequestMeta`.
-2. **afterIngest hook** (optional) -- runs immediately after parsing. Routes use this for debug logging or header pre-processing (e.g., the messages handler extracts the `anthropic-beta` header here).
+2. **afterIngest hook** (optional) -- runs immediately after parsing and must return the payload that continues through the pipeline. Routes use it for debug/header processing or to replace the payload (the Responses emulator supplies its expanded upstream payload here).
 3. **Transform** -- calls `resolveRequestModel()`, which applies the model rewrite, optional compact small-model routing, and the cached-model lookup, updating `payload.model` and building a `ModelMappingInfo` trace for request logging.
-4. **afterTransform hook** (optional) -- runs after model transformation. The chat-completions handler uses this to calculate token counts and set `max_tokens` defaults.
-5. **Dispatch** -- creates a `CopilotClient` and upstream signal, builds the strategy context via `buildStrategyContext()`, selects the strategy from the `StrategyRegistry`, and executes it.
+4. **afterTransform hook** (optional) -- runs after model transformation. Chat performs best-effort token diagnostics plus output-token default/rename handling; Responses applies its tool/input/context/parameter policies.
+5. **Dispatch** -- creates a `CopilotClient` and upstream signal, builds the strategy context via `buildStrategyContext()`, selects the strategy from the `StrategyRegistry`, records the selected strategy/effect, and executes it.
 
 `runPipeline()` also owns the only overload-fallback branch. It preserves pristine post-ingest input before the source attempt. After a terminal source-model `529` (or a pre-existing local source cooldown), it looks up one exact `overloadFallbacks` target, validates advertised capabilities, and calls the same preparation boundary again with that target. This reruns transforms, capability checks, strategy-context construction, and registry selection without reapplying source model resolution. The target dispatch receives no new retry allowance and cannot trigger another fallback.
 
@@ -164,7 +189,16 @@ interface PipelineConfig<TPayload, TStrategyCtx> {
   protocol: ProtocolId
   applyModelPolicy?: boolean // compact small-model routing; /v1/messages only
   strategyRegistry: StrategyRegistry<TStrategyCtx>
-  buildStrategyContext: (ctx: BuildStrategyContextParams) => TStrategyCtx
+  buildStrategyContext: (ctx: {
+    payload: TPayload
+    meta: RequestMeta
+    headers: Headers
+    selectedModel: Model | undefined
+    copilotClient: CopilotClient
+    upstreamSignal: ReturnType<typeof createUpstreamSignalFromConfig>
+    modelMapping: ModelMappingInfo
+    recovery: UpstreamRecoveryRecord
+  }) => TStrategyCtx
   afterIngest?: (ctx: IngestContext<TPayload>) => TPayload
   afterTransform?: (ctx: TransformContext<TPayload>) => void | Promise<void>
 }
@@ -172,25 +206,43 @@ interface PipelineConfig<TPayload, TStrategyCtx> {
 
 Each route provides its own protocol ID, strategy registry, and a `buildStrategyContext` function that maps the generic pipeline state into the route-specific strategy context type. Model resolution is shared: every route runs the same `resolveRequestModel()`, and `applyModelPolicy` selects whether compact small-model routing participates (only `/v1/messages` sends the Anthropic-shaped payload the policy inspects). The lifecycle hooks let routes inject route-specific logic at well-defined points without forking the pipeline. `afterIngest` resolves the payload that flows into transform/dispatch and its return is required: side-effect-only callers end with `return ctx.payload` to forward the ingested payload unchanged, while replacement callers (e.g. `/responses`) return a different payload to swap in the emulator's upstream payload. The required return makes a forgotten replacement a compile error rather than a silent fallback.
 
-`buildStrategyContext` also receives the internal `requestId`. Strategies use it
-only for metadata-only stream error observation; request content is not passed
-to the observability store.
+`buildStrategyContext` receives the full mutable `ModelMappingInfo` and shared
+`UpstreamRecoveryRecord`, not a standalone `requestId`. Route contexts commonly
+project `recovery.requestId` for metadata-only stream observation while retaining
+`modelMapping` so adapter-level model resolution can append a trace step. The
+observability projection does not receive request content.
 
 ### Route Handler Integration
 
-With `runPipeline`, route handlers become thin configuration objects. For example, the messages handler (`src/routes/messages/handler.ts`) is ~45 lines that configure the pipeline and return its result:
+With `runPipeline`, route handlers become configuration objects. The Messages
+handler follows this shape:
 
 ```typescript
-export async function handleMessagesCore({ body, signal, headers }) {
+export async function handleMessagesCore({ body, signal, headers, requestId, callerRequestId }) {
   let anthropicBetaHeader: string | undefined
   return runPipeline<AnthropicMessagesPayload, MessagesStrategyContext>(
-    { body, signal, headers },
+    { body, signal, headers, requestId, callerRequestId },
     {
       protocol: 'anthropic-messages',
       applyModelPolicy: true,
       strategyRegistry: defaultStrategyRegistry,
-      afterIngest({ payload, headers }) { /* extract beta header */ },
-      buildStrategyContext(ctx) { /* map to MessagesStrategyContext */ },
+      afterIngest({ payload, headers }) {
+        /* normalize anthropic-beta */
+        return payload
+      },
+      buildStrategyContext({ payload, meta, headers, selectedModel, copilotClient, upstreamSignal, modelMapping, recovery }) {
+        return {
+          requestId: recovery.requestId,
+          copilotClient,
+          anthropicPayload: payload,
+          anthropicBetaHeader,
+          selectedModel,
+          upstreamSignal,
+          headers,
+          requestContext: meta.requestContext ?? {},
+          modelMapping,
+        }
+      },
     },
   )
 }
@@ -200,8 +252,8 @@ The chat-completions handler follows the same pattern, adding an `afterTransform
 
 ## Benefits
 
-1. **DRY streaming logic** -- SSE write loop, error recovery, signal cleanup written once
+1. **DRY streaming logic** -- SSE iteration, optional error-event hooks, observer notification, and signal cleanup written once
 2. **Testable strategies** -- Each strategy can be tested by calling its methods directly
-3. **Consistent error handling** -- All paths emit protocol-level error events on failure
-4. **Easy to add new paths** -- Implement the interface, pass to `executeStrategy()`
+3. **Explicit error scope** -- Translated paths opt into protocol-level error events; passthrough paths retain upstream behavior while shared observability still records failures
+4. **Easy to add new paths** -- Implement the interface and pass it to `runStrategy()`
 5. **DRY pipeline orchestration** -- `runPipeline()` eliminates repeated Ingest/Transform/Dispatch boilerplate across route handlers

@@ -560,6 +560,23 @@ describe('API smoke', () => {
 
     expect(response.status).toBe(400)
     expect(await response.text()).toContain('Invalid request payload')
+
+    const unsupportedTopKResponse = await app.handle(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4.5',
+        messages: [{ role: 'user', content: 'Open src/main.ts' }],
+        top_k: 40,
+      }),
+    }))
+
+    expect(unsupportedTopKResponse.status).toBe(400)
+    expect(await unsupportedTopKResponse.text()).toContain(
+      'top_k is not supported by the OpenAI Chat Completions API',
+    )
     expect(calls).toHaveLength(0)
   })
 

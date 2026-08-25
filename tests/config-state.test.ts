@@ -13,7 +13,7 @@ import {
   readConfig,
   writeConfigField,
 } from '../src/lib/config'
-import { parseBoundedIntArg, resolveDumpFailedPayloadsOption } from '../src/start'
+import { parseIntArg, resolveDumpFailedPayloadsOption } from '../src/start'
 import { authStore, modelCache } from '../src/state'
 import { configStore } from '../src/state/config-store'
 
@@ -497,7 +497,31 @@ describe('start options', () => {
     { raw: '121', min: 1, max: 120, expected: undefined },
     { raw: '', min: 0, max: 2, expected: undefined },
   ])('bounded integer CLI parsing: $raw in $min..$max -> $expected', ({ raw, min, max, expected }) => {
-    expect(parseBoundedIntArg(raw, 'test', 'Using default.', min, max)).toBe(expected)
+    expect(parseIntArg(raw, 'test', 'Using default.', min, max)).toBe(expected)
+  })
+
+  test.each([
+    { raw: '1', expected: 1 },
+    { raw: '10', expected: 10 },
+    { raw: '0', expected: undefined },
+    { raw: '1.5', expected: undefined },
+    { raw: '1e2', expected: undefined },
+    { raw: '10junk', expected: undefined },
+    { raw: '', expected: undefined },
+  ])('upstream queue concurrency CLI parsing: $raw -> $expected', ({ raw, expected }) => {
+    expect(parseIntArg(raw, 'upstream-queue-concurrency', 'Using default.', 1)).toBe(expected)
+  })
+
+  test.each([
+    { raw: '1', expected: 1 },
+    { raw: '4141', expected: 4141 },
+    { raw: '65535', expected: 65535 },
+    { raw: '0', expected: undefined },
+    { raw: '65536', expected: undefined },
+    { raw: '4141junk', expected: undefined },
+    { raw: '1e2', expected: undefined },
+  ])('port CLI parsing: $raw -> $expected', ({ raw, expected }) => {
+    expect(parseIntArg(raw, 'port', 'Server not started.', 1, 65_535)).toBe(expected)
   })
 })
 

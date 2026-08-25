@@ -1,6 +1,7 @@
 ---
 title: "Hand-written upstream types are not evidence of the upstream contract"
 date: 2026-07-26
+last_updated: 2026-08-25
 category: conventions
 module: upstream capability modeling
 problem_type: convention
@@ -28,8 +29,8 @@ tags:
 
 ghc-proxy is a reverse-engineered proxy. GitHub Copilot publishes no request
 schema, so every upstream payload type in this repo — `CapiChatCompletionsPayload`
-(`src/core/capi/types.ts:47`), `ResponsesPayload` (`src/types/responses.ts`),
-`REASONING_EFFORT_VALUES` (`src/types/copilot.ts:85`) — was written by hand from
+(`src/core/capi/types.ts`), `ResponsesPayload` (`src/types/responses.ts`),
+`REASONING_EFFORT_VALUES` (`src/types/copilot.ts`) — was written by hand from
 observation. They record what someone once modelled, nothing more.
 
 That distinction gets lost quickly. A field missing from one of these types
@@ -79,12 +80,12 @@ Please use only one.
 
 The proxy had never modelled this at all. It now drops `top_p` and keeps
 `temperature` on that boundary (`sanitizeExclusiveSamplingParams`,
-`src/transform/sanitize.ts:188`).
+`src/transform/sanitize.ts`).
 
 ### 3. Record the probe next to the code it justifies
 
 Every constant encoding an upstream fact carries the probe name and date in its
-doc comment: `REASONING_PARAM_EXEMPTIONS` (`src/transform/parameter-filter.ts:28`),
+doc comment: `REASONING_PARAM_EXEMPTIONS` (`src/transform/parameter-filter.ts`),
 `RESPONSES_MIN_OUTPUT_TOKENS`, `MODELS_REJECTING_OUTPUT_CONFIG`
 (`src/state/model-cache.ts`). Full results live in `docs/research/`. The next
 reader then gets both things they need: what the evidence was, and how stale it is.
@@ -102,11 +103,13 @@ answered both questions, and they came out differently per dimension:
   `gpt-5.3-codex` accepts `top_p` on `/responses` while the others reject it.
   Nothing derivable distinguishes them, so `REASONING_PARAM_EXEMPTIONS` has to
   be an evidence-backed glob list.
-- **`reasoning_effort` support *is* derivable.** Every model accepted exactly
-  the levels it advertised in `capabilities.supports.reasoning_effort` and
-  rejected the rest. So clamp against the advertised list, wired through as
-  `supportedEfforts` (`src/routes/messages/strategy-registry.ts:68`) — no
-  hardcoded model IDs needed.
+- **Ranked `reasoning_effort` normalization is derivable from a safe target
+  set.** For the Anthropic ladder (`low` through `max`), the advertised list
+  supplies values the proxy can safely emit. If a requested ranked level is not
+  advertised, `clampEffortToAdvertised` selects the highest advertised ranked
+  value. The list is wired through as `supportedEfforts`; no hardcoded model IDs
+  are needed for that normalization. This does not mean the advertised list is
+  an exact inventory of everything the model may accept.
 
 **Amended 2026-08-04 — the second bullet has aged.** `grok-4.5` advertises
 `["low","medium","high"]` and accepts `minimal` and `xhigh` as well, while
@@ -115,14 +118,17 @@ run). See `docs/research/grok-4.5-schema.md`. Two consequences, opposite in
 severity:
 
 - For the **ranked** levels the advertised list is a **safe floor, not an exact
-  set**. Clamping down to it still never produces an upstream 400, so
-  `clampEffortToAdvertised` stays correct; a caller merely loses a level the
-  model would have honoured.
-- For the **unranked** levels it is now unsafe. `clampResponsesReasoningEffort`
-  returns early for `none` and `minimal` because they were believed universal,
-  so `reasoning.effort: none` reaches grok and returns
-  `400 This model does not support 'reasoning_effort' value 'none'` — verified
-  through the proxy. An open defect, tracked in `docs/TODO.md`.
+  set**. Replacing an unsupported ranked request with one of those advertised
+  values avoids emitting a value known to be rejected, though the caller may
+  lose an unadvertised level the model would have honoured.
+- For the **unranked** Responses values, there is no semantics-preserving ranked
+  fallback. `clampResponsesReasoningEffort` and the Anthropic-to-Responses path
+  pass `none` and `minimal` through instead of using them as clamp targets.
+  `none` can mean "do not reason", so changing it upward would invert intent;
+  `minimal` is a direct Responses value, not an Anthropic `output_config` rung.
+  This is not a universal-support claim: `reasoning.effort: none` still reaches
+  `grok-4.5` and can return `400 This model does not support
+  'reasoning_effort' value 'none'`, as verified through the proxy.
 
 That amendment is this doc's own thesis turned on itself. "Advertised is exact"
 was a probe result, not a law, and it was true of every model that existed on
@@ -171,7 +177,7 @@ hides it.
 
 - Before writing a new `unsupported_*` translation issue, or extending
   `assertResponsesCompatibleRequest`
-  (`src/translator/responses/anthropic-to-responses.ts:346`).
+  (`src/translator/responses/anthropic-to-responses.ts`).
 - When a translation-matrix row says `Unsupported` and you cannot find the probe
   behind it.
 - When adding a model-ID list or glob that encodes upstream behavior — probe
@@ -221,14 +227,21 @@ export interface CapiChatCompletionsPayload
    * Not part of the OpenAI chat schema — Copilot accepts it as an extension.
    * Probed 2026-07-26: accepted by every reachable model on both
    * `/chat/completions` and `/v1/messages`
-   * (`scripts/probes/sampling-params.ts`). Only ever populated from an
-   * Anthropic caller's `top_k`; the OpenAI-facing schema does not accept it.
+   * (`scripts/probes/sampling-params.ts`). Only populated internally from an
+   * Anthropic-to-CAPI translation; public OpenAI Chat ingress rejects a
+   * client-supplied `top_k` because it is outside the official boundary.
    */
   top_k?: number | null
 }
 ```
 
-Forwarding happens at `src/core/capi/plan-builder.ts:309`.
+Forwarding happens in `buildCapiExecutionPlan` in
+`src/core/capi/plan-builder.ts`.
+
+`ResponsesPayload` carries the same internal Copilot extension for the
+Anthropic-to-Responses path. Public OpenAI Responses ingress likewise rejects a
+client-supplied `top_k`; upstream acceptance is evidence for internal
+translation, not permission to widen either public OpenAI contract.
 
 ### Recurrences of the same mistake
 

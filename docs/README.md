@@ -14,10 +14,11 @@ See [docs/design/](design/README.md) for the full index. Key documents:
 - [Streaming](design/streaming.md) -- SSE streaming architecture and error recovery
 - [Error Handling](design/error-handling.md) -- Error classification and translation policy
 - [State and Configuration](design/state-and-config.md) -- Global state, config file, CLI flags
+- [Dashboard Observability](design/dashboard-observability.md) -- Read-only runtime projection, lifecycle storage, local-access guard, and Dashboard API routes
 
 ## Research
 
-Investigation notes and findings from upstream API behavior analysis.
+Investigation notes and findings from upstream API behavior analysis. Treat each result as a boundary-, model-, payload-, and date-scoped snapshot rather than a permanent capability guarantee; use the document's recorded date and rerun its probe when freshness matters.
 
 | Document | Description |
 |----------|-------------|

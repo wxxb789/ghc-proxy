@@ -26,10 +26,10 @@ Three long-standing assumptions turned out to be wrong:
 
 1. **`top_k` was treated as unsupported everywhere.** It was dropped on the
    chat-completions fallback (`unsupported_top_k`) and rejected with a hard 400
-   on the Responses path. Both behaviors dated to the original translator
-   (#5/#6) and had never been probed. `top_k` is also absent from the upstream
-   payload types in `src/types/` — which only ever proved that the proxy had
-   not modelled it.
+   during Anthropic-to-Responses translation. Both behaviors dated to the
+   original translator (#5/#6) and had never been probed. `top_k` was also
+   absent from the upstream payload types in `src/types/` — which only ever
+   proved that the proxy had not modelled it internally.
 
 2. **The reasoning-model filter was over-broad.** `parameter-filter` stripped
    `temperature` *and* `top_p` for every reasoning model on the Responses
@@ -118,18 +118,22 @@ instead — the same trade-off `MODELS_REJECTING_OUTPUT_CONFIG` already makes in
 | Path | `temperature` | `top_p` | `top_k` |
 | --- | --- | --- | --- |
 | Native `/v1/messages` | forwarded | dropped when `temperature` is also set | forwarded |
-| Chat Completions fallback | forwarded | forwarded | forwarded as a Copilot extension |
-| Responses | stripped for reasoning models | stripped for reasoning models except codex | forwarded as a Copilot extension |
+| Anthropic -> Chat Completions fallback | forwarded | forwarded | forwarded internally as a Copilot extension |
+| Anthropic -> Responses translation | stripped for reasoning models | stripped for reasoning models except codex | forwarded internally as a Copilot extension |
+| Public `/v1/chat/completions` | forwarded | forwarded | rejected at ingress with 400 |
+| Public `/v1/responses` | stripped for reasoning models | stripped for reasoning models except codex | rejected at ingress with 400 |
 
 `top_k` reaches upstream as a non-standard field on both
-`CapiChatCompletionsPayload` and `ResponsesPayload`. It is only ever populated
-from an Anthropic caller's `top_k` — the OpenAI- and Responses-facing request
-schemas do not accept it, so the proxy boundary stays faithful to the protocols
-it advertises.
+`CapiChatCompletionsPayload` and `ResponsesPayload` only after an Anthropic
+caller's `top_k` crosses an internal translation path. The official OpenAI Chat
+Completions and Responses request contracts do not define `top_k`, so a caller
+that supplies it directly on either public OpenAI boundary receives a 400. The
+2026-07-26 probe establishes that Copilot upstream accepts the extension; it
+does not widen the proxy's client-facing OpenAI contract.
 
 ## Not covered
 
-- `service_tier` — still rejected with 400 on the Responses path. Not probed.
+- `service_tier` — rejected with 400 on both translated Anthropic paths because neither translation can preserve it. Upstream capability was not probed.
 - Streaming requests. All probes were non-streaming.
 - Whether `top_k` measurably changes output. Probes assert acceptance, not
   effect.
@@ -142,16 +146,13 @@ it advertises.
 
 ### Reasoning effort
 
-**The advertised list is authoritative for rejection.** Re-probed 2026-07-26
-after opus-5 / sonnet-5 / gpt-5.6 shipped: on every boundary a model rejects
-every level it does not advertise. Clamp against that list rather than a static
-union.
-
-The converse does **not** hold. `gpt-5.3-codex` accepts `none` on `/responses`
-while advertising `["low","medium","high","xhigh"]` — the one case where real
-behavior is *wider* than the advertised list. That asymmetry is harmless for
-clamping (clamping to an advertised level never produces a rejected value) but
-it means the list is a floor on capability, not an exact description.
+**The advertised list is a conservative clamp target, not a rejection oracle.**
+The 2026-07-26 sweep found advertised values safe across the measured models,
+so the proxy derives clamp targets from that list rather than a static union.
+But absence from the list does not prove rejection: `gpt-5.3-codex` accepted
+`none` on `/responses` while advertising `["low","medium","high","xhigh"]`, and
+the later `grok-4.5` probe found two more accepted unadvertised efforts. The
+list is therefore a safe floor on capability, not an exact description.
 
 #### Per-model results
 

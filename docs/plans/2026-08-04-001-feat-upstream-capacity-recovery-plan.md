@@ -3,13 +3,22 @@ title: Upstream Capacity Recovery - Plan
 type: feat
 date: 2026-08-04
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: implementation-ready
+artifact_readiness: completed
 product_contract_source: ce-plan-bootstrap
 execution: code
 deepened: 2026-08-04
+implemented: 2026-08-04
+implementation_commit: 7124d596475bc1eb9cc5bc821992150633cb24c4
 ---
 
 # Upstream Capacity Recovery - Plan
+
+> **Status: completed.** Implemented on 2026-08-04 by commit
+> `7124d596475bc1eb9cc5bc821992150633cb24c4` (`feat: isolate and bound upstream
+> capacity recovery (#72)`). This document is a historical implementation
+> record, not an active work queue. Present-tense or future-tense wording below
+> describes the pre-implementation baseline and the contract used for that
+> change.
 
 ## Goal Capsule
 
@@ -28,15 +37,15 @@ deepened: 2026-08-04
 Add scoped capacity cooldowns, bounded pre-response retry, and an opt-in one-hop overload fallback across Anthropic Messages, OpenAI Responses, and Chat Completions.
 The change must reduce retry-amplified latency while preserving protocol schemas, cancellation, actual-model transparency, and the existing no-mid-stream-replay boundary.
 
-### Problem Frame
+### Historical Problem Frame (pre-implementation baseline)
 
-`UpstreamRequestQueue` currently treats both `429` and `529` as one process-global cooldown and retries capacity responses up to five times.
-That policy can add minutes of backoff and can keep Sol, Terra, or another Claude model behind an Opus-specific overload.
-It also drops `Retry-After` when the final upstream error becomes an `HTTPError`, which leaves Claude Code and other SDK clients without the provider's pacing signal.
+Before commit `7124d59`, `UpstreamRequestQueue` treated both `429` and `529` as one process-global cooldown and retried capacity responses up to five times.
+That policy could add minutes of backoff and could keep Sol, Terra, or another Claude model behind an Opus-specific overload.
+It also dropped `Retry-After` when the final upstream error became an `HTTPError`, which left Claude Code and other SDK clients without the provider's pacing signal.
 
-The normal proxy streaming path is incremental and does not explain the observed long tails.
-The recovery path is the controllable multiplier: queue wait, global cooldown, five retries, and downstream SDK retries can stack beneath a single user turn.
-This plan narrows that multiplier without adding a general circuit breaker or an implicit model-selection system.
+At that baseline, the normal proxy streaming path was incremental and did not explain the observed long tails.
+The recovery path was the controllable multiplier: queue wait, global cooldown, five retries, and downstream SDK retries could stack beneath a single user turn.
+The implemented plan narrowed that multiplier without adding a general circuit breaker or an implicit model-selection system.
 
 ### Actors
 
@@ -604,6 +613,10 @@ Do not run `bun run matrix:live` as a validation gate because it consumes real C
 ---
 
 ## Definition of Done
+
+**Completion status:** satisfied by commit `7124d596475bc1eb9cc5bc821992150633cb24c4`
+on 2026-08-04. The criteria below record the merge-time acceptance contract;
+they are not outstanding tasks.
 
 ### Global completion
 

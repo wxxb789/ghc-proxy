@@ -129,24 +129,44 @@ own function tools in one request, and that composition is accepted.
 
 ## What this means for the proxy
 
-Nothing to change. The proxy does not filter tool names on either boundary, and
-the `/v1/messages` builtin `web_search` rejection is upstream's, forwarded
-rather than pre-empted — which is the correct handling per
+The proxy ingress uses `type` to preserve the mechanism. Ordinary function
+tools have an absent, null, or `custom` type and require both `name` and
+`input_schema`. Every other non-null type remains an Anthropic built-in or
+toolset even if a caller adds `input_schema`; a toolset may also omit `name`.
+The native Messages path accepts these shapes without converting a typed
+definition into a function tool.
+
+The proxy does not filter tool names and does not pre-empt the observed
+`web_search_20250305` policy failure. For the v5 pair, the `400` documented
+above is returned by Copilot upstream after the canonical builtin passes local
+ingress validation. That keeps the capability verdict at the boundary that
+actually made it, per
 `../solutions/conventions/capability-verdicts-are-scoped-to-one-boundary.md`.
 
+If a selected model cannot use native Messages and would require Responses or
+Chat Completions translation, the proxy rejects the typed built-in/toolset shape
+(a non-null `type` other than `custom`) with `unsupported_server_tool` before
+dispatch, even if a caller adds an `input_schema`. An ordinary function call
+cannot preserve the execution mechanism or expansion semantics of every typed
+Anthropic definition.
+
 The practical summary for a client author: on the v5 Claude pair, **name your
-tools whatever you like**. Only the Anthropic builtin *tags* are gated, and only
-`web_search` / `web_fetch` / `mcp_*` / `computer_*` among them.
+ordinary function tools whatever you like**. Canonical builtin tags are a
+separate, server-executed mechanism subject to upstream policy. This page
+directly observed acceptance of `bash_20250124`, `text_editor_20250728`, and
+`code_execution_20250825`, and rejection of `web_search_20250305`; broader
+builtin coverage belongs to `builtin-tool-support.md`.
 
 ## Do NOT read this as "Claude Code's WebSearch works"
 
 It does not follow, and the confusion would be expensive.
 
-Claude Code's `WebSearch` is Anthropic's **server-side builtin** — the same
-`web_search_20250305` tag that `/v1/messages` refuses. What this page measured
-is a *function tool that happens to be named* `WebSearch`: the model emits a
-call and the client executes it. Same word, different mechanism, opposite
-verdict.
+This page measured a *function tool that happens to be named* `WebSearch`: the
+model emits a call and the client executes it. Anthropic also defines a distinct
+server-side builtin tagged `web_search_20250305`, which `/v1/messages` refused.
+No captured Claude Code payload in this repo proves which shape Claude Code
+actually sends, so the function-tool result must not be promoted into a Claude
+Code capability claim.
 
 So `README.md`'s recommended Claude Code config —
 
@@ -157,11 +177,11 @@ So `README.md`'s recommended Claude Code config —
 — is **not** contradicted by the table above and was deliberately left in place.
 
 What is still unverified: whether Claude Code sends `WebSearch` as the builtin
-tag (making the deny necessary) or in some other shape. No captured Claude Code
-`/v1/messages` payload exists in this repo, and this probe did not produce one.
-Anyone changing that README line should capture a real payload first —
-`--dump-failed-payloads` is the intended tool — rather than reasoning from this
-page.
+tag or in some other shape. No captured Claude Code `/v1/messages` payload
+exists in this repo, and this probe did not produce one. The current
+`--dump-failed-payloads` option covers Responses upstream 400s, not this native
+Messages boundary; changing the README recommendation requires a dedicated
+`/v1/messages` capture rather than inference from this page.
 
 The general trap: **a tool's name does not tell you its execution mechanism.**
 Two tools can share a name, one server-executed and one client-executed, and a
@@ -199,7 +219,9 @@ curl -s -X POST http://127.0.0.1:4142/v1/messages \
 ```
 
 Expect a `tool_use` block naming `web_search`. Swap the tool declaration for
-`{"type":"web_search_20250305","name":"web_search"}` to get the 400 instead.
+`{"type":"web_search_20250305","name":"web_search"}` to exercise the
+canonical builtin shape. The proxy accepts that shape without `input_schema`
+and forwards it; the v5 upstream then returns the documented 400.
 
 ## Related
 

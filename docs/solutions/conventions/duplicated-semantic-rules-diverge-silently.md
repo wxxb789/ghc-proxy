@@ -1,7 +1,7 @@
 ---
 title: "A semantic rule implemented twice diverges silently"
 date: 2026-07-27
-last_updated: 2026-07-29
+last_updated: 2026-08-25
 category: conventions
 module: reasoning effort across ingest/transform/translator
 problem_type: convention
@@ -32,10 +32,18 @@ tags:
 ## Context
 
 ghc-proxy translates Anthropic- and OpenAI-shaped requests onto GitHub Copilot's
-API. Reasoning effort is one field with one rule behind it:
+API. Ranked reasoning effort is one field with one rule behind it:
 
-> A request may only carry an effort level the target model advertises in
-> `capabilities.supports.reasoning_effort`.
+> A ranked Anthropic effort (`low` through `max`) must be preserved when the
+> target model advertises it, or clamped to the highest ranked effort the model
+> advertises.
+
+Responses-only `none` and `minimal` are deliberately outside that ladder. They
+are never clamp targets. `none` may encode `thinking: disabled`, so clamping it
+upward would reverse the caller's intent; `minimal` is accepted at the OpenAI
+Responses boundary but is not part of Anthropic `output_config.effort`. Passing
+either through is an intent-preservation policy, not proof that an unadvertised
+value will be accepted by every upstream model.
 
 That rule has to hold across three ingress schemas and three execution
 strategies. In one session it was found violated four times, in four files,
@@ -72,15 +80,15 @@ implementations has not finished the targeted issue, it has relocated it.
 
 ### 1. One constant, imported — never a second hand-written copy
 
-The shared list lives at `src/types/copilot.ts:85`:
+The shared list lives in `src/types/copilot.ts`:
 
 ```ts
 export const REASONING_EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 ```
 
 Both ingress schemas now derive from it rather than restating it
-(`src/ingest/validation/openai-chat.ts:115`,
-`src/ingest/validation/responses.ts:248`):
+(`src/ingest/validation/openai-chat.ts` and
+`src/ingest/validation/responses.ts`):
 
 ```ts
 const responsesReasoningConfigSchema = z.object({
@@ -102,9 +110,11 @@ Responses path through `clampResponsesEffort`.
 Where the boundaries genuinely differ, the difference is explicit and narrow
 rather than a second implementation. The Responses vocabulary includes `none`
 and `minimal`, which are not on the Anthropic `output_config` ladder, so they
-pass through instead of being ranked — clamping `none` *up* to a model's highest
-advertised level would invert the caller's intent. That is a two-line divergence
-with a stated reason, not a fork.
+pass through instead of being ranked. `none` preserves an explicit "do not
+reason" instruction; `minimal` preserves a direct Responses caller's requested
+value. This exception does not claim those values are universally supported —
+an upstream model may still reject an unadvertised value. That is a narrow
+boundary policy with a stated reason, not a second effort ladder.
 
 ### 3. Clamp at the exit, not per branch
 
@@ -214,7 +224,7 @@ const responsesReasoningConfigSchema = z.object({
 `z.enum(REASONING_EFFORT_VALUES)`, and the regression tests iterate the shared
 constant — so extending the list extends the tests.
 
-### Two clamps, one correct and one degraded (PR #67, open)
+### Two clamps, one correct and one degraded (PR #67, merged as `8348f18`)
 
 Before, in `src/translator/responses/anthropic-to-responses.ts`:
 
@@ -234,16 +244,19 @@ reject `xhigh` while accepting `max` (probed 2026-07-26,
 `scripts/probes/effort-and-tokens.ts`). So `max → xhigh` was a downgrade *onto a
 level the model rejects*.
 
-### Three of four branches unclamped (PR #67, open)
+### Three of four branches bypassed the common exit (PR #67, merged)
 
 Fixing the clamp fixed one branch. An audit of the whole chain found the
 enclosing function had four, and only the branch where the user's error appeared
-was clamped: `thinking: adaptive` returned a hardcoded `'medium'`,
+reached the common clamp: `thinking: adaptive` returned a hardcoded `'medium'`,
 `thinking: enabled` pushed a configured default through an `as` cast — which
 suppressed the one signal the type system could have given — and
-`thinking: disabled` returned `'none'` unchecked.
+`thinking: disabled` returned `'none'` directly. The first two needed ranked
+clamping. The third needed to pass through the common exit and then take the
+explicit `none` exception, because changing "disabled" into a positive effort
+would invert the request.
 
-### A silent drop rather than a 400 (PR #67, open)
+### A silent drop rather than a 400 (PR #67, merged)
 
 `normalizeAnthropicRequest` built its IR without reading `output_config.effort`,
 so on the Chat Completions Fallback a caller asking for `max` reached upstream
