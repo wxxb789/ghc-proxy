@@ -78,7 +78,13 @@ async function main() {
       await fs.readFile(packagedPackageJsonPath, 'utf8'),
     ) as {
       name?: string
+      version?: string
       bin?: string | Record<string, string>
+    }
+
+    const packagedVersion = packagedPackageJson.version
+    if (!packagedVersion) {
+      throw new Error('Packaged package.json does not expose a version.')
     }
 
     const packagedBin = typeof packagedPackageJson.bin === 'string'
@@ -90,7 +96,10 @@ async function main() {
     }
 
     const packagedBinPath = path.join(packagedRoot, packagedBin)
-    await fs.access(packagedBinPath)
+    const packagedBinSource = await fs.readFile(packagedBinPath, 'utf8')
+    if (!packagedBinSource.startsWith('#!/usr/bin/env node\n')) {
+      throw new Error('Packaged CLI bin must use a Node.js shebang so npx works without Bun installed.')
+    }
 
     const shimCandidates = process.platform === 'win32'
       ? [
@@ -135,9 +144,13 @@ async function main() {
     // 1.x regression can pass under one and fail under the other.
     runSelfcheck('bun', packagedBinPath, installRoot)
     runSelfcheck('node', packagedBinPath, installRoot)
+    runDebugCheck('bun', packagedBinPath, installRoot, packagedVersion)
+    runDebugCheck('node', packagedBinPath, installRoot, packagedVersion)
+    runBunxDebugCheck(tarballPath, installRoot, packagedVersion)
+    runNpxDebugCheck(installRoot, packagedVersion)
 
     const probeCount = EXPECTED_TOKENIZER_PROBES.length + EXPECTED_RUNTIME_PROBES.length
-    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (${probeCount} tokenizer/runtime probes passed under bun + node)`)
+    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (${probeCount} tokenizer/runtime probes plus debug contract passed under bun + node, bunx + npx launcher coverage)`)
   }
   finally {
     if (tarballPath) {
@@ -165,6 +178,14 @@ interface SelfcheckReport {
   probes?: Array<SelfcheckProbe>
   runtimeProbes?: Array<RuntimeProbe>
   failedCount?: number
+}
+
+interface DebugReport {
+  version?: string
+  runtime?: {
+    name?: string
+    version?: string
+  }
 }
 
 function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: string): void {
@@ -207,6 +228,42 @@ function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: str
   throw new Error(
     `Packaged CLI selfcheck under '${runtime}' produced no parseable JSON (exit ${result.exitCode}).\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
   )
+}
+
+function runDebugCheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: string, expectedVersion: string): void {
+  const result = runCommand([runtime, packagedBinPath, 'debug', '--json'], cwd)
+  const stdout = decodeOutput(result.stdout)
+  const report = tryParseJsonOrUndefined<DebugReport>(stdout)
+
+  if (report?.runtime?.name !== runtime || !report.runtime.version || report.version !== expectedVersion) {
+    throw new Error(
+      `Packaged CLI debug under '${runtime}' returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
+    )
+  }
+}
+
+function runBunxDebugCheck(tarballPath: string, cwd: string, expectedVersion: string): void {
+  const result = runCommand(['bunx', '--bun', '--package', tarballPath, 'ghc-proxy', 'debug', '--json'], cwd)
+  const stdout = decodeOutput(result.stdout)
+  const report = tryParseJsonOrUndefined<DebugReport>(stdout)
+
+  if (report?.runtime?.name !== 'bun' || !report.runtime.version || report.version !== expectedVersion) {
+    throw new Error(
+      `Packaged CLI debug through bunx returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
+    )
+  }
+}
+
+function runNpxDebugCheck(cwd: string, expectedVersion: string): void {
+  const result = runCommand(['npx', '--no-install', 'ghc-proxy', 'debug', '--json'], cwd)
+  const stdout = decodeOutput(result.stdout)
+  const report = tryParseJsonOrUndefined<DebugReport>(stdout)
+
+  if (report?.runtime?.name !== 'node' || !report.runtime.version || report.version !== expectedVersion) {
+    throw new Error(
+      `Packaged CLI debug through npx returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
+    )
+  }
 }
 
 function missingProbeNames(expected: Array<string>, actual: Array<string>): Array<string> {

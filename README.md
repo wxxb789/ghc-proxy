@@ -9,32 +9,44 @@ A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic
 > [!WARNING]
 > Reverse-engineered, unofficial, may break at any time. Excessive use can trigger GitHub abuse detection. **Use at your own risk.**
 
-**TL;DR** — Install [Bun](https://bun.com/docs/installation), then run:
+**TL;DR** — Choose either supported runtime:
 
 ```bash
-bunx ghc-proxy@latest start
+# Bun >= 1.4
+bunx --bun ghc-proxy@latest start
+
+# Node.js >= 24
+npx ghc-proxy@latest start
 ```
 
 ## Prerequisites
 
 Before you start, make sure you have:
 
-1. **Bun** (>= 1.3) -- a fast JavaScript runtime used to run the proxy
-   - **Windows:** `winget install --id Oven-sh.Bun`
-   - **Other platforms:** see the [official installation guide](https://bun.com/docs/installation)
+1. **One supported JavaScript runtime:**
+   - **Bun >= 1.4:** `winget install --id Oven-sh.Bun` on Windows, or see the [official installation guide](https://bun.com/docs/installation)
+   - **Node.js >= 24:** install the latest LTS release from the [official Node.js download page](https://nodejs.org/en/download)
 2. **A GitHub Copilot subscription** -- individual, business, or enterprise
 
 ## Quick Start
 
-1. Start the proxy:
+1. Start the proxy with your chosen runtime:
 
-       bunx ghc-proxy@latest start
+   ```bash
+   # Bun
+   bunx --bun ghc-proxy@latest start
+
+   # Node.js
+   npx ghc-proxy@latest start
+   ```
 
 2. On the first run, you will be guided through GitHub's device-code authentication flow. Follow the prompts to authorize the proxy.
 
 3. Once authenticated, the proxy starts on **`http://localhost:4141`** and is ready to accept requests.
 
 That's it. Any tool that supports the OpenAI or Anthropic API can now point to `http://localhost:4141`.
+
+The examples below use `bunx --bun`. If you chose Node.js, replace `bunx --bun` with `npx`; the published CLI and commands are the same.
 
 > **Tip:** If you set `--rate-limit`, add `--wait` to queue requests instead of rejecting them with 429 when the cooldown has not elapsed yet. See [Rate Limiting](#rate-limiting) for details.
 
@@ -45,7 +57,7 @@ This is the most common use case. There are two ways to set it up:
 ### Option A: One-command launch
 
 ```bash
-bunx ghc-proxy@latest start --claude-code
+bunx --bun ghc-proxy@latest start --claude-code
 ```
 
 This starts the proxy, opens an interactive model picker, and prints a ready-to-paste environment command. Run that command in another terminal to launch Claude Code with the correct configuration.
@@ -73,7 +85,7 @@ Create or edit `~/.claude/settings.json` (this applies globally to all projects)
 Then simply start the proxy and use Claude Code as usual:
 
 ```bash
-bunx ghc-proxy@latest start
+bunx --bun ghc-proxy@latest start
 ```
 
 **What each environment variable does:**
@@ -96,11 +108,11 @@ See the [Claude Code settings docs](https://docs.anthropic.com/en/docs/claude-co
 ghc-proxy uses a subcommand structure:
 
 ```bash
-bunx ghc-proxy@latest start          # Start the proxy server
-bunx ghc-proxy@latest auth           # Run GitHub auth flow without starting the server
-bunx ghc-proxy@latest check-usage    # Show your Copilot usage/quota in the terminal
-bunx ghc-proxy@latest debug          # Print diagnostic info (version, paths, token status)
-bunx ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node runtime contracts in the packaged bundle
+bunx --bun ghc-proxy@latest start          # Start the proxy server
+bunx --bun ghc-proxy@latest auth           # Run GitHub auth flow without starting the server
+bunx --bun ghc-proxy@latest check-usage    # Show your Copilot usage/quota in the terminal
+bunx --bun ghc-proxy@latest debug          # Print diagnostic info (version, paths, token status)
+bunx --bun ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node runtime contracts in the packaged bundle
 ```
 
 ### `start` Options
@@ -133,13 +145,13 @@ If you want to throttle how often the proxy forwards requests:
 
 ```bash
 # Enforce a 30-second cooldown between requests
-bunx ghc-proxy@latest start --rate-limit 30
+bunx --bun ghc-proxy@latest start --rate-limit 30
 
 # Same, but queue requests instead of returning 429
-bunx ghc-proxy@latest start --rate-limit 30 --wait
+bunx --bun ghc-proxy@latest start --rate-limit 30 --wait
 
 # Manually approve every request (useful for debugging)
-bunx ghc-proxy@latest start --manual
+bunx --bun ghc-proxy@latest start --manual
 ```
 
 `--wait` only takes effect when `--rate-limit` is also set. Without `--rate-limit`, there is no cooldown to wait on and `--wait` has no effect.
@@ -149,8 +161,8 @@ bunx ghc-proxy@latest start --manual
 If you have a GitHub Business or Enterprise Copilot plan, pass `--account-type`:
 
 ```bash
-bunx ghc-proxy@latest start --account-type business
-bunx ghc-proxy@latest start --account-type enterprise
+bunx --bun ghc-proxy@latest start --account-type business
+bunx --bun ghc-proxy@latest start --account-type enterprise
 ```
 
 This routes requests to the correct Copilot API endpoint for your plan. See the [GitHub docs on network routing](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for details.
@@ -160,17 +172,17 @@ This routes requests to the correct Copilot API endpoint for your plan. See the 
 If your organization uses GitHub Enterprise Cloud (`*.ghe.com`), the standard GitHub device login URL differs from `github.com`. Pass your company's GHE domain on first auth:
 
 ```bash
-bunx ghc-proxy@latest start --account-type enterprise --ghe-domain company.ghe.com
+bunx --bun ghc-proxy@latest start --account-type enterprise --ghe-domain company.ghe.com
 ```
 
 Or authenticate first, then start without the flag on subsequent runs:
 
 ```bash
 # First run (authenticates and persists the domain)
-bunx ghc-proxy@latest auth --ghe-domain company.ghe.com
+bunx --bun ghc-proxy@latest auth --ghe-domain company.ghe.com
 
 # Later runs (domain is read from persisted config)
-bunx ghc-proxy@latest start --account-type enterprise
+bunx --bun ghc-proxy@latest start --account-type enterprise
 ```
 
 The proxy normalizes and persists the GHE domain automatically after a successful authentication, so you only need to pass `--ghe-domain` on the first run or when switching tenants.
@@ -428,7 +440,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 
 Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. They are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection and security contract.
 
-> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses`, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
+> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses` and its resource routes, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
 
 ## Responses Compatibility
 
@@ -492,29 +504,47 @@ Pre-built images are available on GHCR:
 
 ```bash
 docker pull ghcr.io/wxxb789/ghc-proxy
-docker run -p 4141:4141 ghcr.io/wxxb789/ghc-proxy
+docker volume create ghc-proxy-data
+docker run --rm -p 127.0.0.1:4141:4141 \
+  -v ghc-proxy-data:/home/bun/.local/share/ghc-proxy \
+  ghcr.io/wxxb789/ghc-proxy
 ```
 
 Or build locally:
 
 ```bash
 docker build -t ghc-proxy .
-mkdir -p ./copilot-data
-docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy
+docker volume create ghc-proxy-data
+docker run --rm -p 127.0.0.1:4141:4141 \
+  -v ghc-proxy-data:/home/bun/.local/share/ghc-proxy \
+  ghc-proxy
 ```
 
-Authentication and settings are persisted in `copilot-data/config.json` so they survive container restarts.
+Authentication and settings are persisted in the `ghc-proxy-data` volume so they survive container restarts. The proxy does not provide API authentication. Keep the port bound to loopback as shown; any non-loopback deployment needs an authenticated TLS reverse proxy or a firewall that restricts access.
 
-You can also pass a GitHub token via environment variable. The container [entrypoint](entrypoint.sh) forwards `GH_TOKEN` to `start --github-token`, so this is Docker-specific — the proxy binary itself does not read `GH_TOKEN` from the environment (outside Docker, use the `--github-token` flag or a persisted `config.json`):
+Run the device-code authentication flow once against the same volume:
 
 ```bash
-docker run -p 4141:4141 -e GH_TOKEN=your_token ghcr.io/wxxb789/ghc-proxy
+docker run --rm -it \
+  -v ghc-proxy-data:/home/bun/.local/share/ghc-proxy \
+  ghcr.io/wxxb789/ghc-proxy auth
 ```
 
-To run the one-time device-code auth flow inside the container instead (writes the token into the mounted data volume):
+The legacy `--auth` container argument remains supported, but `auth` is the standard CLI subcommand:
 
 ```bash
-docker run -it -v $(pwd)/copilot-data:/root/.local/share/ghc-proxy ghc-proxy --auth
+docker run --rm -it \
+  -v ghc-proxy-data:/home/bun/.local/share/ghc-proxy \
+  ghcr.io/wxxb789/ghc-proxy --auth
+```
+
+You can also pass a GitHub token via `GH_TOKEN`. The container [entrypoint](entrypoint.sh) forwards a non-empty value only when starting the proxy, as `start --github-token`:
+
+```bash
+docker run --rm -p 127.0.0.1:4141:4141 \
+  -v ghc-proxy-data:/home/bun/.local/share/ghc-proxy \
+  -e GH_TOKEN=your_token \
+  ghcr.io/wxxb789/ghc-proxy
 ```
 
 Docker Compose:
@@ -524,13 +554,20 @@ services:
   ghc-proxy:
     image: ghcr.io/wxxb789/ghc-proxy
     ports:
-      - '4141:4141'
+      - '127.0.0.1:4141:4141'
+    volumes:
+      - ghc-proxy-data:/home/bun/.local/share/ghc-proxy
     environment:
       - GH_TOKEN=your_token_here
     restart: unless-stopped
+
+volumes:
+  ghc-proxy-data:
 ```
 
 ## Running from Source
+
+Repository development uses Bun >= 1.4 even if you run the published package with Node.js.
 
 ```bash
 git clone https://github.com/wxxb789/ghc-proxy.git

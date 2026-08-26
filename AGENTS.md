@@ -12,7 +12,7 @@ Copilot, etc.) working in this repository.
 
 ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Copilot's API into OpenAI- and Anthropic-compatible formats. It enables Claude Code, Cursor, and any OpenAI/Anthropic-speaking client to use a GitHub Copilot subscription. **Unofficial, may break at any time.**
 
-- **Runtime:** Bun >= 1.3 (first-class), Node.js >= 24 LTS compatible via `@elysiajs/node` fallback
+- **Runtime:** Bun >= 1.4 (first-class), Node.js >= 24 compatible via `@elysiajs/node` fallback; CI tracks the latest Node.js LTS and Current releases
 - **Language:** TypeScript (ESNext, strict mode)
 - **Framework:** Elysia (HTTP server), citty (CLI), Zod (validation)
 - **Published as:** `ghc-proxy` npm package (`dist/main.mjs` entry plus generated
@@ -36,9 +36,11 @@ bun run smoke:packaged               # Smoke test the packaged CLI (selfcheck un
 bun run release:patch                # Bump patch, commit, tag, and push (bumpp 11 pushes branch + tag automatically)
 ```
 
-**CI topology:** `.github/workflows/ci.yml` runs `lint`, `typecheck`, `test`, and
-`build` as independent jobs. The `build` job runs `build` then
-`smoke:packaged`; there is no cross-job execution order.
+**CI topology:** `.github/workflows/ci.yml` runs `lint`, `typecheck`, `test`,
+`build`, Node Current compatibility, Windows/Bun-floor compatibility, and a
+Docker image smoke as independent jobs. The runtime jobs build and run
+`smoke:packaged`; the Docker job builds the image and exercises its non-root CLI
+entrypoint. There is no cross-job execution order.
 
 **Local full gate:** `bun run lint:all && bun run typecheck && bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts && bun run build && bun run smoke:packaged`.
 The `/verify` skill carries the same command in a readable multi-line form.
@@ -153,6 +155,9 @@ Single-context: `CONCEPTS.md` (glossary) + `docs/design/` (decisions) + `docs/so
 
 - **Tag-triggered pipeline:** `.github/workflows/release-npm.yml` handles ordered
   validation, package checks, changelog generation, and npm publish in one job.
+- **Docker pipeline:** `.github/workflows/release-docker.yml` independently
+  repeats the release gate, verifies the tag/version contract, and publishes a
+  multi-architecture GHCR image with provenance and SBOM attestations.
 - **Version contract:** Workflow validates `vX.Y.Z` matches `package.json` `version` before publish.
 - **Auth model:** npm Trusted Publishing (GitHub OIDC). No long-lived npm tokens.
 - **Typical flow:** `bun run release:patch` (or `:minor` / `:major`) bumps the version, commits, tags, and pushes branch + tag in one step (bumpp 11 default). The pushed tag triggers `.github/workflows/release-npm.yml`, which validates and publishes.

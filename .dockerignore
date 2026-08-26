@@ -1,13 +1,9 @@
-node_modules
-
-.vscode/
-
-.git/
-.github/
-.gitignore
-
-dist/
-tests/
-*.md
-
-.eslintcache
+# Keep the Docker build context to the inputs used by the build and runtime stages.
+*
+!package.json
+!bun.lock
+!tsconfig.json
+!tsdown.config.ts
+!src/
+!src/**
+!entrypoint.sh
