@@ -2,6 +2,7 @@
 
 import fs from 'node:fs/promises'
 import os from 'node:os'
+import process from 'node:process'
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
@@ -30,10 +31,12 @@ interface RunDebugOptions {
   json: boolean
 }
 
-function getRuntimeInfo() {
+function getRuntimeInfo(): DebugInfo['runtime'] {
+  const bunVersion = process.versions.bun
+
   return {
-    name: 'bun',
-    version: Bun.version,
+    name: bunVersion ? 'bun' : 'node',
+    version: bunVersion ?? process.versions.node,
     platform: os.platform(),
     arch: os.arch(),
   }
@@ -99,7 +102,7 @@ async function runDebug(options: RunDebugOptions): Promise<void> {
   const debugInfo = await getDebugInfo()
 
   if (options.json) {
-    await Bun.write(Bun.stdout, `${JSON.stringify(debugInfo, null, 2)}\n`)
+    process.stdout.write(`${JSON.stringify(debugInfo, null, 2)}\n`)
   }
   else {
     printDebugInfoPlain(debugInfo)

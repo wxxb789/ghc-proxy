@@ -1,8 +1,17 @@
 #!/bin/sh
-if [ "$1" = "--auth" ]; then
-  # Run auth command
-  exec bun ./dist/main.mjs auth
-else
-  # Default command
-  exec bun ./dist/main.mjs start -g "$GH_TOKEN" "$@"
+
+if [ "$#" -eq 0 ]; then
+  set -- start
+elif [ "$1" = "--auth" ]; then
+  shift
+  set -- auth "$@"
+elif [ "${1#-}" != "$1" ]; then
+  set -- start "$@"
 fi
+
+if [ "$1" = "start" ] && [ -n "${GH_TOKEN:-}" ]; then
+  shift
+  set -- start --github-token "$GH_TOKEN" "$@"
+fi
+
+exec bun ./dist/main.mjs "$@"

@@ -16,16 +16,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Set up Bun 1.4.0
+        uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 'lts/*'
+          check-latest: true
+
+      - name: Verify Node support baseline matches latest LTS
+        run: >-
+          node -e "const { engines } = require('./package.json');
+          const expected = '>=' + process.versions.node.split('.')[0];
+          if (engines.node !== expected)
+          throw new Error('package.json engines.node must be ' + expected + ' for the latest Node.js LTS');"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Build and smoke test packaged CLI on Bun 1.4.0
+        run: |
+          bun run build
+          bun run smoke:packaged
+
+      - name: Set up latest Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
       - name: Validate project
         run: |
@@ -34,6 +53,22 @@ jobs:
           bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts
           bun run build
           bun run smoke:packaged
+
+      - name: Set up Node Current
+        uses: actions/setup-node@v7
+        with:
+          node-version: current
+
+      - name: Build and smoke test packaged CLI on Node Current
+        run: |
+          bun run build
+          bun run smoke:packaged
+
+      - name: Set up latest Node LTS for publishing
+        uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          check-latest: true
 
       - name: Verify npm pack lifecycle (prepack -> tsdown)
         run: npm pack --dry-run

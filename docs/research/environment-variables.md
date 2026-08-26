@@ -48,7 +48,7 @@ Used exclusively in `entrypoint.sh` to pass a GitHub token to the `--github-toke
 
 ```text
 $GH_TOKEN (Docker env)
-  → entrypoint.sh: -g "$GH_TOKEN"
+  → entrypoint.sh: --github-token "$GH_TOKEN"
     → start.ts: options.githubToken
       → state.auth.githubToken
         → GitHub API: authorization: token <github_token>
@@ -59,7 +59,7 @@ $GH_TOKEN (Docker env)
 
 The GitHub token is not used directly for Copilot API calls. It is exchanged for a short-lived Copilot token via GitHub's internal API, and that Copilot token is what authenticates all upstream requests.
 
-**Empty string handling:** When `GH_TOKEN` is not set in Docker, `entrypoint.sh` passes `-g ""`. The JavaScript falsy check `if (options.githubToken)` treats empty string as "not provided", so the interactive OAuth device-code flow is triggered instead. This is correct behavior.
+**Empty string handling:** When `GH_TOKEN` is unset or empty, `entrypoint.sh` does not add `--github-token`; startup falls back to the persisted config or the OAuth device-code flow.
 
 ### `DUMP_FAILED_PAYLOADS`
 

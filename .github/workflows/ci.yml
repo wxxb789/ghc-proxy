@@ -12,13 +12,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 'lts/*'
+          check-latest: true
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Verify Node support baseline matches latest LTS
+        run: >-
+          node -e "const { engines } = require('./package.json');
+          const expected = '>=' + process.versions.node.split('.')[0];
+          if (engines.node !== expected)
+          throw new Error('package.json engines.node must be ' + expected + ' for the latest Node.js LTS');"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -31,9 +39,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 'lts/*'
+          check-latest: true
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -50,9 +59,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 'lts/*'
+          check-latest: true
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -79,9 +89,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 'lts/*'
+          check-latest: true
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -95,3 +106,78 @@ jobs:
 
       - name: Smoke test packaged CLI
         run: bun run smoke:packaged
+
+  node-current:
+    name: Node Current compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: current
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Smoke test packaged CLI
+        run: bun run smoke:packaged
+
+  windows-bun-floor:
+    name: Windows Bun 1.4 compatibility
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          check-latest: true
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Smoke test packaged CLI
+        run: bun run smoke:packaged
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --pull -t ghc-proxy:ci .
+
+      - name: Verify non-root runtime user
+        run: test "$(docker image inspect ghc-proxy:ci --format '{{.Config.User}}')" = bun
+
+      - name: Verify persisted data directory is writable
+        run: |
+          volume="ghc-proxy-ci-${GITHUB_RUN_ID}"
+          trap 'docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm \
+            --mount "source=$volume,target=/home/bun/.local/share/ghc-proxy" \
+            --entrypoint sh \
+            ghc-proxy:ci \
+            -c 'touch /home/bun/.local/share/ghc-proxy/.write-test'
+
+      - name: Verify CLI entrypoint
+        run: |
+          docker run --rm ghc-proxy:ci selfcheck --json
+          docker run --rm ghc-proxy:ci debug --json
+          docker run --rm ghc-proxy:ci --auth --help

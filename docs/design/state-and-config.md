@@ -231,8 +231,8 @@ configuration (`MODEL_FALLBACK_*` in `src/lib/model-resolver.ts`,
 `GH_TOKEN` environment override in application code — supply a GitHub token via
 the `--github-token` (`-g`) flag or a persisted `config.json` (`githubToken`).
 The Docker image is the exception: its [`entrypoint.sh`](../../entrypoint.sh)
-forwards `GH_TOKEN` to `start --github-token`, so `GH_TOKEN` works only inside
-the container, not for the bare binary.
+forwards a non-empty `GH_TOKEN` to `start --github-token`, so `GH_TOKEN` works
+only inside the container, not for the bare binary.
 
 Priority for queue settings is CLI argument > config file > queue default; there are no queue environment variables. `DUMP_FAILED_PAYLOADS` is a runtime debug flag only and is not persisted to `config.json`.
 
