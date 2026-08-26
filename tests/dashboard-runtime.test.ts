@@ -1,12 +1,14 @@
 import type { ServerSentEventMessage } from 'fetch-event-stream'
 import type { CapturedMessagesCall, CapturedResponsesCall } from './helpers'
 
+import { Buffer } from 'node:buffer'
+import { createConnection } from 'node:net'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
 import { getCachedConfig } from '~/lib/config'
 import { createServer } from '~/server'
-import { modelCache, runtimeStore } from '~/state'
+import { authStore, modelCache, runtimeStore } from '~/state'
 
 import {
   buildGptModel,
@@ -22,14 +24,18 @@ import {
 
 let snapshot: ReturnType<typeof saveStateSnapshot>
 let createChatCompletions: typeof CopilotClient.prototype.createChatCompletions
+let createEmbeddings: typeof CopilotClient.prototype.createEmbeddings
 let createMessages: typeof CopilotClient.prototype.createMessages
 let createResponses: typeof CopilotClient.prototype.createResponses
+let getResponse: typeof CopilotClient.prototype.getResponse
 
 beforeEach(() => {
   snapshot = saveStateSnapshot()
   createChatCompletions = CopilotClient.prototype.createChatCompletions
+  createEmbeddings = CopilotClient.prototype.createEmbeddings
   createMessages = CopilotClient.prototype.createMessages
   createResponses = CopilotClient.prototype.createResponses
+  getResponse = CopilotClient.prototype.getResponse
   clearConfig()
   setupDefaultTestState()
   runtimeStore.requests.reset()
@@ -37,8 +43,10 @@ beforeEach(() => {
 
 afterEach(() => {
   CopilotClient.prototype.createChatCompletions = createChatCompletions
+  CopilotClient.prototype.createEmbeddings = createEmbeddings
   CopilotClient.prototype.createMessages = createMessages
   CopilotClient.prototype.createResponses = createResponses
+  CopilotClient.prototype.getResponse = getResponse
   runtimeStore.requests.reset()
   clearConfig()
   restoreStateSnapshot(snapshot)
@@ -455,5 +463,233 @@ describe('dashboard request lifecycle', () => {
       releaseStream?.()
       await app.stop(true)
     }
+  })
+
+  test('records a client-aborted streaming delivery as aborted', async () => {
+    authStore.upstreamTimeoutSeconds = 0
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('gpt-5.6-sol', {
+      supported_endpoints: ['/chat/completions'],
+    })))
+    let markCancelled: (() => void) | undefined
+    const cancelled = new Promise<void>((resolve) => {
+      markCancelled = resolve
+    })
+    CopilotClient.prototype.createChatCompletions = ((_payload, options) => {
+      const signal = options?.signal
+      return Promise.resolve((async function* () {
+        yield {
+          data: JSON.stringify({
+            id: 'stream_abort',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'gpt-5.6-sol',
+            choices: [{
+              index: 0,
+              delta: { content: 'hello' },
+              finish_reason: null,
+              logprobs: null,
+            }],
+          }),
+        }
+        if (!signal?.aborted) {
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener('abort', () => resolve(), { once: true })
+          })
+        }
+        markCancelled?.()
+        throw signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+      })())
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    const app = createServer().listen({ hostname: '127.0.0.1', port: 0 })
+    try {
+      const port = app.server?.port
+      expect(port).toBeNumber()
+      const body = JSON.stringify({
+        model: 'gpt-5.6-sol',
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: true,
+      })
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection({ host: '127.0.0.1', port: port! }, () => {
+          socket.write([
+            'POST /v1/chat/completions HTTP/1.1',
+            `Host: 127.0.0.1:${port}`,
+            'Content-Type: application/json',
+            `Content-Length: ${Buffer.byteLength(body)}`,
+            'Connection: close',
+            '',
+            body,
+          ].join('\r\n'))
+        })
+        let received = ''
+        socket.on('data', (chunk) => {
+          received += chunk.toString()
+          if (!received.includes('hello'))
+            return
+          socket.destroy()
+          resolve()
+        })
+        socket.once('error', reject)
+      })
+      await cancelled
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      expect(runtimeStore.requests.snapshot()).toMatchObject({
+        active: [],
+        recent: [{
+          endpoint: '/v1/chat/completions',
+          state: 'aborted',
+          status: 200,
+        }],
+        totals: {
+          started: 1,
+          completed: 0,
+          failed: 0,
+          aborted: 1,
+        },
+      })
+    }
+    finally {
+      await app.stop(true)
+    }
+  })
+
+  test('records a client abort before upstream headers as aborted', async () => {
+    authStore.upstreamTimeoutSeconds = 0
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('gpt-5.6-sol', {
+      supported_endpoints: ['/chat/completions'],
+    })))
+    let markStarted: (() => void) | undefined
+    let markCancelled: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const cancelled = new Promise<void>((resolve) => {
+      markCancelled = resolve
+    })
+    CopilotClient.prototype.createChatCompletions = (async (_payload, options) => {
+      const signal = options?.signal
+      if (!signal)
+        throw new Error('no signal reached the client')
+      markStarted?.()
+      if (!signal.aborted) {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+      }
+      markCancelled?.()
+      throw signal.reason
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    const controller = new AbortController()
+    const responsePromise = createServer().handle(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.6-sol',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+      signal: controller.signal,
+    }))
+    await started
+    controller.abort()
+
+    const response = await responsePromise
+    await cancelled
+    await settleResponse(response)
+
+    expect(response.status).toBe(504)
+    expect(runtimeStore.requests.snapshot()).toMatchObject({
+      active: [],
+      recent: [{
+        endpoint: '/v1/chat/completions',
+        state: 'aborted',
+        status: 504,
+      }],
+      totals: {
+        started: 1,
+        completed: 0,
+        failed: 0,
+        aborted: 1,
+      },
+    })
+  })
+
+  test('records an embeddings client abort outside the pipeline', async () => {
+    let markStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    CopilotClient.prototype.createEmbeddings = (async (_payload, options) => {
+      const signal = options?.signal
+      if (!signal)
+        throw new Error('no signal reached the client')
+      markStarted?.()
+      if (!signal.aborted) {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+      }
+      throw signal.reason
+    }) as typeof CopilotClient.prototype.createEmbeddings
+
+    const controller = new AbortController()
+    const responsePromise = createServer().handle(new Request('http://localhost/v1/embeddings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'text-embedding-3-small',
+        input: 'hello',
+      }),
+      signal: controller.signal,
+    }))
+    await started
+    controller.abort()
+
+    const response = await responsePromise
+    await settleResponse(response)
+
+    expect(runtimeStore.requests.snapshot().recent[0]).toMatchObject({
+      endpoint: '/v1/embeddings',
+      state: 'aborted',
+      status: 504,
+    })
+  })
+
+  test('records a Responses resource client abort outside the pipeline', async () => {
+    let markStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    CopilotClient.prototype.getResponse = (async (_responseId, options) => {
+      const signal = options?.signal
+      if (!signal)
+        throw new Error('no signal reached the client')
+      markStarted?.()
+      if (!signal.aborted) {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+      }
+      throw signal.reason
+    }) as typeof CopilotClient.prototype.getResponse
+
+    const controller = new AbortController()
+    const responsePromise = createServer().handle(new Request(
+      'http://localhost/v1/responses/resp_abort',
+      { signal: controller.signal },
+    ))
+    await started
+    controller.abort()
+
+    const response = await responsePromise
+    await settleResponse(response)
+
+    expect(runtimeStore.requests.snapshot().recent[0]).toMatchObject({
+      endpoint: '/v1/responses/:responseId',
+      state: 'aborted',
+      status: 504,
+    })
   })
 })

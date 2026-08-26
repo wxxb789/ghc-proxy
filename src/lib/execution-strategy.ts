@@ -30,7 +30,11 @@ export interface ExecutionStrategy<TResult, TChunk> {
  */
 export async function runStrategy<TResult, TChunk>(
   strategy: ExecutionStrategy<TResult, TChunk>,
-  signal: { signal: AbortSignal, clientSignal?: AbortSignal, cleanup: () => void },
+  signal: {
+    signal: AbortSignal
+    clientSignal?: AbortSignal
+    cleanup: () => void
+  },
   observer?: { onStreamError?: (error: unknown) => void },
 ): Promise<ExecutionResult> {
   let result: TResult

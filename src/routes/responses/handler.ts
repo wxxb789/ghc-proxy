@@ -1,6 +1,6 @@
 import type { ResponsesStrategyContext } from './strategy-registry'
 import type { PipelineResult } from '~/pipeline/runner'
-import type { ResponseFunctionTool, ResponsesPayload, ResponsesResult, ResponseTool } from '~/types'
+import type { ResponseFunctionTool, ResponseInputItem, ResponsesPayload, ResponsesResult, ResponseTool } from '~/types'
 import consola from 'consola'
 import { throwInvalidRequestError } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
@@ -132,6 +132,12 @@ export async function handleResponsesCore(
         const { vision, initiator } = getResponsesRequestOptions(payload)
         const prepared = emulatorPrepared
         const requestPayload = originalPayload ?? payload
+        let effectiveInputItems: Array<ResponseInputItem> | undefined
+        if (prepared?.shouldStore) {
+          effectiveInputItems = Array.isArray(payload.input)
+            ? structuredClone(payload.input)
+            : []
+        }
         const strategyRequestId = recovery.requestId
         return {
           requestId: strategyRequestId,
@@ -155,10 +161,10 @@ export async function handleResponsesCore(
                 'Upstream HTTP 200 (response_failed)',
               )
             }
-            if (prepared?.shouldStore) {
+            if (effectiveInputItems) {
               persistEmulatorResponse(
                 terminalResponse,
-                prepared.effectiveInputItems,
+                effectiveInputItems,
               )
             }
           },

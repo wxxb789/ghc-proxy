@@ -1869,6 +1869,37 @@ describe('POST /v1/messages/count_tokens', () => {
     expect(diff).toBeGreaterThanOrEqual(200)
   })
 
+  test('mixed built-in and function tools retain function-tool overhead', async () => {
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('claude-opus-5')))
+    const app = createApp('messages')
+    const messages = [{ role: 'user', content: 'Use the browser to check the weather.' }]
+
+    const countTokens = async (tools?: Array<Record<string, unknown>>) => {
+      const response = await app.handle(new Request('http://localhost/v1/messages/count_tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-opus-5',
+          messages,
+          ...(tools ? { tools } : {}),
+        }),
+      }))
+
+      expect(response.status).toBe(200)
+      return (await response.json() as { input_tokens: number }).input_tokens
+    }
+
+    const noTools = await countTokens()
+    const builtinOnly = await countTokens([{ type: 'browser_toolset_20260801' }])
+    const mixed = await countTokens([
+      { type: 'browser_toolset_20260801' },
+      { name: 'get_weather', description: 'Get weather', input_schema: { type: 'object', properties: {} } },
+    ])
+
+    expect(builtinOnly - noTools).toBe(7_550)
+    expect(mixed - builtinOnly).toBeGreaterThanOrEqual(300)
+  })
+
   test.each([
     { type: 'browser_toolset_20260801', minimum: 7_500 },
     { type: 'computer_toolset_20260801', minimum: 4_500 },

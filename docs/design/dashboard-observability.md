@@ -14,7 +14,7 @@ The dashboard exposes four views under `/dashboard`:
   and compatibility decisions.
 - Behavior: current configuration, strategy order, and process-local effect
   counters.
-- Requests: active requests plus the most recent 256 completed requests.
+- Requests: active requests plus the most recent 256 terminal requests.
 
 It does not write files, use a database, retain token statistics, accept
 configuration changes, or expose request/response content.
@@ -26,12 +26,20 @@ configuration changes, or expose request/response content.
 1. `Map<requestId, ActiveRequest>` for in-flight requests. Start and update are
    average O(1) for direct field updates. Recording a model trace is linear in
    that request's transform-step count.
-2. A fixed 256-slot circular buffer for completed requests. Completion writes
+2. A fixed 256-slot circular buffer for terminal requests. Completion writes
    one slot and advances one cursor in O(1), after projecting that request's
    per-request metadata arrays. A process restart clears both structures.
 
 Active requests are separate from the completed ring so high concurrency does
 not overwrite an entry that still needs lifecycle updates.
+
+Active requests use `in_flight` and `streaming` states. Terminal requests use
+`completed`, `failed`, or `aborted`. Client cancellation is recorded as
+`aborted` without synthesizing a protocol error. A real failure remains
+authoritative if failure and cancellation race, so a late abort never
+reclassifies a failed request. The store can reclassify a just-completed entry
+as aborted when framework callback ordering reports the client disconnect
+after HTTP completion.
 
 Each request stores only allowlisted metadata:
 
@@ -64,8 +72,10 @@ Observability is emitted where behavior is actually selected or applied:
 - Transform functions return small change indicators (boolean, count, or
   removed keys). Callers increment stable effect IDs only when the real
   transform changed the request.
-- `runStrategy()` reports stream failures before protocol translation consumes
-  them.
+- The shared upstream signal reports client-originated cancellation as
+  `aborted` for pipeline execution and upstream-backed handlers that bypass the
+  pipeline. `runStrategy()` still reports non-client stream failures before
+  protocol translation consumes them.
 - The Responses terminal parser marks `response.failed` as a failed lifecycle
   even when the HTTP status is 200.
 - Both the public Responses path and Messages-via-Responses mark a clean stream
@@ -133,6 +143,6 @@ and work proportional to the small model-transform/effect arrays attached to
 that request. It does not clone or serialize request bodies for observability.
 
 Dashboard snapshots sort the active set in O(a log a), where `a` is the number
-of active observed requests, and copy at most 256 completed entries. Model
+of active observed requests, and copy at most 256 terminal entries. Model
 projection, quota fetches, snapshot sorting, and DOM rendering occur only on
 dashboard requests.

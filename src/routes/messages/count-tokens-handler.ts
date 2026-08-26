@@ -1,4 +1,4 @@
-import type { AnthropicCountTokensPayload, AnthropicTool } from '~/translator'
+import type { AnthropicCountTokensPayload } from '~/translator'
 import consola from 'consola'
 
 import { inferModelFamily } from '~/core/capi/profile'
@@ -29,10 +29,6 @@ const BUILTIN_TOOLSET_TOKENS: Record<string, number> = {
   computer_toolset_20260801: 4_590,
 }
 
-function getBuiltinToolsetTokens(tool: AnthropicTool): number | undefined {
-  return tool.type ? BUILTIN_TOOLSET_TOKENS[tool.type] : undefined
-}
-
 export interface CountTokensCoreParams {
   body: unknown
   headers: Headers
@@ -51,14 +47,26 @@ export async function handleCountTokensCore(
     headers,
   )
 
-  const builtinTools = anthropicPayload.tools?.filter(isAnthropicBuiltinTool) ?? []
-  const functionTools = anthropicPayload.tools?.filter(tool => !isAnthropicBuiltinTool(tool))
-  const calibratedBuiltinTokens = builtinTools.reduce(
-    (total, tool) => total + (getBuiltinToolsetTokens(tool) ?? 0),
-    0,
-  )
-  const uncalibratedBuiltinTools = builtinTools.filter(tool => getBuiltinToolsetTokens(tool) === undefined)
-  const countPayload = builtinTools.length > 0
+  const functionTools = []
+  const uncalibratedBuiltinTools = []
+  let calibratedBuiltinTokens = 0
+  let hasBuiltinTools = false
+
+  for (const tool of anthropicPayload.tools ?? []) {
+    if (!isAnthropicBuiltinTool(tool)) {
+      functionTools.push(tool)
+      continue
+    }
+
+    hasBuiltinTools = true
+    const builtinTokens = tool.type ? BUILTIN_TOOLSET_TOKENS[tool.type] : undefined
+    if (builtinTokens === undefined)
+      uncalibratedBuiltinTools.push(tool)
+    else
+      calibratedBuiltinTokens += builtinTokens
+  }
+
+  const countPayload = hasBuiltinTools
     ? { ...anthropicPayload, tools: functionTools }
     : anthropicPayload
 
@@ -70,14 +78,14 @@ export async function handleCountTokensCore(
   if (uncalibratedBuiltinTools.length > 0)
     tokenCount.input += await estimateSerializedTokens(uncalibratedBuiltinTools, selectedModel)
 
-  if (anthropicPayload.tools && anthropicPayload.tools.length > 0) {
+  if (functionTools.length > 0) {
     let mcpToolExist = false
     if (anthropicBeta?.startsWith('claude-code')) {
-      mcpToolExist = anthropicPayload.tools.some(tool =>
+      mcpToolExist = functionTools.some(tool =>
         tool.name?.startsWith('mcp__') ?? false,
       )
     }
-    if (!mcpToolExist && calibratedBuiltinTokens === 0) {
+    if (!mcpToolExist) {
       const overhead = TOOL_OVERHEAD_TOKENS[inferModelFamily(anthropicPayload.model)]
       if (overhead) {
         tokenCount.input = tokenCount.input + overhead

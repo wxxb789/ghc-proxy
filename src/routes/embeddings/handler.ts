@@ -27,6 +27,7 @@ export async function handleEmbeddingsCore(
   client?: CopilotClient,
   signal?: AbortSignal,
   recovery?: UpstreamRecoveryRecord,
+  onClientAbort?: () => void,
 ): Promise<object> {
   const { payload } = protocolRegistry.ingest<EmbeddingRequest>(
     'embeddings',
@@ -35,7 +36,7 @@ export async function handleEmbeddingsCore(
   )
   const copilotClient = client ?? createCopilotClient(recovery)
   const upstreamSignal = signal
-    ? createUpstreamSignalFromConfig(signal)
+    ? createUpstreamSignalFromConfig(signal, undefined, onClientAbort)
     : undefined
 
   try {

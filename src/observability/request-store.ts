@@ -51,6 +51,7 @@ export type ObservedRequestState
     | 'streaming'
     | 'completed'
     | 'failed'
+    | 'aborted'
 
 export type ObservedModelTransform = ModelTransformStep
 export type ObservedModelMapping = ModelMappingInfo
@@ -83,6 +84,7 @@ export interface RequestActivitySnapshot {
     started: number
     completed: number
     failed: number
+    aborted: number
   }
   effectCounts: Partial<Record<ProxyEffectId, number>>
 }
@@ -130,15 +132,36 @@ class FixedRing<T> {
     }
     return values
   }
+
+  updateFirst(
+    predicate: (value: T) => boolean,
+    update: (value: T) => T,
+  ): boolean {
+    for (let offset = 0; offset < this.size; offset++) {
+      const index = (this.next - 1 - offset + this.entries.length) % this.entries.length
+      const value = this.entries[index]
+      if (value !== undefined && predicate(value)) {
+        this.entries[index] = update(value)
+        return true
+      }
+    }
+    return false
+  }
 }
 
 export class RequestActivityStore {
   private readonly active = new Map<string, ActiveRequest>()
   private recent = new FixedRing<ObservedRequest>(RECENT_REQUEST_LIMIT)
   private readonly effectCounts: Partial<Record<ProxyEffectId, number>> = {}
+  private readonly effectBuffers = new Map<
+    string,
+    Partial<Record<ProxyEffectId, number>>
+  >()
+
   private started = 0
   private completed = 0
   private failed = 0
+  private aborted = 0
   private readonly now: () => number
 
   constructor(now: () => number = Date.now) {
@@ -202,6 +225,29 @@ export class RequestActivityStore {
       request.selectedStrategy = sanitizeTag(strategy)
   }
 
+  beginEffectBuffer(requestId: string): void {
+    if (this.active.has(requestId) && !this.effectBuffers.has(requestId))
+      this.effectBuffers.set(requestId, {})
+  }
+
+  commitEffectBuffer(requestId: string): void {
+    const buffer = this.effectBuffers.get(requestId)
+    if (!buffer)
+      return
+
+    this.effectBuffers.delete(requestId)
+    for (const [effect, count] of Object.entries(buffer) as Array<
+      [ProxyEffectId, number | undefined]
+    >) {
+      if (count)
+        this.recordEffect(requestId, effect, count)
+    }
+  }
+
+  discardEffectBuffer(requestId: string): void {
+    this.effectBuffers.delete(requestId)
+  }
+
   recordEffect(requestId: string, effect: ProxyEffectId, count = 1): void {
     if (!Number.isFinite(count) || count <= 0)
       return
@@ -211,6 +257,12 @@ export class RequestActivityStore {
       return
 
     const normalizedCount = Math.floor(count)
+    const buffer = this.effectBuffers.get(requestId)
+    if (buffer) {
+      buffer[effect] = (buffer[effect] ?? 0) + normalizedCount
+      return
+    }
+
     this.effectCounts[effect] = (this.effectCounts[effect] ?? 0) + normalizedCount
     request.effectCounts[effect]
       = (request.effectCounts[effect] ?? 0) + normalizedCount
@@ -224,8 +276,25 @@ export class RequestActivityStore {
 
   markStreaming(requestId: string): void {
     const request = this.active.get(requestId)
-    if (request)
+    if (request && request.state !== 'aborted')
       request.state = 'streaming'
+  }
+
+  markAborted(requestId: string): void {
+    const request = this.active.get(requestId)
+    if (request) {
+      request.state = 'aborted'
+      return
+    }
+
+    const reclassified = this.recent.updateFirst(
+      request => request.requestId === requestId && request.state === 'completed',
+      request => ({ ...request, state: 'aborted' }),
+    )
+    if (reclassified) {
+      this.completed--
+      this.aborted++
+    }
   }
 
   complete(requestId: string, status: number): boolean {
@@ -234,15 +303,20 @@ export class RequestActivityStore {
       return false
 
     this.active.delete(requestId)
-    const failed = status >= 400 || request.errorSummary !== undefined
+    this.effectBuffers.delete(requestId)
+    const aborted = request.state === 'aborted' && request.errorSummary === undefined
+    const failed = !aborted && (status >= 400 || request.errorSummary !== undefined)
     const completedRequest = projectRequest(
       request,
       Math.max(0, this.now() - request.startedAtMs),
-      failed ? 'failed' : 'completed',
+      aborted ? 'aborted' : failed ? 'failed' : 'completed',
       status,
     )
     this.recent.push(completedRequest)
-    this.completed++
+    if (aborted)
+      this.aborted++
+    else
+      this.completed++
     if (failed)
       this.failed++
     return true
@@ -265,6 +339,7 @@ export class RequestActivityStore {
         started: this.started,
         completed: this.completed,
         failed: this.failed,
+        aborted: this.aborted,
       },
       effectCounts: { ...this.effectCounts },
     }
@@ -278,6 +353,7 @@ export class RequestActivityStore {
         started: this.started,
         completed: this.completed,
         failed: this.failed,
+        aborted: this.aborted,
       },
       effectCounts: { ...this.effectCounts },
     }
@@ -285,12 +361,14 @@ export class RequestActivityStore {
 
   reset(): void {
     this.active.clear()
+    this.effectBuffers.clear()
     this.recent = new FixedRing<ObservedRequest>(RECENT_REQUEST_LIMIT)
     for (const key of Object.keys(this.effectCounts) as Array<ProxyEffectId>)
       delete this.effectCounts[key]
     this.started = 0
     this.completed = 0
     this.failed = 0
+    this.aborted = 0
   }
 }
 
@@ -411,22 +489,27 @@ function readSafeErrorCategory(error: unknown): string | undefined {
     if (typeof body !== 'object' || body === null)
       return undefined
     const nested = 'error' in body ? (body as { error?: unknown }).error : undefined
-    let candidate: unknown
     if (typeof nested === 'object' && nested !== null) {
-      candidate = 'code' in nested
+      const code = 'code' in nested
         ? (nested as { code?: unknown }).code
-        : 'type' in nested
-          ? (nested as { type?: unknown }).type
-          : undefined
+        : undefined
+      if (isObservedErrorCategory(code))
+        return code
+      const type = 'type' in nested
+        ? (nested as { type?: unknown }).type
+        : undefined
+      return isObservedErrorCategory(type) ? type : undefined
     }
-    else if ('type' in body) {
-      candidate = (body as { type?: unknown }).type
-    }
-    return typeof candidate === 'string' && OBSERVED_ERROR_CATEGORIES.has(candidate)
-      ? candidate
+    const type = 'type' in body
+      ? (body as { type?: unknown }).type
       : undefined
+    return isObservedErrorCategory(type) ? type : undefined
   }
   catch {
     return undefined
   }
+}
+
+function isObservedErrorCategory(value: unknown): value is string {
+  return typeof value === 'string' && OBSERVED_ERROR_CATEGORIES.has(value)
 }

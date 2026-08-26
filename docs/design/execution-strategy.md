@@ -52,7 +52,11 @@ interface ExecutionStrategy<TResult, TChunk> {
 ```typescript
 async function runStrategy<TResult, TChunk>(
   strategy: ExecutionStrategy<TResult, TChunk>,
-  signal: { signal: AbortSignal, clientSignal?: AbortSignal, cleanup: () => void },
+  signal: {
+    signal: AbortSignal
+    clientSignal?: AbortSignal
+    cleanup: () => void
+  },
   observer?: { onStreamError?: (error: unknown) => void },
 ): Promise<ExecutionResult>
 ```
@@ -62,9 +66,13 @@ The executor:
 2. If non-streaming: returns `{ kind: 'json', data: strategy.translateResult(result) }`
 3. If streaming: iterates the async iterable, translating each chunk via `translateStreamChunk`, yielding `SSEOutput` events via an `AsyncGenerator`
 4. On stream completion: calls `onStreamDone()` for any final events
-5. On stream error: notifies the optional metadata-only observer, then (if the
-   client did not abort) calls `onStreamError()` for protocol error events
-6. Always calls `signal.cleanup()` in the finally block
+5. On client abort: relies on the linked upstream signal to record the
+   cancellation, then does not report a stream failure or synthesize a
+   protocol error event
+6. On other stream errors: notifies the optional metadata-only observer, then
+   calls `onStreamError()` for protocol error events
+7. Always calls `signal.cleanup()`, which removes the linked client-abort
+   listener
 
 ### Key Design Choice: SSEOutput Return Type
 
@@ -174,11 +182,20 @@ The two type parameters let each route keep its own payload and strategy context
 2. **afterIngest hook** (optional) -- runs immediately after parsing and must return the payload that continues through the pipeline. Routes use it for debug/header processing or to replace the payload (the Responses emulator supplies its expanded upstream payload here).
 3. **Transform** -- calls `resolveRequestModel()`, which applies the model rewrite, optional compact small-model routing, and the cached-model lookup, updating `payload.model` and building a `ModelMappingInfo` trace for request logging.
 4. **afterTransform hook** (optional) -- runs after model transformation. Chat performs best-effort token diagnostics plus output-token default/rename handling; Responses applies its tool/input/context/parameter policies.
-5. **Dispatch** -- creates a `CopilotClient` and upstream signal, builds the strategy context via `buildStrategyContext()`, selects the strategy from the `StrategyRegistry`, records the selected strategy/effect, and executes it.
+5. **Dispatch** -- creates a `CopilotClient` and upstream signal, builds the strategy context via `buildStrategyContext()`, selects the strategy from the `StrategyRegistry`, records authoritative observability, and executes it. The source attempt is recorded immediately; fallback-attempt mapping, strategy, and effects are deferred until that target becomes authoritative.
 
 `runPipeline()` also owns the only overload-fallback branch. It preserves pristine post-ingest input before the source attempt. After a terminal source-model `529` (or a pre-existing local source cooldown), it looks up one exact `overloadFallbacks` target, validates advertised capabilities, and calls the same preparation boundary again with that target. This reruns transforms, capability checks, strategy-context construction, and registry selection without reapplying source model resolution. The target dispatch receives no new retry allowance and cannot trigger another fallback.
 
-Fallback preflight failures preserve the source `529`. If target fetch begins, the target result becomes authoritative. A successful result rewrites known model identity fields in JSON or SSE to the actual target and appends `OVERLOAD_FALLBACK` to the access-log trace. Responses emulator persistence therefore records the served target, not the failed source.
+Fallback preflight and pre-fetch failures preserve the source `529` and its
+model/strategy observability. Once target fetch begins, the fallback attempt
+becomes authoritative and commits its model mapping, selected strategy, and
+effects exactly once, including when the target later fails. Effects emitted
+while preparing or executing the fallback are buffered per request until that
+fetch boundary; a pre-fetch failure discards the buffer instead of attaching
+target-only transforms to the source result. A successful result rewrites known
+model identity fields in JSON or SSE to the actual target and appends
+`OVERLOAD_FALLBACK` to the access-log trace. Responses emulator persistence
+therefore records the served target, not the failed source.
 
 The replay boundary is earlier than delivery: once `strategy.execute()` obtains an upstream `Response`, the queue has committed the request. `runStrategy()` may later translate JSON, iterate a stream, or emit a protocol error, but a body failure or stream failure before the first client event never re-enters retry or fallback. Caller cancellation and normal upstream timeout cleanup remain active during delivery; the recovery deadline covers only pre-`Response` work.
 
@@ -248,7 +265,7 @@ export async function handleMessagesCore({ body, signal, headers, requestId, cal
 }
 ```
 
-The chat-completions handler follows the same pattern, adding an `afterTransform` hook for token counting. The responses handler (`src/routes/responses/handler.ts`) also runs through `runPipeline`: its emulator-mode logic fits the lifecycle hooks -- `afterIngest` returns the emulator's upstream payload (store decoration prep), `afterTransform` applies tool/input policies and context management, and `buildStrategyContext` wires the streaming/terminal decoration callbacks. Both the streaming and non-streaming responses are decorated and persisted through those same callbacks inside the passthrough strategy (`translateStreamChunk` and `translateResult`), so the handler is pure pipeline configuration with no post-call processing.
+The chat-completions handler follows the same pattern, adding an `afterTransform` hook for token counting. The responses handler (`src/routes/responses/handler.ts`) also runs through `runPipeline`: its emulator-mode logic fits the lifecycle hooks -- `afterIngest` returns the emulator's upstream payload (store decoration prep), `afterTransform` applies tool/input policies and context management, and `buildStrategyContext` clones that attempt's final transformed input while wiring the streaming/terminal decoration callbacks. Both the streaming and non-streaming responses are decorated and persisted through those same callbacks inside the passthrough strategy (`translateStreamChunk` and `translateResult`). A fallback attempt captures its own final input, so the terminal attempt's dispatched input is the one stored. The handler remains pure pipeline configuration with no post-call processing.
 
 ## Benefits
 

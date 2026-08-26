@@ -4,7 +4,9 @@ import type { ResponsesResult, ResponseStreamEvent } from '~/types'
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
+import { TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
 import { getCachedConfig } from '~/lib/config'
+import { HTTPError } from '~/lib/error'
 import { authStore, modelCache, responsesEmulatorState } from '~/state'
 import { createResponsesEmulatorState } from '~/state/responses-emulator-state'
 
@@ -166,6 +168,162 @@ describe('responses official emulator', () => {
       last_id: null,
       has_more: false,
     })
+  })
+
+  test('/v1/responses official emulator persists filtered input items sent upstream', async () => {
+    const app = createApp()
+    enableOfficialResponsesEmulator()
+    rejectUnexpectedEmulatorResourceCalls()
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] })))
+    const createCalls: Array<CapturedResponsesCall> = []
+    const expectedInput = [
+      { type: 'message', role: 'user', content: 'hello' },
+    ]
+    CopilotClient.prototype.createResponses = mockEmulatorCreateResponses([
+      buildResponsesResult({
+        id: 'resp_emu_filtered',
+        model: 'gpt-5',
+        status: 'completed',
+        output_text: 'ok',
+        usage: null,
+      }),
+    ], createCalls)
+
+    const createResponse = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5',
+        input: [
+          { type: 'item_reference', id: 'item_unresolvable' },
+          { type: 'message', role: 'user', content: 'hello' },
+        ],
+      }),
+    }))
+
+    expect(createResponse.status).toBe(200)
+    expect(createCalls[0]?.payload.input).toEqual(expectedInput)
+
+    const inputItemsResponse = await app.handle(new Request('http://localhost/v1/responses/resp_emu_filtered/input_items', {
+      method: 'GET',
+    }))
+    const inputItems = await inputItemsResponse.json() as { data?: Array<unknown> }
+
+    expect(inputItemsResponse.status).toBe(200)
+    expect(inputItems.data).toEqual(expectedInput)
+  })
+
+  test('/v1/responses official emulator persists compacted input items from streamed requests', async () => {
+    const app = createApp()
+    enableOfficialResponsesEmulator()
+    rejectUnexpectedEmulatorResourceCalls()
+    getCachedConfig().responsesApiAutoCompactInput = true
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-5', { supported_endpoints: ['/responses'] })))
+    const createCalls: Array<CapturedResponsesCall> = []
+    const expectedInput = [
+      { type: 'compaction', id: 'cmp_latest', encrypted_content: 'enc_latest' },
+      { type: 'message', role: 'user', content: 'after' },
+    ]
+    CopilotClient.prototype.createResponses = mockEmulatorCreateResponses([(
+      async function* () {
+        yield {
+          event: 'response.completed',
+          data: JSON.stringify({
+            type: 'response.completed',
+            sequence_number: 1,
+            response: buildResponsesResult({
+              id: 'resp_emu_compacted',
+              model: 'gpt-5',
+              status: 'completed',
+              output_text: 'ok',
+              usage: null,
+            }),
+          } satisfies ResponseStreamEvent),
+        }
+      }
+    )()], createCalls)
+
+    const createResponse = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5',
+        stream: true,
+        input: [
+          { type: 'message', role: 'user', content: 'before' },
+          { type: 'compaction', id: 'cmp_latest', encrypted_content: 'enc_latest' },
+          { type: 'message', role: 'user', content: 'after' },
+        ],
+      }),
+    }))
+
+    await createResponse.text()
+    expect(createResponse.status).toBe(200)
+    expect(createCalls[0]?.payload.input).toEqual(expectedInput)
+
+    const inputItemsResponse = await app.handle(new Request('http://localhost/v1/responses/resp_emu_compacted/input_items', {
+      method: 'GET',
+    }))
+    const inputItems = await inputItemsResponse.json() as { data?: Array<unknown> }
+
+    expect(inputItemsResponse.status).toBe(200)
+    expect(inputItems.data).toEqual(expectedInput)
+  })
+
+  test('/v1/responses official emulator persists the successful overload fallback attempt input', async () => {
+    const app = createApp()
+    enableOfficialResponsesEmulator()
+    rejectUnexpectedEmulatorResourceCalls()
+    const config = getCachedConfig()
+    config.overloadFallbacks = { source: 'target' }
+    config.responsesApiParameterFilters = [{ models: ['target'], params: ['input'] }]
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('source', { supported_endpoints: ['/responses'] }),
+      buildModel('target', { supported_endpoints: ['/responses'] }),
+    ))
+    const createCalls: Array<CapturedResponsesCall> = []
+    CopilotClient.prototype.createResponses = (async (payload, options) => {
+      createCalls.push({ payload, options })
+      if (createCalls.length === 1) {
+        throw new TerminalUpstreamRecoveryError(
+          new HTTPError(529, {
+            error: { message: 'source overloaded', type: 'overloaded_error' },
+          }),
+          { requestId: 'responses-emulator-fallback', retryCount: 1, sourceModel: 'source' },
+        )
+      }
+      return buildResponsesResult({
+        id: 'resp_emu_fallback',
+        model: 'target',
+        status: 'completed',
+        output_text: 'ok',
+        usage: null,
+      })
+    }) as typeof CopilotClient.prototype.createResponses
+
+    const createResponse = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'source',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+      }),
+    }))
+
+    expect(createResponse.status).toBe(200)
+    expect(createCalls).toHaveLength(2)
+    expect(createCalls[0]?.payload.input).toEqual([
+      { type: 'message', role: 'user', content: 'hello' },
+    ])
+    expect(createCalls[1]?.payload.input).toBeUndefined()
+
+    const inputItemsResponse = await app.handle(new Request('http://localhost/v1/responses/resp_emu_fallback/input_items', {
+      method: 'GET',
+    }))
+    const inputItems = await inputItemsResponse.json() as { data?: Array<unknown> }
+
+    expect(inputItemsResponse.status).toBe(200)
+    expect(inputItems.data).toEqual([])
   })
 
   test('/v1/responses official emulator returns decorated create results even when store=false', async () => {

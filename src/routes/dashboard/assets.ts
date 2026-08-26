@@ -40,6 +40,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <div><span class="metric-label">Active</span><strong id="metric-active">0</strong></div>
         <div><span class="metric-label">Completed</span><strong id="metric-completed">0</strong></div>
         <div><span class="metric-label">Failed</span><strong id="metric-failed">0</strong></div>
+        <div><span class="metric-label">Aborted</span><strong id="metric-aborted">0</strong></div>
         <div><span class="metric-label">Queue</span><strong id="metric-queue">0 / 0</strong></div>
       </div>
 
@@ -90,7 +91,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     </section>
 
     <section id="view-requests" class="view requests-view" data-view="requests" hidden>
-      <div class="toolbar"><div><h1>Requests</h1><span id="request-count" class="muted"></span></div><span class="muted">256 completed max</span></div>
+      <div class="toolbar"><div><h1>Requests</h1><span id="request-count" class="muted"></span></div><span class="muted">256 finished max</span></div>
       <div class="request-layout">
         <div class="request-list table-scroll"><table><thead><tr><th>State</th><th>Endpoint</th><th>Model</th><th>Strategy</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead><tbody id="requests-body"></tbody></table></div>
         <aside class="request-detail" aria-label="Selected request details">
@@ -238,7 +239,7 @@ h2 { font-size: 15px; }
 
 .metric-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  grid-template-columns: repeat(6, minmax(100px, 1fr));
   margin-bottom: 18px;
   border: 1px solid var(--border);
   background: var(--surface);
@@ -282,7 +283,7 @@ tbody tr:hover td { background: var(--surface-hover); }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 12px; overflow-wrap: anywhere; }
 .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-subtle); color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
 .badge.ok, .badge.completed { color: var(--ok); border-color: var(--ok-border); background: var(--ok-bg); }
-.badge.degraded, .badge.streaming, .badge.in_flight { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
+.badge.degraded, .badge.streaming, .badge.in_flight, .badge.aborted { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
 .badge.failed, .badge.missing { color: var(--bad); border-color: var(--bad-border); background: var(--bad-bg); }
 
 .behavior-grid { margin-bottom: 18px; }
@@ -304,7 +305,7 @@ tbody tr:hover td { background: var(--surface-hover); }
   .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric-strip > div { border-bottom: 1px solid var(--border); }
   .metric-strip > div:nth-child(2n) { border-right: 0; }
-  .metric-strip > div:last-child { grid-column: 1 / -1; border-bottom: 0; }
+  .metric-strip > div:nth-last-child(-n + 2) { border-bottom: 0; }
   .overview-grid, .behavior-grid, .request-layout { grid-template-columns: 1fr; }
   .request-list, .request-detail pre { max-height: none; }
 }
@@ -452,6 +453,7 @@ function renderOverview(data) {
   byId('metric-active').textContent = formatNumber(data.activity.activeRequests);
   byId('metric-completed').textContent = formatNumber(data.activity.completed);
   byId('metric-failed').textContent = formatNumber(data.activity.failed);
+  byId('metric-aborted').textContent = formatNumber(data.activity.aborted);
   const queue = data.activity.upstreamQueue || {};
   byId('metric-queue').textContent = formatNumber(queue.active) + ' / ' + formatNumber(queue.pending);
   byId('overview-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -459,7 +461,7 @@ function renderOverview(data) {
   const runtime = byId('runtime-details');
   clearNode(runtime);
   appendKv(runtime, 'Started', formatDate(data.startedAt));
-  appendKv(runtime, 'Recent completed', data.activity.recentRequests);
+  appendKv(runtime, 'Recent finished', data.activity.recentRequests);
   appendKv(runtime, 'Upstream slots', formatNumber(queue.active) + ' / ' + formatNumber(queue.concurrency));
   appendKv(runtime, 'Pending queue', formatNumber(queue.pending) + ' / ' + formatNumber(queue.maxPending));
   appendKv(runtime, 'Cooldowns', (queue.accountCooldown ? 'account ' : '') + formatNumber(queue.modelCooldowns) + ' model');
@@ -733,7 +735,7 @@ function renderRequests(data) {
       ? dashboardState.requests[0].requestId
       : null;
   }
-  byId('request-count').textContent = active.length + ' active / ' + recent.length + ' completed';
+  byId('request-count').textContent = active.length + ' active / ' + recent.length + ' finished';
   const body = byId('requests-body');
   clearNode(body);
   dashboardState.requests.forEach(function (request) {

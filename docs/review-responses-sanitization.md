@@ -21,21 +21,26 @@ semantics when they are required.
 
 **Files:** `src/routes/responses/handler.ts` (`afterIngest`, `applyResponsesInputPolicies`), `src/routes/responses/emulator.ts` (`prepareEmulatorRequest`)
 
-## Open Issues
+## Completed (review remediation, 2026-08-25)
 
+### Emulator persistence uses the terminal attempt's transformed input
 
-### [medium] Emulator snapshot is not refreshed after array-replacing transforms
+`prepareEmulatorRequest()` creates the expanded upstream payload during
+`afterIngest`, but the input that is eligible for persistence is captured later.
+Each pipeline attempt clones `payload.input` in `buildStrategyContext()`, after
+all array-replacing and in-place transforms have run:
 
-`prepareEmulatorRequest()` creates `effectiveInputItems` during `afterIngest` and uses the same array as `upstreamPayload.input`. Later transformations do not all affect that snapshot in the same way:
+- filtered `item_reference` and orphaned `function_call_output` entries are not
+  persisted;
+- in-place `phase` removal is reflected in the stored input;
+- latest-compaction trimming is reflected in the stored input; and
+- overload recovery captures a separate final-input snapshot for the fallback
+  attempt, so the terminal target attempt is authoritative.
 
-- `stripUnresolvableInputItems()` replaces `payload.input` with a filtered array. The prepared array is not replaced, so removed `item_reference` and orphaned `function_call_output` entries remain eligible for persistence.
-- `stripPhaseFromInputMessages()` deletes `phase` from retained item objects in place. On the first attempt those objects are shared with the prepared array, so this mutation is reflected in the persisted snapshot; it is not the same stale-array bug.
-- Other array-replacing transforms, including latest-compaction trimming, can likewise make the dispatched input differ from `effectiveInputItems`.
-- The same `emulatorPrepared` record is reused when overload recovery prepares a fallback attempt. Re-running `afterTransform` on a clone does not refresh the persisted snapshot.
-
-The result is that `GET /responses/:id/input_items`, continuation history, and token estimates based on that history can include entries the dispatched request no longer contained.
-
-**Fix:** Refresh the emulator's effective input from the final transformed payload for the terminal attempt, or persist that attempt's post-policy input. Existing emulator tests cover create/retrieve, `input_items`, continuation, and `input_tokens`; add focused assertions that filtered/compacted items are absent from persisted state and that the fallback-attempt path records the final input.
+`GET /responses/:id/input_items`, continuation history, and token estimates now
+derive from the same final input that the successful attempt dispatched.
+Focused regressions cover filtered input, compacted input, and fallback-attempt
+persistence for streaming and non-streaming responses.
 
 **Files:** `src/routes/responses/handler.ts` (`afterIngest`, `afterTransform`, `buildStrategyContext`), `src/routes/responses/emulator.ts` (`prepareEmulatorRequest`, `persistEmulatorResponse`), `src/pipeline/runner.ts` (fallback attempt preparation)
 

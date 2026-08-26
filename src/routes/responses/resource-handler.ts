@@ -9,6 +9,7 @@ import type {
 import { readCapiRequestContext } from '~/core/capi/request-context'
 import { protocolRegistry } from '~/ingest'
 import { throwInvalidRequestError } from '~/lib/error'
+import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 import { createResourceDispatcher } from './resource-dispatcher'
 
 // --- Core request parameter interfaces ---
@@ -21,6 +22,7 @@ export interface ResourceHandlerParams {
   /** Injection seam for tests; production callers omit it. */
   client?: CopilotClient
   recovery?: UpstreamRecoveryRecord
+  onClientAbort?: () => void
 }
 
 export interface ResourceHandlerBodyParams {
@@ -30,36 +32,39 @@ export interface ResourceHandlerBodyParams {
   /** Injection seam for tests; production callers omit it. */
   client?: CopilotClient
   recovery?: UpstreamRecoveryRecord
+  onClientAbort?: () => void
 }
 
 // --- Core functions ---
 
 export async function handleRetrieveResponseCore(
-  { params, url, headers, signal, client, recovery }: ResourceHandlerParams,
+  { params, url, headers, signal, client, recovery, onClientAbort }: ResourceHandlerParams,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
   const dispatcher = createResourceDispatcher(client, recovery)
-  return await dispatcher.retrieve(
-    responseId,
-    getRetrieveParamsFromUrl(url),
-    { requestContext: readCapiRequestContext(headers), signal },
-  ) as object
+  return withUpstreamSignal(signal, onClientAbort, upstreamSignal =>
+    dispatcher.retrieve(
+      responseId,
+      getRetrieveParamsFromUrl(url),
+      { requestContext: readCapiRequestContext(headers), signal: upstreamSignal },
+    ) as Promise<object>)
 }
 
 export async function handleListResponseInputItemsCore(
-  { params, url, headers, signal, client, recovery }: ResourceHandlerParams,
+  { params, url, headers, signal, client, recovery, onClientAbort }: ResourceHandlerParams,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
   const dispatcher = createResourceDispatcher(client, recovery)
-  return await dispatcher.listInputItems(
-    responseId,
-    getInputItemsParamsFromUrl(url),
-    { requestContext: readCapiRequestContext(headers), signal },
-  ) as object
+  return withUpstreamSignal(signal, onClientAbort, upstreamSignal =>
+    dispatcher.listInputItems(
+      responseId,
+      getInputItemsParamsFromUrl(url),
+      { requestContext: readCapiRequestContext(headers), signal: upstreamSignal },
+    ) as Promise<object>)
 }
 
 export async function handleCreateResponseInputTokensCore(
-  { body, headers, signal, client, recovery }: ResourceHandlerBodyParams,
+  { body, headers, signal, client, recovery, onClientAbort }: ResourceHandlerBodyParams,
 ): Promise<object> {
   const { payload, meta } = protocolRegistry.ingest<import('~/types').ResponsesInputTokensPayload>(
     'responses-input-tokens',
@@ -67,24 +72,47 @@ export async function handleCreateResponseInputTokensCore(
     headers,
   )
   const dispatcher = createResourceDispatcher(client, recovery)
-  return await dispatcher.createInputTokens(
-    payload,
-    { requestContext: meta.requestContext as Partial<CapiRequestContext> | undefined, signal },
-  ) as object
+  return withUpstreamSignal(signal, onClientAbort, upstreamSignal =>
+    dispatcher.createInputTokens(
+      payload,
+      {
+        requestContext: meta.requestContext as Partial<CapiRequestContext> | undefined,
+        signal: upstreamSignal,
+      },
+    ) as Promise<object>)
 }
 
 export async function handleDeleteResponseCore(
-  { params, headers, signal, client, recovery }: Omit<ResourceHandlerParams, 'url'>,
+  { params, headers, signal, client, recovery, onClientAbort }: Omit<ResourceHandlerParams, 'url'>,
 ): Promise<object> {
   const responseId = requireResponseId(params.responseId)
   const dispatcher = createResourceDispatcher(client, recovery)
-  return await dispatcher.delete(
-    responseId,
-    { requestContext: readCapiRequestContext(headers), signal },
-  ) as object
+  return withUpstreamSignal(signal, onClientAbort, upstreamSignal =>
+    dispatcher.delete(
+      responseId,
+      { requestContext: readCapiRequestContext(headers), signal: upstreamSignal },
+    ) as Promise<object>)
 }
 
 // --- Shared helpers ---
+
+async function withUpstreamSignal<T>(
+  clientSignal: AbortSignal,
+  onClientAbort: (() => void) | undefined,
+  dispatch: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const upstreamSignal = createUpstreamSignalFromConfig(
+    clientSignal,
+    undefined,
+    onClientAbort,
+  )
+  try {
+    return await dispatch(upstreamSignal.signal)
+  }
+  finally {
+    upstreamSignal.cleanup()
+  }
+}
 
 function requireResponseId(responseId: string | undefined): string {
   if (!responseId) {
