@@ -279,6 +279,21 @@ describe('credential store', () => {
     await expect(fs.access(journalPath)).rejects.toThrow()
   })
 
+  test('treats a concurrently removed migration backup as an idempotent finalization', async () => {
+    const legacyConfig = JSON.stringify({ githubToken: 'legacy-token' })
+    await fs.writeFile(credentialPaths.CONFIG_PATH, legacyConfig)
+    await prepareGitHubCredential(credentialPaths)
+
+    await expect(Promise.all([
+      finalizeGitHubCredentialMigration('legacy-token', credentialPaths),
+      finalizeGitHubCredentialMigration('legacy-token', credentialPaths),
+    ])).resolves.toEqual([true, true])
+
+    expect(await readGitHubCredential(credentialPaths)).toMatchObject({ githubToken: 'legacy-token' })
+    expect(JSON.parse(await fs.readFile(credentialPaths.CONFIG_PATH, 'utf8'))).toEqual({})
+    await expect(fs.access(credentialPaths.CONFIG_MIGRATION_BACKUP_PATH)).rejects.toThrow()
+  })
+
   test('discards a journal written before the replacement store and resumes the legacy credential', async () => {
     const legacyConfig = JSON.stringify({ githubToken: 'legacy-token' })
     await fs.writeFile(credentialPaths.CONFIG_PATH, legacyConfig)

@@ -12,6 +12,7 @@ import { formatErrorMessage } from '~/lib/retry'
 const CREDENTIALS_VERSION = 1
 const CREDENTIAL_MIGRATION_JOURNAL_VERSION = 1
 const DEFAULT_CREDENTIAL_ACCOUNT = 'default'
+const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 25, 50] as const
 
 const BASE64_RE = /^(?:[a-z0-9+/]{4})*(?:[a-z0-9+/]{2}==|[a-z0-9+/]{3}=)?$/i
 const SHA256_RE = /^[a-f0-9]{64}$/
@@ -300,7 +301,7 @@ export async function finalizeGitHubCredentialMigration(
       )
     }
 
-    await fs.unlink(paths.CONFIG_MIGRATION_BACKUP_PATH)
+    await removeCredentialMigrationBackup(paths)
     if (journal) {
       try {
         await removeCredentialMigrationJournal(paths)
@@ -657,6 +658,17 @@ async function removeCredentialMigrationJournal(paths: CredentialPaths): Promise
   }
 }
 
+async function removeCredentialMigrationBackup(paths: CredentialPaths): Promise<void> {
+  try {
+    await fs.unlink(paths.CONFIG_MIGRATION_BACKUP_PATH)
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error
+    }
+  }
+}
+
 async function removeStaleMigrationJournal(paths: CredentialPaths): Promise<void> {
   if (await pathExists(paths.CONFIG_MIGRATION_BACKUP_PATH)) {
     return
@@ -681,12 +693,28 @@ async function writePrivateFileAtomically(filePath: string, content: string): Pr
   try {
     await fs.writeFile(temporaryPath, content, { encoding: 'utf8', mode: 0o600 })
     await applyPrivateFilePermissions(temporaryPath)
-    await fs.rename(temporaryPath, filePath)
+    await replacePrivateFile(temporaryPath, filePath)
     await applyPrivateFilePermissions(filePath)
   }
   finally {
     await fs.rm(temporaryPath, { force: true }).catch(() => {})
   }
+}
+
+async function replacePrivateFile(temporaryPath: string, filePath: string): Promise<void> {
+  for (const delayMs of WINDOWS_RENAME_RETRY_DELAYS_MS) {
+    try {
+      await fs.rename(temporaryPath, filePath)
+      return
+    }
+    catch (error) {
+      if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') {
+        throw error
+      }
+      await new Promise(resolve => setTimeout(resolve, delayMs))
+    }
+  }
+  await fs.rename(temporaryPath, filePath)
 }
 
 async function writePrivateFileAtomicallyIfAbsent(filePath: string, content: string): Promise<void> {
