@@ -9,9 +9,10 @@ import process from 'node:process'
 import consola from 'consola'
 import { copilotBaseUrl, copilotHeaders } from '~/clients/api-config'
 import { cacheModels, cacheVSCodeVersion, getClientConfig } from '~/clients/factory'
+import { applyGheDomain } from '~/clients/ghe-domain'
 import { getCachedConfig, readConfig } from '~/lib/config'
 import { ensurePaths } from '~/lib/paths'
-import { setupCopilotToken, setupGitHubToken } from '~/lib/token'
+import { setupAuthTokens } from '~/lib/token'
 import { authStore, MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/state'
 
 export const REQUEST_TIMEOUT_MS = 30_000
@@ -133,7 +134,9 @@ export async function sendRawWithRetry(
  * Initialize state for probe scripts: silence logs, set config defaults,
  * then bootstrap tokens and model cache.
  */
-export async function bootstrapProbe(options?: { silent?: boolean, timeoutMs?: number }): Promise<void> {
+export async function bootstrapProbe(
+  options?: { silent?: boolean, timeoutMs?: number },
+): Promise<() => void> {
   consola.level = options?.silent ? Number.NEGATIVE_INFINITY : 0
   authStore.accountType = 'enterprise'
   authStore.manualApprove = false
@@ -143,14 +146,15 @@ export async function bootstrapProbe(options?: { silent?: boolean, timeoutMs?: n
 
   await ensurePaths()
   await readConfig()
+  applyGheDomain(authStore, getCachedConfig().gheDomain)
 
   // Probe scripts must test actual models, not user-configured rewrites
   delete (getCachedConfig() as Record<string, unknown>).modelRewrites
 
   await cacheVSCodeVersion()
-  await setupGitHubToken()
-  await setupCopilotToken()
+  const cleanupAuthTokens = await setupAuthTokens()
   await cacheModels()
+  return cleanupAuthTokens
 }
 
 /**

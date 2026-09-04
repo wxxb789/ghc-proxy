@@ -24,6 +24,7 @@ const EXPECTED_RUNTIME_PROBES = [
   'response-commit-boundary',
   'caller-cancellation',
   'protocol-payload-contract',
+  'credential-store-migration-contract',
   'dashboard-bundle-contract',
   'dashboard-node-listener-boundary',
 ]
@@ -181,11 +182,18 @@ interface SelfcheckReport {
 }
 
 interface DebugReport {
+  credentialError?: string
+  credentialMigrationPending?: boolean
+  paths?: {
+    CONFIG_MIGRATION_BACKUP_PATH?: string
+    CREDENTIALS_PATH?: string
+  }
   version?: string
   runtime?: {
     name?: string
     version?: string
   }
+  tokenExists?: boolean
 }
 
 function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: string): void {
@@ -235,7 +243,7 @@ function runDebugCheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: st
   const stdout = decodeOutput(result.stdout)
   const report = tryParseJsonOrUndefined<DebugReport>(stdout)
 
-  if (report?.runtime?.name !== runtime || !report.runtime.version || report.version !== expectedVersion) {
+  if (!hasExpectedDebugContract(report, runtime, expectedVersion)) {
     throw new Error(
       `Packaged CLI debug under '${runtime}' returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
     )
@@ -247,7 +255,7 @@ function runBunxDebugCheck(tarballPath: string, cwd: string, expectedVersion: st
   const stdout = decodeOutput(result.stdout)
   const report = tryParseJsonOrUndefined<DebugReport>(stdout)
 
-  if (report?.runtime?.name !== 'bun' || !report.runtime.version || report.version !== expectedVersion) {
+  if (!hasExpectedDebugContract(report, 'bun', expectedVersion)) {
     throw new Error(
       `Packaged CLI debug through bunx returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
     )
@@ -259,11 +267,26 @@ function runNpxDebugCheck(cwd: string, expectedVersion: string): void {
   const stdout = decodeOutput(result.stdout)
   const report = tryParseJsonOrUndefined<DebugReport>(stdout)
 
-  if (report?.runtime?.name !== 'node' || !report.runtime.version || report.version !== expectedVersion) {
+  if (!hasExpectedDebugContract(report, 'node', expectedVersion)) {
     throw new Error(
       `Packaged CLI debug through npx returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
     )
   }
+}
+
+function hasExpectedDebugContract(
+  report: DebugReport | undefined,
+  runtime: 'bun' | 'node',
+  expectedVersion: string,
+): boolean {
+  return report?.runtime?.name === runtime
+    && Boolean(report.runtime.version)
+    && report.version === expectedVersion
+    && typeof report.tokenExists === 'boolean'
+    && typeof report.credentialMigrationPending === 'boolean'
+    && (report.credentialError === undefined || typeof report.credentialError === 'string')
+    && report.paths?.CREDENTIALS_PATH?.endsWith('credentials.json') === true
+    && report.paths.CONFIG_MIGRATION_BACKUP_PATH?.endsWith('config.json.github-token-migration.bak') === true
 }
 
 function missingProbeNames(expected: Array<string>, actual: Array<string>): Array<string> {

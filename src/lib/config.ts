@@ -3,7 +3,7 @@ import process from 'node:process'
 import consola from 'consola'
 import { z } from 'zod'
 
-import { PATHS } from './paths'
+import { PATHS } from '~/lib/paths'
 
 const reasoningEffortSchema = z.enum([
   'none',
@@ -24,7 +24,6 @@ export const MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS = 1
 export const MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS = 120
 
 const configFileSchema = z.object({
-  githubToken: z.string().optional(),
   modelFallback: z.object({
     claudeOpus: z.string().optional(),
     claudeSonnet: z.string().optional(),
@@ -95,7 +94,8 @@ export async function readConfig(): Promise<ConfigFile> {
       return {}
     }
 
-    const result = configFileSchema.safeParse(raw)
+    const rawConfig = withoutLegacyGitHubToken(raw as Record<string, unknown>)
+    const result = configFileSchema.safeParse(rawConfig)
     if (!result.success) {
       consola.warn(
         'config.json has invalid fields:',
@@ -104,7 +104,7 @@ export async function readConfig(): Promise<ConfigFile> {
       )
       // Pick only individually valid fields to avoid unsafe casts
       const partial: Record<string, unknown> = {}
-      const rawObj = raw as Record<string, unknown>
+      const rawObj = rawConfig
       for (const [key, schema] of Object.entries(configFileSchema.shape)) {
         if (key in rawObj) {
           const fieldResult = (schema as z.ZodTypeAny).safeParse(rawObj[key])
@@ -118,7 +118,7 @@ export async function readConfig(): Promise<ConfigFile> {
     }
 
     // Warn about unknown fields
-    const unknownKeys = Object.keys(raw as Record<string, unknown>)
+    const unknownKeys = Object.keys(rawConfig)
       .filter(key => !KNOWN_CONFIG_KEYS.has(key))
     if (unknownKeys.length > 0) {
       consola.warn(`config.json contains unknown fields: ${unknownKeys.join(', ')}`)
@@ -179,16 +179,18 @@ export function getCachedConfig(): ConfigFile {
   return cachedConfig
 }
 
-export async function writeConfigField(
-  field: string,
-  value: unknown,
+type ConfigFieldShape = typeof configFileSchema.shape
+
+export async function writeConfigField<K extends keyof ConfigFieldShape>(
+  field: K,
+  value: z.input<ConfigFieldShape[K]>,
 ): Promise<void> {
   try {
-    let existing: ConfigFile = {}
+    let existing: Record<string, unknown> = {}
     try {
       const content = await fs.readFile(PATHS.CONFIG_PATH, 'utf8')
       if (content.trim()) {
-        existing = JSON.parse(content) as ConfigFile
+        existing = JSON.parse(content) as Record<string, unknown>
       }
     }
     catch (error: unknown) {
@@ -210,12 +212,22 @@ export async function writeConfigField(
     )
     await applyConfigFilePermissions(PATHS.CONFIG_PATH)
 
-    cachedConfig = merged
+    cachedConfig = sanitizeConfig(
+      withoutLegacyGitHubToken(merged) as ConfigFile,
+    )
   }
   catch (error: unknown) {
     consola.error(`Failed to write config.json: ${(error as Error).message}`)
     throw error
   }
+}
+
+function withoutLegacyGitHubToken(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized = { ...config }
+  delete sanitized.githubToken
+  return sanitized
 }
 
 async function applyConfigFilePermissions(filePath: string): Promise<void> {

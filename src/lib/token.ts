@@ -1,33 +1,92 @@
+import type { PreparedGitHubCredential } from '~/lib/credentials'
 import type { GetCopilotTokenResponse } from '~/types'
 
 import consola from 'consola'
 
 import { GitHubClient } from '~/clients'
 import { cacheVSCodeVersion, getClientConfig } from '~/clients/factory'
+import { applyGheDomain, buildGitHubUrls } from '~/clients/ghe-domain'
+import { writeConfigField } from '~/lib/config'
+import {
+  CredentialMigrationError,
+  finalizeGitHubCredentialMigration,
+  prepareGitHubCredential,
+  preparePendingGitHubCredentialMigration,
+  replaceGitHubCredentialDuringMigration,
+  writeGitHubCredential,
+} from '~/lib/credentials'
+import { HTTPError, isTransientUpstreamStatus } from '~/lib/error'
+import { PATHS } from '~/lib/paths'
+import { formatErrorMessage, retryWithBackoff } from '~/lib/retry'
 
 import { authStore, modelCache } from '~/state'
-import { getCachedConfig, writeConfigField } from './config'
-import { HTTPError, isTransientUpstreamStatus } from './error'
-import { formatErrorMessage, retryWithBackoff } from './retry'
 
 const TRAILING_SLASHES_RE = /\/+$/
 
 let refreshTimerId: ReturnType<typeof setTimeout> | undefined
 
-async function writeGithubToken(token: string): Promise<void> {
-  await writeConfigField('githubToken', token)
+export async function setupAuthTokens(
+  options?: SetupGitHubTokenOptions,
+): Promise<() => void> {
+  const githubSetup = await setupGitHubToken(options)
+
+  let tokenCleanup: (() => void) | undefined
+  try {
+    tokenCleanup = await setupCopilotToken()
+  }
+  catch (error) {
+    if (githubSetup.migrationPending) {
+      throw migrationValidationError('Copilot token validation', error)
+    }
+    throw error
+  }
+
+  try {
+    if (githubSetup.migrationPending) {
+      await finalizeGitHubCredentialMigration(authStore.githubToken ?? '')
+    }
+    return tokenCleanup
+  }
+  catch (error) {
+    tokenCleanup()
+    throw error
+  }
+}
+
+export async function finalizePendingGitHubCredentialMigration(
+  githubSetup: SetupGitHubTokenResult,
+): Promise<void> {
+  if (!githubSetup.migrationPending) {
+    return
+  }
+
+  try {
+    await fetchCopilotToken()
+  }
+  catch (error) {
+    throw migrationValidationError('Copilot token validation', error)
+  }
+  await finalizeGitHubCredentialMigration(authStore.githubToken ?? '')
+}
+
+export async function setupRuntimeOverrideTokens(): Promise<() => void> {
+  await ensureVSCodeVersion()
+  try {
+    const credential = await preparePendingGitHubCredentialMigration()
+    if (credential) {
+      await validateAndFinalizePendingGitHubCredentialMigration(credential)
+    }
+  }
+  catch (error) {
+    consola.warn(
+      `Could not complete the pending GitHub credential migration. ${formatErrorMessage(error)} Continuing with the runtime override; the migration state was left unchanged for recovery.`,
+    )
+  }
+  return setupCopilotToken()
 }
 
 export async function setupCopilotToken(): Promise<() => void> {
-  await ensureVSCodeVersion()
-  const githubClient = createGitHubClient()
-  const response = await githubClient.getCopilotToken()
-  applyCopilotTokenState(response)
-
-  consola.debug('GitHub Copilot Token fetched successfully!')
-  if (authStore.showToken) {
-    consola.info('Copilot token:', response.token)
-  }
+  const { githubClient, response } = await fetchCopilotToken()
 
   const REFRESH_BUFFER_SECONDS = 60
   const refreshInterval = Math.max(30_000, (response.refresh_in - REFRESH_BUFFER_SECONDS) * 1000)
@@ -81,32 +140,75 @@ export async function refreshCopilotToken(githubClient: GitHubClient): Promise<v
 
 interface SetupGitHubTokenOptions {
   force?: boolean
+  explicitGheDomain?: {
+    value?: string
+  }
+  validateBeforePersist?: boolean
+}
+
+interface SetupGitHubTokenResult {
+  migrationPending: boolean
 }
 
 export async function setupGitHubToken(
   options?: SetupGitHubTokenOptions,
-): Promise<void> {
+): Promise<SetupGitHubTokenResult> {
   authStore.githubLogin = undefined
   authStore.githubValidatedAt = undefined
   try {
     await ensureVSCodeVersion()
 
-    const cachedToken = getCachedConfig().githubToken
-    const githubToken = cachedToken?.trim() || ''
+    const credential = await prepareGitHubCredential()
+    if (
+      credential?.replacementPending
+      && options?.explicitGheDomain
+      && options.explicitGheDomain.value !== credential.gheDomain
+    ) {
+      await validateAndFinalizePendingGitHubCredentialMigration(credential)
+      return setupGitHubToken({
+        force: true,
+        explicitGheDomain: options.explicitGheDomain,
+        validateBeforePersist: true,
+      })
+    }
+    if (credential?.replacementPending) {
+      applyGheDomain(authStore, credential.gheDomain)
+    }
+    const githubToken = credential?.githubToken ?? ''
+    let migrationPending = credential?.migrationPending ?? false
+    let replacementCandidate: PreparedGitHubCredential | undefined
+
+    if (credential?.migrationPending && options?.force) {
+      try {
+        await validateAndFinalizePendingGitHubCredentialMigration(credential)
+        migrationPending = false
+      }
+      catch (error) {
+        if (!isRejectedMigrationCredential(error)) {
+          throw error
+        }
+        replacementCandidate = credential
+        consola.warn(
+          'Legacy GitHub credential invalid or expired. Continuing forced re-authentication; the migration backup will be kept until the replacement credential is validated.',
+        )
+      }
+    }
 
     // Domain-change detection: if the configured GHE domain differs from
-    // the previously persisted one, the cached token is for a different
+    // the credential's domain, the cached token is for a different
     // GitHub instance and must not be reused.
     if (
       githubToken
       && !options?.force
-      && isDomainChanged()
+      && isDomainChanged(credential?.gheDomain)
     ) {
       consola.warn(
         'GHE domain changed — cached token is for a different GitHub instance. Re-authenticating...',
       )
-      await setupGitHubToken({ force: true })
-      return
+      return setupGitHubToken({
+        force: true,
+        explicitGheDomain: options?.explicitGheDomain,
+      })
     }
 
     if (githubToken && !options?.force) {
@@ -116,41 +218,79 @@ export async function setupGitHubToken(
       }
       try {
         await logUser()
-        return
+        return { migrationPending }
       }
       catch (error) {
-        if (isAuthError(error) && !options?.force) {
+        if (migrationPending) {
+          throw migrationValidationError('GitHub identity validation', error)
+        }
+        if (isAuthError(error)) {
           consola.warn(
             'Stored GitHub token invalid or expired. Re-authenticating...',
           )
-          await setupGitHubToken({ force: true })
-          return
+          return setupGitHubToken({
+            force: true,
+            explicitGheDomain: options?.explicitGheDomain,
+          })
         }
         throw error
       }
     }
 
-    consola.info('Not logged in, getting new access token')
-    const githubClient = createGitHubClient()
-    const response = await githubClient.getDeviceCode()
-    consola.debug('Device code response:', response)
+    let token: string
+    try {
+      consola.info('Not logged in, getting new access token')
+      const githubClient = createGitHubClient()
+      const response = await githubClient.getDeviceCode()
+      consola.debug('Device code response:', response)
 
-    consola.info(
-      `Please enter the code "${response.user_code}" in ${response.verification_uri}`,
-    )
+      consola.info(
+        `Please enter the code "${response.user_code}" in ${response.verification_uri}`,
+      )
 
-    const token = await githubClient.pollAccessToken(response)
-    await writeGithubToken(token)
-    authStore.githubToken = token
+      token = await githubClient.pollAccessToken(response)
+      authStore.githubToken = token
 
-    // Persist the current GHE domain so future runs can detect domain changes.
+      if (authStore.showToken) {
+        consola.info('GitHub token:', token)
+      }
+      await logUser()
+      if (options?.validateBeforePersist) {
+        await fetchCopilotToken()
+      }
+    }
+    catch (error) {
+      if (options?.validateBeforePersist) {
+        throw new CredentialMigrationError(
+          `The pending replacement credential was recovered, but the explicit GHE tenant switch failed before the new credential was persisted. The recovered credential remains active in credentials.json. Cause: ${formatErrorMessage(error)}`,
+          { cause: error },
+        )
+      }
+      throw error
+    }
+
+    if (replacementCandidate) {
+      try {
+        await fetchCopilotToken()
+      }
+      catch (error) {
+        throw migrationValidationError('replacement Copilot token validation', error)
+      }
+      await replaceGitHubCredentialDuringMigration(
+        replacementCandidate.githubToken,
+        token,
+        authStore.gheDomain,
+      )
+      migrationPending = false
+    }
+    else {
+      await writeGitHubCredential(token, authStore.gheDomain)
+    }
+
+    // Persist the current GHE domain so future runs can select the intended tenant.
     // Writing undefined removes the field from config (clears a previously-persisted domain).
     await writeConfigField('gheDomain', authStore.gheDomain)
-
-    if (authStore.showToken) {
-      consola.info('GitHub token:', token)
-    }
-    await logUser()
+    return { migrationPending }
   }
   catch (error) {
     if (error instanceof HTTPError) {
@@ -166,6 +306,11 @@ export async function setupGitHubToken(
 function isAuthError(error: unknown) {
   return error instanceof HTTPError
     && (error.status === 401 || error.status === 403)
+}
+
+function isRejectedMigrationCredential(error: unknown): boolean {
+  return error instanceof CredentialMigrationError
+    && isAuthError(error.cause)
 }
 
 function isTransientHttpError(error: HTTPError): boolean {
@@ -184,12 +329,58 @@ function createGitHubClient() {
   return new GitHubClient(authStore, getClientConfig())
 }
 
+async function validateAndFinalizePendingGitHubCredentialMigration(
+  credential: PreparedGitHubCredential,
+): Promise<void> {
+  const { baseUrl, apiBaseUrl } = buildGitHubUrls(credential.gheDomain)
+  const githubClient = new GitHubClient(
+    { githubToken: credential.githubToken },
+    {
+      ...getClientConfig(),
+      githubBaseUrl: baseUrl,
+      githubApiBaseUrl: apiBaseUrl,
+    },
+  )
+
+  try {
+    await githubClient.getGitHubUser()
+  }
+  catch (error) {
+    throw migrationValidationError('GitHub identity validation', error)
+  }
+
+  try {
+    await githubClient.getCopilotToken()
+  }
+  catch (error) {
+    throw migrationValidationError('Copilot token validation', error)
+  }
+
+  await finalizeGitHubCredentialMigration(credential.githubToken)
+}
+
 function applyCopilotTokenState(response: GetCopilotTokenResponse) {
   authStore.copilotToken = response.token
   authStore.copilotApiBase = normalizeCopilotApiBase(response.endpoints?.api)
   authStore.copilotTokenExpiresAt = response.expires_at * 1_000
   authStore.copilotTokenLastRefreshAt = Date.now()
   authStore.copilotTokenLastRefreshSucceeded = true
+}
+
+async function fetchCopilotToken(): Promise<{
+  githubClient: GitHubClient
+  response: GetCopilotTokenResponse
+}> {
+  await ensureVSCodeVersion()
+  const githubClient = createGitHubClient()
+  const response = await githubClient.getCopilotToken()
+  applyCopilotTokenState(response)
+
+  consola.debug('GitHub Copilot Token fetched successfully!')
+  if (authStore.showToken) {
+    consola.info('Copilot token:', response.token)
+  }
+  return { githubClient, response }
 }
 
 function normalizeCopilotApiBase(value?: string): string | undefined {
@@ -203,14 +394,22 @@ function normalizeCopilotApiBase(value?: string): string | undefined {
  * Detects whether the runtime GHE domain differs from the previously persisted one.
  * Both `undefined` means "public github.com" → no change → returns false.
  */
-function isDomainChanged(): boolean {
-  const currentDomain = authStore.gheDomain
-  const persistedDomain = getCachedConfig().gheDomain
-  return currentDomain !== persistedDomain
+function isDomainChanged(credentialDomain: string | undefined): boolean {
+  return authStore.gheDomain !== credentialDomain
 }
 
 async function ensureVSCodeVersion() {
   if (!modelCache.getVSCodeVersion()) {
     await cacheVSCodeVersion()
   }
+}
+
+function migrationValidationError(
+  stage: string,
+  cause: unknown,
+): CredentialMigrationError {
+  return new CredentialMigrationError(
+    `GitHub credential migration failed during ${stage}. The original config and migration backup were preserved. Restore from ${PATHS.CONFIG_MIGRATION_BACKUP_PATH} if needed.`,
+    { cause },
+  )
 }

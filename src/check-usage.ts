@@ -5,13 +5,15 @@ import { defineCommand } from 'citty'
 import consola from 'consola'
 
 import { GitHubClient } from '~/clients'
-
+import { cacheVSCodeVersion, getClientConfig } from '~/clients/factory'
+import { applyGheDomain } from '~/clients/ghe-domain'
+import { getCachedConfig, readConfig } from '~/lib/config'
+import { ensurePaths } from '~/lib/paths'
+import {
+  finalizePendingGitHubCredentialMigration,
+  setupGitHubToken,
+} from '~/lib/token'
 import { authStore } from '~/state'
-import { cacheVSCodeVersion, getClientConfig } from './clients/factory'
-import { applyGheDomain } from './clients/ghe-domain'
-import { getCachedConfig, readConfig } from './lib/config'
-import { ensurePaths } from './lib/paths'
-import { setupGitHubToken } from './lib/token'
 
 export const checkUsage = defineCommand({
   meta: {
@@ -23,7 +25,8 @@ export const checkUsage = defineCommand({
     await readConfig()
     applyGheDomain(authStore, getCachedConfig().gheDomain)
     await cacheVSCodeVersion()
-    await setupGitHubToken()
+    const githubSetup = await setupGitHubToken()
+    await finalizePendingGitHubCredentialMigration(githubSetup)
     try {
       const githubClient = new GitHubClient(authStore, getClientConfig())
       const usage = await githubClient.getCopilotUsage()

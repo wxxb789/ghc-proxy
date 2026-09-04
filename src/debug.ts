@@ -6,9 +6,10 @@ import process from 'node:process'
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
-import { getCachedConfig, readConfig } from './lib/config'
-import { PATHS } from './lib/paths'
-import { VERSION } from './util/version'
+import { getCachedConfig, readConfig } from '~/lib/config'
+import { inspectGitHubCredential } from '~/lib/credentials'
+import { PATHS } from '~/lib/paths'
+import { VERSION } from '~/util/version'
 
 interface DebugInfo {
   version: string
@@ -21,8 +22,12 @@ interface DebugInfo {
   paths: {
     APP_DIR: string
     CONFIG_PATH: string
+    CONFIG_MIGRATION_BACKUP_PATH: string
+    CREDENTIALS_PATH: string
   }
   configExists: boolean
+  credentialError?: string
+  credentialMigrationPending: boolean
   tokenExists: boolean
   gheDomain?: string
 }
@@ -42,16 +47,6 @@ function getRuntimeInfo(): DebugInfo['runtime'] {
   }
 }
 
-function hasToken(): boolean {
-  try {
-    const config = getCachedConfig()
-    return Boolean(config.githubToken?.trim())
-  }
-  catch {
-    return false
-  }
-}
-
 async function checkConfigExists(): Promise<boolean> {
   try {
     const stats = await fs.stat(PATHS.CONFIG_PATH)
@@ -68,7 +63,10 @@ async function checkConfigExists(): Promise<boolean> {
 
 async function getDebugInfo(): Promise<DebugInfo> {
   await readConfig()
-  const configExists = await checkConfigExists()
+  const [configExists, credentialStatus] = await Promise.all([
+    checkConfigExists(),
+    inspectGitHubCredential(),
+  ])
 
   return {
     version: VERSION,
@@ -76,9 +74,13 @@ async function getDebugInfo(): Promise<DebugInfo> {
     paths: {
       APP_DIR: PATHS.APP_DIR,
       CONFIG_PATH: PATHS.CONFIG_PATH,
+      CONFIG_MIGRATION_BACKUP_PATH: PATHS.CONFIG_MIGRATION_BACKUP_PATH,
+      CREDENTIALS_PATH: PATHS.CREDENTIALS_PATH,
     },
     configExists,
-    tokenExists: hasToken(),
+    credentialError: credentialStatus.error,
+    credentialMigrationPending: credentialStatus.migrationPending,
+    tokenExists: credentialStatus.tokenExists,
     gheDomain: getCachedConfig().gheDomain,
   }
 }
@@ -92,9 +94,13 @@ Runtime: ${info.runtime.name} ${info.runtime.version} (${info.runtime.platform} 
 Paths:
 - APP_DIR: ${info.paths.APP_DIR}
 - CONFIG_PATH: ${info.paths.CONFIG_PATH}
+- CREDENTIALS_PATH: ${info.paths.CREDENTIALS_PATH}
+- CONFIG_MIGRATION_BACKUP_PATH: ${info.paths.CONFIG_MIGRATION_BACKUP_PATH}
 
 Config exists: ${info.configExists ? 'Yes' : 'No'}
 Token exists: ${info.tokenExists ? 'Yes' : 'No'}
+Credential migration pending: ${info.credentialMigrationPending ? 'Yes' : 'No'}
+Credential error: ${info.credentialError ?? 'none'}
 GHE Domain: ${info.gheDomain ?? 'none'}`)
 }
 

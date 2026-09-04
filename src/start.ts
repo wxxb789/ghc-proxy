@@ -4,22 +4,22 @@ import process from 'node:process'
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
-import { authStore, modelCache, runtimeStore } from '~/state'
-import { initProxyFromEnv } from './cli/proxy'
-import { generateEnvScript } from './cli/shell'
-import { printStartupBanner } from './cli/startup-banner'
-import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from './clients/factory'
-import { applyGheDomain } from './clients/ghe-domain'
+import { initProxyFromEnv } from '~/cli/proxy'
+import { generateEnvScript } from '~/cli/shell'
+import { printStartupBanner } from '~/cli/startup-banner'
+import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
+import { applyGheDomain } from '~/clients/ghe-domain'
 import {
   getCachedConfig,
   MAX_UPSTREAM_QUEUE_RETRIES,
   MAX_UPSTREAM_RECOVERY_BUDGET_SECONDS,
   MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS,
   readConfig,
-} from './lib/config'
-import { ensurePaths } from './lib/paths'
-import { setupCopilotToken, setupGitHubToken } from './lib/token'
-import { createServer } from './server'
+} from '~/lib/config'
+import { ensurePaths } from '~/lib/paths'
+import { setupAuthTokens, setupRuntimeOverrideTokens } from '~/lib/token'
+import { createServer } from '~/server'
+import { authStore, modelCache, runtimeStore } from '~/state'
 
 interface RunServerOptions {
   port: number
@@ -154,11 +154,13 @@ async function runServer(options: RunServerOptions): Promise<void> {
 
   await cacheVSCodeVersion()
 
-  if (!options.githubToken) {
-    await setupGitHubToken()
-  }
-
-  const tokenCleanup = await setupCopilotToken()
+  const tokenCleanup = options.githubToken
+    ? await setupRuntimeOverrideTokens()
+    : await setupAuthTokens({
+        explicitGheDomain: options.gheDomain === undefined
+          ? undefined
+          : { value: authStore.gheDomain },
+      })
 
   const copilotClient = createCopilotClient()
   await cacheModels(copilotClient)

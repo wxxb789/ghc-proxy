@@ -3,18 +3,28 @@
 import type { Socket } from 'node:net'
 import type { Dispatcher } from 'undici'
 
+import { createHash } from 'node:crypto'
+import fs from 'node:fs/promises'
 import { createServer, request as httpRequest } from 'node:http'
-import { networkInterfaces } from 'node:os'
+import { networkInterfaces, tmpdir } from 'node:os'
+import path from 'node:path'
 import process from 'node:process'
 import { node } from '@elysiajs/node'
 import { defineCommand } from 'citty'
 import { Elysia } from 'elysia'
 import { Agent } from 'undici'
 
-import { UpstreamRequestQueue } from './clients/upstream-queue'
-import { HTTPError, isRetryableConnectionEstablishmentError } from './lib/error'
-import { getTokenCount } from './lib/tokenizer'
-import { createDashboardRoutes } from './routes/dashboard/route'
+import { UpstreamRequestQueue } from '~/clients/upstream-queue'
+import {
+  finalizeGitHubCredentialMigration,
+  prepareGitHubCredential,
+  readGitHubCredential,
+  replaceGitHubCredentialDuringMigration,
+  writeGitHubCredential,
+} from '~/lib/credentials'
+import { HTTPError, isRetryableConnectionEstablishmentError } from '~/lib/error'
+import { getTokenCount } from '~/lib/tokenizer'
+import { createDashboardRoutes } from '~/routes/dashboard/route'
 
 interface RunSelfCheckOptions {
   json: boolean
@@ -63,6 +73,7 @@ const RUNTIME_PROBES = [
   ['response-commit-boundary', probeResponseCommitBoundary],
   ['caller-cancellation', probeCallerCancellation],
   ['protocol-payload-contract', probeProtocolPayloadContract],
+  ['credential-store-migration-contract', probeCredentialStoreMigrationContract],
   ['dashboard-bundle-contract', probeDashboardBundleContract],
   ['dashboard-node-listener-boundary', probeDashboardNodeListenerBoundary],
 ] as const
@@ -290,6 +301,215 @@ async function probeProtocolPayloadContract(): Promise<void> {
     [...response.headers.keys()].every(name => !name.startsWith('x-ghc-')),
     'public response gained a non-standard recovery header',
   )
+}
+
+async function probeCredentialStoreMigrationContract(): Promise<void> {
+  const directory = await fs.mkdtemp(path.join(tmpdir(), 'ghc-proxy-selfcheck-credentials-'))
+  const paths = {
+    CONFIG_PATH: path.join(directory, 'config.json'),
+    CREDENTIALS_PATH: path.join(directory, 'credentials.json'),
+    CONFIG_MIGRATION_BACKUP_PATH: path.join(
+      directory,
+      'config.json.github-token-migration.bak',
+    ),
+  }
+  const legacyConfig = JSON.stringify({
+    githubToken: 'selfcheck-github-token',
+    smallModel: 'selfcheck-small-model',
+  })
+
+  try {
+    await fs.writeFile(paths.CONFIG_PATH, legacyConfig)
+    const prepared = await prepareGitHubCredential(paths)
+    assertProbe(prepared?.githubToken === 'selfcheck-github-token', 'legacy credential was not staged')
+    assertProbe(prepared.migrationPending, 'legacy credential migration was not marked pending')
+    assertProbe(
+      await fs.readFile(paths.CONFIG_MIGRATION_BACKUP_PATH, 'utf8') === legacyConfig,
+      'migration backup did not preserve the complete config',
+    )
+
+    const credentialsContent = await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')
+    assertProbe(
+      !credentialsContent.includes('selfcheck-github-token'),
+      'credentials.json persisted the raw GitHub token',
+    )
+    assertProbe(
+      await finalizeGitHubCredentialMigration('selfcheck-github-token', paths),
+      'pending credential migration was not finalized',
+    )
+
+    const config = JSON.parse(await fs.readFile(paths.CONFIG_PATH, 'utf8')) as Record<string, unknown>
+    assertProbe(!('githubToken' in config), 'config.json retained the raw GitHub token')
+    assertProbe(config.smallModel === 'selfcheck-small-model', 'config cleanup lost a non-credential field')
+
+    let backupExists = true
+    try {
+      await fs.access(paths.CONFIG_MIGRATION_BACKUP_PATH)
+    }
+    catch {
+      backupExists = false
+    }
+    assertProbe(!backupExists, 'migration backup was not removed after finalization')
+
+    const divergentConfig = JSON.stringify({
+      githubToken: 'selfcheck-original-github-token',
+      smallModel: 'selfcheck-small-model',
+    })
+    await fs.writeFile(paths.CONFIG_PATH, divergentConfig)
+
+    const existingCredential = await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')
+    let initialMismatchRejected = false
+    try {
+      await prepareGitHubCredential(paths)
+    }
+    catch {
+      initialMismatchRejected = true
+    }
+    assertProbe(initialMismatchRejected, 'first migration overwrote an existing active credential')
+    assertProbe(
+      await fs.readFile(paths.CREDENTIALS_PATH, 'utf8') === existingCredential,
+      'rejected first migration changed the existing credential store',
+    )
+    assertProbe(
+      await fs.readFile(paths.CONFIG_MIGRATION_BACKUP_PATH, 'utf8') === divergentConfig,
+      'rejected first migration did not preserve the complete config backup',
+    )
+
+    await fs.rm(paths.CREDENTIALS_PATH)
+    await fs.rm(paths.CONFIG_MIGRATION_BACKUP_PATH)
+    const replacementConfig = JSON.stringify({
+      githubToken: 'selfcheck-replacement-legacy-token',
+      smallModel: 'selfcheck-small-model',
+    })
+    await fs.writeFile(paths.CONFIG_PATH, replacementConfig)
+    await prepareGitHubCredential(paths)
+    await replaceGitHubCredentialDuringMigration(
+      'selfcheck-replacement-legacy-token',
+      'selfcheck-replacement-token',
+      'corp.ghe.com',
+      paths,
+    )
+    const replacement = await readGitHubCredential(paths)
+    assertProbe(
+      replacement?.githubToken === 'selfcheck-replacement-token'
+      && replacement.gheDomain === 'corp.ghe.com',
+      'validated replacement credential was not committed',
+    )
+    const replacementCleanConfig = JSON.parse(
+      await fs.readFile(paths.CONFIG_PATH, 'utf8'),
+    ) as Record<string, unknown>
+    assertProbe(
+      !('githubToken' in replacementCleanConfig),
+      'replacement migration retained the legacy config token',
+    )
+
+    await fs.rm(paths.CREDENTIALS_PATH)
+    const interruptedReplacementConfig = JSON.stringify({
+      githubToken: 'selfcheck-interrupted-legacy-token',
+      smallModel: 'selfcheck-small-model',
+    })
+    await fs.writeFile(paths.CONFIG_PATH, interruptedReplacementConfig)
+    await prepareGitHubCredential(paths)
+    const interruptedReplacementToken = 'selfcheck-interrupted-replacement-token'
+    await fs.writeFile(
+      `${paths.CONFIG_MIGRATION_BACKUP_PATH}.replacement.json`,
+      JSON.stringify({
+        version: 1,
+        legacyTokenDigest: createHash('sha256')
+          .update('selfcheck-interrupted-legacy-token', 'utf8')
+          .digest('hex'),
+        replacementTokenDigest: createHash('sha256')
+          .update(interruptedReplacementToken, 'utf8')
+          .digest('hex'),
+      }),
+    )
+    await writeGitHubCredential(interruptedReplacementToken, 'corp.ghe.com', paths)
+
+    const resumedReplacement = await prepareGitHubCredential(paths)
+    assertProbe(
+      resumedReplacement?.githubToken === interruptedReplacementToken
+      && resumedReplacement.migrationPending
+      && resumedReplacement.replacementPending,
+      'interrupted replacement migration did not resume with the validated replacement candidate',
+    )
+    assertProbe(
+      await finalizeGitHubCredentialMigration(interruptedReplacementToken, paths),
+      'interrupted replacement migration was not finalized after restart validation',
+    )
+    let replacementJournalExists = true
+    try {
+      await fs.access(`${paths.CONFIG_MIGRATION_BACKUP_PATH}.replacement.json`)
+    }
+    catch {
+      replacementJournalExists = false
+    }
+    assertProbe(!replacementJournalExists, 'replacement migration journal survived successful finalization')
+
+    await fs.rm(paths.CREDENTIALS_PATH)
+    const cleanedSplitConfig = JSON.stringify({
+      githubToken: 'selfcheck-cleaned-split-legacy-token',
+      smallModel: 'selfcheck-small-model',
+    })
+    await fs.writeFile(paths.CONFIG_PATH, cleanedSplitConfig)
+    await prepareGitHubCredential(paths)
+    await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({
+      smallModel: 'selfcheck-small-model',
+    }))
+    await replaceGitHubCredentialDuringMigration(
+      'selfcheck-cleaned-split-legacy-token',
+      'selfcheck-cleaned-split-replacement-token',
+      undefined,
+      paths,
+    )
+    assertProbe(
+      (await readGitHubCredential(paths))?.githubToken
+      === 'selfcheck-cleaned-split-replacement-token',
+      'cleaned config split state rejected a validated replacement credential',
+    )
+
+    await fs.rm(paths.CREDENTIALS_PATH)
+    await fs.writeFile(paths.CONFIG_PATH, divergentConfig)
+    await prepareGitHubCredential(paths)
+    await writeGitHubCredential('selfcheck-drifted-github-token', undefined, paths)
+
+    const configBeforeRejection = await fs.readFile(paths.CONFIG_PATH, 'utf8')
+    const credentialsBeforeRejection = await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')
+    const backupBeforeRejection = await fs.readFile(paths.CONFIG_MIGRATION_BACKUP_PATH, 'utf8')
+
+    let prepareRejected = false
+    try {
+      await prepareGitHubCredential(paths)
+    }
+    catch {
+      prepareRejected = true
+    }
+    assertProbe(prepareRejected, 'pending migration accepted a credential that drifted from its backup')
+
+    let finalizeRejected = false
+    try {
+      await finalizeGitHubCredentialMigration('selfcheck-drifted-github-token', paths)
+    }
+    catch {
+      finalizeRejected = true
+    }
+    assertProbe(finalizeRejected, 'migration finalization accepted a credential that drifted from its backup')
+
+    assertProbe(
+      await fs.readFile(paths.CONFIG_PATH, 'utf8') === configBeforeRejection,
+      'rejected migration changed config.json',
+    )
+    assertProbe(
+      await fs.readFile(paths.CREDENTIALS_PATH, 'utf8') === credentialsBeforeRejection,
+      'rejected migration changed credentials.json',
+    )
+    assertProbe(
+      await fs.readFile(paths.CONFIG_MIGRATION_BACKUP_PATH, 'utf8') === backupBeforeRejection,
+      'rejected migration removed or changed the migration backup',
+    )
+  }
+  finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
 }
 
 async function probeDashboardBundleContract(): Promise<void> {

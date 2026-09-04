@@ -59,7 +59,7 @@ $GH_TOKEN (Docker env)
 
 The GitHub token is not used directly for Copilot API calls. It is exchanged for a short-lived Copilot token via GitHub's internal API, and that Copilot token is what authenticates all upstream requests.
 
-**Empty string handling:** When `GH_TOKEN` is unset or empty, `entrypoint.sh` does not add `--github-token`; startup falls back to the persisted config or the OAuth device-code flow.
+**Empty string handling:** When `GH_TOKEN` is unset or empty, `entrypoint.sh` does not add `--github-token`; startup falls back to the persisted credential store or the OAuth device-code flow.
 
 ### `DUMP_FAILED_PAYLOADS`
 
