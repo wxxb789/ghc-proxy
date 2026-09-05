@@ -486,6 +486,114 @@ describe('AccountManager', () => {
       .toEqual({ token: 'copilot-account1' })
   })
 
+  test('bounds retained authentication sessions by evicting settled entries', async () => {
+    const state = initialState()
+    let nextSessionId = 0
+    const manager = new AccountManager(state, dependencies({
+      beginAuthentication: async ({ accountName }) => ({
+        authorization: {
+          userCode: 'ABCD-1234',
+          verificationUri: 'https://github.com/login/device',
+          expiresAt: '2026-09-05T12:00:00.000Z',
+          pollIntervalSeconds: 5,
+        },
+        completion: Promise.resolve({
+          githubToken: `github-${accountName}`,
+          runtime: runtime(accountName, `${accountName}-user`),
+          stopRefresh: () => {},
+        }),
+      }),
+      createSessionId: () => `session-${++nextSessionId}`,
+    }))
+
+    for (let index = 0; index < 33; index++) {
+      const session = await manager.beginAddAccount({
+        accountName: `added-${index}`,
+        hostname: `added-${index}.localhost`,
+      })
+      await manager.waitForAuthentication(session.id)
+    }
+
+    expect(manager.getAuthenticationSession('session-1')).toBeUndefined()
+    expect(manager.getAuthenticationSession('session-33')).toMatchObject({
+      state: 'succeeded',
+    })
+  })
+
+  test('rejects authentication starts beyond the concurrent session limit', async () => {
+    const state = initialState()
+    let beginCalls = 0
+    let nextSessionId = 0
+    let releaseStarts!: () => void
+    const startsBlocked = new Promise<void>((resolve) => {
+      releaseStarts = resolve
+    })
+    const manager = new AccountManager(state, dependencies({
+      beginAuthentication: async () => {
+        beginCalls++
+        if (beginCalls <= 32) {
+          await startsBlocked
+        }
+        return {
+          authorization: {
+            userCode: 'ABCD-1234',
+            verificationUri: 'https://github.com/login/device',
+            expiresAt: '2026-09-05T12:00:00.000Z',
+            pollIntervalSeconds: 5,
+          },
+          completion: Promise.reject(new Error('cancelled')),
+        }
+      },
+      createSessionId: () => `session-${++nextSessionId}`,
+    }))
+    const pending = Array.from({ length: 32 }, (_, index) =>
+      manager.beginAddAccount({
+        accountName: `pending-${index}`,
+        hostname: `pending-${index}.localhost`,
+      }))
+    await Promise.resolve()
+
+    try {
+      await expect(manager.beginAddAccount({
+        accountName: 'overflow',
+        hostname: 'overflow.localhost',
+      })).rejects.toMatchObject({ status: 429 })
+      expect(beginCalls).toBe(32)
+    }
+    finally {
+      releaseStarts()
+      await Promise.allSettled(pending)
+      await manager.stop()
+    }
+  })
+
+  test('aborts and waits for authentication that is still starting during shutdown', async () => {
+    const state = initialState()
+    let releaseDeviceCode!: () => void
+    let signal: AbortSignal | undefined
+    const beginAuthentication = mock(async (options: Parameters<AccountManagerDependencies['beginAuthentication']>[0]) => {
+      signal = options.signal
+      await new Promise<void>((resolve) => {
+        releaseDeviceCode = resolve
+      })
+      options.signal?.throwIfAborted()
+      throw new Error('unreachable')
+    })
+    const manager = new AccountManager(state, dependencies({ beginAuthentication }))
+
+    const adding = manager.beginAddAccount({
+      accountName: 'account2',
+      hostname: 'account2.localhost',
+    })
+    await Promise.resolve()
+    const stopping = manager.stop()
+
+    expect(signal?.aborted).toBe(true)
+    releaseDeviceCode()
+    await expect(adding).rejects.toThrow('shutting down')
+    await stopping
+  })
+
   test('aborts pending authentication and runs existing refresh cleanup on shutdown', async () => {
     const state = initialState()
     const cleanupDefault = mock(() => {})

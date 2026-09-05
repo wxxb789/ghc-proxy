@@ -138,7 +138,11 @@ const defaultDependencies: AccountManagerDependencies = {
   projectAccount: getDashboardAccount,
 }
 
+const MAX_AUTHENTICATION_SESSIONS = 32
+
 export class AccountManager {
+  private readonly authenticationControllers = new Set<AbortController>()
+  private readonly authenticationStarts = new Set<Promise<AccountAuthenticationSession>>()
   private readonly authDefaults: Partial<AuthStore>
   private readonly dependencies: AccountManagerDependencies
   private readonly knownAccountNames: Set<string>
@@ -188,7 +192,19 @@ export class AccountManager {
     }
   }
 
-  async beginAddAccount(input: AddAccountInput): Promise<AccountAuthenticationSession> {
+  beginAddAccount(input: AddAccountInput): Promise<AccountAuthenticationSession> {
+    const start = this.startAccountAuthentication(input)
+    this.authenticationStarts.add(start)
+    void start.then(
+      () => { this.authenticationStarts.delete(start) },
+      () => { this.authenticationStarts.delete(start) },
+    )
+    return start
+  }
+
+  private async startAccountAuthentication(
+    input: AddAccountInput,
+  ): Promise<AccountAuthenticationSession> {
     if (this.stopped) {
       throw new AccountManagementError('Account management is shutting down.', 503)
     }
@@ -213,10 +229,12 @@ export class AccountManager {
         409,
       )
     }
+    this.makeRoomForAuthenticationSession()
 
     this.reservedAccountNames.add(accountName)
     this.reservedHostnames.add(hostname)
     const abortController = new AbortController()
+    this.authenticationControllers.add(abortController)
     let flow: Awaited<ReturnType<typeof beginAccountDeviceAuthentication>>
     try {
       flow = await this.dependencies.beginAuthentication({
@@ -227,12 +245,26 @@ export class AccountManager {
       })
     }
     catch (error) {
+      this.authenticationControllers.delete(abortController)
       this.releaseReservation(accountName, hostname)
+      if (this.stopped) {
+        throw new AccountManagementError('Account management is shutting down.', 503)
+      }
       throw new AccountManagementError(
         'Could not start account authentication.',
         502,
         { cause: error },
       )
+    }
+    if (this.stopped) {
+      abortController.abort(new DOMException('Server stopped', 'AbortError'))
+      await flow.completion.then(
+        authenticated => authenticated.stopRefresh(),
+        () => {},
+      ).catch(() => {})
+      this.authenticationControllers.delete(abortController)
+      this.releaseReservation(accountName, hostname)
+      throw new AccountManagementError('Account management is shutting down.', 503)
     }
 
     const session: InternalAuthenticationSession = {
@@ -320,11 +352,10 @@ export class AccountManager {
       return
     }
     this.stopped = true
-    for (const session of this.sessions.values()) {
-      if (session.state === 'pending') {
-        session.abortController.abort(new DOMException('Server stopped', 'AbortError'))
-      }
+    for (const controller of this.authenticationControllers) {
+      controller.abort(new DOMException('Server stopped', 'AbortError'))
     }
+    await Promise.allSettled(this.authenticationStarts)
     await Promise.allSettled(
       Array.from(this.sessions.values(), session => session.settled),
     )
@@ -389,6 +420,7 @@ export class AccountManager {
       session.message = 'Account authentication failed.'
     }
     finally {
+      this.authenticationControllers.delete(session.abortController)
       this.releaseReservation(session.accountName, session.hostname)
     }
     return publicSession(session)
@@ -397,6 +429,32 @@ export class AccountManager {
   private releaseReservation(accountName: string, hostname: string): void {
     this.reservedAccountNames.delete(accountName)
     this.reservedHostnames.delete(hostname)
+  }
+
+  private makeRoomForAuthenticationSession(): void {
+    let sessionCount = this.reservedAccountNames.size
+    for (const session of this.sessions.values()) {
+      if (session.state !== 'pending') {
+        sessionCount++
+      }
+    }
+    if (sessionCount < MAX_AUTHENTICATION_SESSIONS) {
+      return
+    }
+    for (const [id, session] of this.sessions) {
+      if (session.state === 'pending') {
+        continue
+      }
+      this.sessions.delete(id)
+      sessionCount--
+      if (sessionCount < MAX_AUTHENTICATION_SESSIONS) {
+        return
+      }
+    }
+    throw new AccountManagementError(
+      'Too many account authentication sessions are in progress.',
+      429,
+    )
   }
 
   private runMutation<T>(mutation: () => Promise<T>): Promise<T> {

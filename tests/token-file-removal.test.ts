@@ -40,11 +40,15 @@ await mock.module('consola', () => ({
 
 const listenCalls: Array<number> = []
 const serverOptions: unknown[] = []
+let listenFailure: unknown
 await mock.module('../src/server', () => ({
   createServer: (options?: unknown) => {
     serverOptions.push(options)
     return {
       listen: (port: number) => {
+        if (listenFailure) {
+          throw listenFailure
+        }
         listenCalls.push(port)
       },
       stop: async () => {},
@@ -302,6 +306,7 @@ describe('GitHub credential migration', () => {
     mockError.mockClear()
     mockSuccess.mockClear()
     listenCalls.length = 0
+    listenFailure = undefined
     serverOptions.length = 0
   })
 
@@ -399,6 +404,31 @@ describe('GitHub credential migration', () => {
     expect(serverOptions[0]).toMatchObject({
       accountManager: expect.any(Object),
     })
+  })
+
+  test('start cleans up routed account resources when the listener cannot start', async () => {
+    await writeGitHubCredential('default-token')
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: { 'default.localhost': 'default' },
+      },
+    }))
+    listenFailure = new Error('address already in use')
+
+    await expect(runStartCommand(makeStartArgs())).rejects.toThrow(
+      'address already in use',
+    )
+
+    const options = serverOptions[0] as {
+      accountManager: { beginAddAccount: (input: unknown) => Promise<unknown> }
+    }
+    await expect(options.accountManager.beginAddAccount({
+      accountName: 'account1',
+      hostname: 'account1.localhost',
+    })).rejects.toThrow('shutting down')
+    expect(getCurrentAccountName()).toBe('default')
   })
 
   test('restart preserves the configured default instead of the credential-store active account', async () => {

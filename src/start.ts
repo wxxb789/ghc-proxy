@@ -162,30 +162,42 @@ async function runServer(options: RunServerOptions): Promise<void> {
   const serverHostname = cachedConfig.accountRouting?.baseHostname ?? 'localhost'
   const serverUrl = `http://${serverHostname}:${options.port}`
 
-  if (options.claudeCode) {
-    if (!modelCache.getModels()) {
-      throw new Error('Models should be loaded by now')
+  try {
+    if (options.claudeCode) {
+      if (!modelCache.getModels()) {
+        throw new Error('Models should be loaded by now')
+      }
+      await maybeCopyClaudeCodeCommand(serverUrl)
     }
-    await maybeCopyClaudeCodeCommand(serverUrl)
+
+    printStartupBanner(serverUrl)
+
+    const app = createServer({
+      accountManager: accountSetup.accountManager,
+      idleTimeout: options.idleTimeoutSeconds,
+    })
+    app.listen(options.port)
+
+    const shutdown = async () => {
+      consola.info('Shutting down gracefully...')
+      await accountSetup.cleanup()
+      await app.stop()
+      process.exit(0)
+    }
+
+    process.on('SIGTERM', shutdown)
+    process.on('SIGINT', shutdown)
   }
-
-  printStartupBanner(serverUrl)
-
-  const app = createServer({
-    accountManager: accountSetup.accountManager,
-    idleTimeout: options.idleTimeoutSeconds,
-  })
-  app.listen(options.port)
-
-  const shutdown = async () => {
-    consola.info('Shutting down gracefully...')
-    await accountSetup.cleanup()
-    await app.stop()
-    process.exit(0)
+  catch (error) {
+    try {
+      await accountSetup.cleanup()
+    }
+    catch {
+      consola.error('Failed to clean up account resources after startup failure.')
+    }
+    resetAccountRuntimes()
+    throw error
   }
-
-  process.on('SIGTERM', shutdown)
-  process.on('SIGINT', shutdown)
 }
 
 function applyServerAuthOptions(
