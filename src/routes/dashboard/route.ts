@@ -51,6 +51,7 @@ const setDefaultAccountSchema = z.object({
 export interface DashboardAccountManagement {
   beginAddAccount: (input: AddAccountInput) => Promise<AccountAuthenticationSession>
   getAuthenticationSession: (id: string) => AccountAuthenticationSession | undefined
+  getRoutingSummary: () => { baseHostname: string, defaultAccount: string }
   listAccounts: () => Promise<unknown[]>
   setDefaultAccount: (accountName: string) => Promise<void>
 }
@@ -105,7 +106,10 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
     .get('/dashboard/api/accounts', async () => {
       if (!accountManager)
         return accountManagementUnavailable()
-      return apiResponse({ accounts: await accountManager.listAccounts() })
+      return apiResponse({
+        ...accountManager.getRoutingSummary(),
+        accounts: await accountManager.listAccounts(),
+      })
     })
     .post('/dashboard/api/accounts', async ({ body }) => {
       if (!accountManager)
@@ -140,7 +144,7 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         return apiError('Invalid default account request.', 400)
       try {
         await accountManager.setDefaultAccount(parsed.data.accountName)
-        return apiResponse({ defaultAccount: parsed.data.accountName })
+        return apiResponse(accountManager.getRoutingSummary())
       }
       catch (error) {
         return accountManagementError(error)

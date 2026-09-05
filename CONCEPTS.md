@@ -64,7 +64,8 @@ The strategy that translates an Anthropic Messages request into an OpenAI Chat C
 ### Hostname account selection
 The optional process-entry decision that maps the request URL's normalized DNS
 hostname to exactly one named credential. The configured base hostname selects
-the explicit default account; every additional hostname is an exact mapping.
+the explicit default account as an alias; every routed account also owns exactly
+one stable dedicated hostname. Changing the default affects only the base alias.
 Selection is fixed for the request lifetime and partitions authentication,
 token refresh, model cache, local Responses state, request throttling, and
 upstream cooldowns. It never means account fallback, rotation, or load

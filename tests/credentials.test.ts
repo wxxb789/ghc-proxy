@@ -11,6 +11,7 @@ import {
   readGitHubCredential,
   replaceGitHubCredentialDuringMigration,
   writeGitHubCredential,
+  writeNewGitHubCredential,
 } from '../src/lib/credentials'
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ghc-proxy-credentials-'))
@@ -119,6 +120,19 @@ describe('credential store', () => {
     expect(Buffer.from(stored.accounts.default!.githubToken, 'base64').toString('utf8')).toBe('default-token')
     expect(Buffer.from(stored.accounts.account1!.githubToken, 'base64').toString('utf8')).toBe('updated-account1-token')
     expect(stored.accounts.account1!.gheDomain).toBe('corp.ghe.com')
+  })
+
+  test('create-only writes reject an existing named account without changing the file', async () => {
+    await writeGitHubCredential('existing-token', undefined, credentialPaths, 'work')
+    const original = await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')
+
+    await expect(writeNewGitHubCredential(
+      'replacement-token',
+      undefined,
+      credentialPaths,
+      'work',
+    )).rejects.toThrow('already contains account "work"')
+    expect(await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')).toBe(original)
   })
 
   test('rejects a requested named account that does not exist', async () => {

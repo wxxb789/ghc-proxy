@@ -135,6 +135,37 @@ export async function writeGitHubCredential(
   paths: CredentialPaths = PATHS,
   accountName?: string,
 ): Promise<void> {
+  await writeGitHubCredentialEntry(
+    githubToken,
+    gheDomain,
+    paths,
+    accountName,
+    false,
+  )
+}
+
+export async function writeNewGitHubCredential(
+  githubToken: string,
+  gheDomain: string | undefined,
+  paths: CredentialPaths,
+  accountName: string,
+): Promise<void> {
+  await writeGitHubCredentialEntry(
+    githubToken,
+    gheDomain,
+    paths,
+    accountName,
+    true,
+  )
+}
+
+async function writeGitHubCredentialEntry(
+  githubToken: string,
+  gheDomain: string | undefined,
+  paths: CredentialPaths,
+  accountName: string | undefined,
+  createOnly: boolean,
+): Promise<void> {
   const token = githubToken.trim()
   if (!token) {
     throw new Error('Refusing to persist an empty GitHub token.')
@@ -144,6 +175,11 @@ export async function writeGitHubCredential(
   const selectedAccount = accountName ?? existing?.activeAccount ?? DEFAULT_CREDENTIAL_ACCOUNT
   const activeAccount = existing?.activeAccount ?? selectedAccount
   const existingAccount = existing?.accounts[selectedAccount]
+  if (createOnly && existingAccount) {
+    throw new Error(
+      `credentials.json at ${paths.CREDENTIALS_PATH} already contains account ${JSON.stringify(selectedAccount)}. The file was left unchanged.`,
+    )
+  }
   const account: z.infer<typeof credentialAccountSchema> = {
     ...existingAccount,
     githubToken: Buffer.from(token, 'utf8').toString('base64'),

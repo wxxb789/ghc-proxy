@@ -7,9 +7,13 @@ class FakeElement {
   children: FakeElement[] = []
   className = ''
   dataset: Record<string, string> = {}
+  disabled = false
   hidden = false
+  href = ''
   tabIndex = -1
   textContent = ''
+  type = ''
+  value = ''
 
   addEventListener() {}
 
@@ -27,6 +31,8 @@ interface DashboardRuntime {
   dashboardState: {
     selectedRequestId: string | null
   }
+  renderAccountAuthentication: (session: unknown) => void
+  renderAccounts: (data: unknown) => void
   renderOverview: (data: unknown) => void
   renderRequests: (data: { active: RequestFixture[], recent: RequestFixture[] }) => void
   settleLoads: (loads: Array<{ scope: string, load: () => Promise<void> }>) => Promise<void>
@@ -64,7 +70,7 @@ function createRuntime() {
     window: { matchMedia: () => ({ matches: false }) },
   })
 
-  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, renderOverview, renderRequests, settleLoads };`).runInContext(context)
+  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads };`).runInContext(context)
 
   return {
     elements,
@@ -148,5 +154,55 @@ describe('dashboard embedded state', () => {
     ])
 
     expect(elements.get('error-banner')?.hidden).toBe(true)
+  })
+
+  test('renders account identity, routing, health, and default action without credentials', () => {
+    const { elements, runtime } = createRuntime()
+
+    runtime.renderAccounts({
+      baseHostname: 'localhost',
+      defaultAccount: 'personal',
+      accounts: [{
+        name: 'personal',
+        hostname: 'personal.localhost',
+        isDefault: true,
+        tenant: 'github.com',
+        github: { status: 'ok', login: 'octocat' },
+        copilot: { status: 'ok', modelsLoaded: true },
+        quota: {
+          status: 'ok',
+          premiumInteractions: { remaining: 75, entitlement: 100 },
+        },
+      }],
+    })
+
+    expect(DASHBOARD_HTML).toContain('data-tab="accounts"')
+    expect(DASHBOARD_HTML).toContain('id="account-add-form"')
+    expect(elements.get('accounts-summary')?.textContent).toBe('Base localhost / default personal')
+    const row = elements.get('accounts-body')?.children[0]
+    expect(JSON.stringify(row)).toContain('personal.localhost')
+    expect(JSON.stringify(row)).toContain('octocat')
+    expect(JSON.stringify(row)).not.toContain('token')
+  })
+
+  test('renders only public device authorization fields', () => {
+    const { elements, runtime } = createRuntime()
+
+    runtime.renderAccountAuthentication({
+      id: 'session-1',
+      state: 'pending',
+      accountName: 'work',
+      hostname: 'work.localhost',
+      authorization: {
+        userCode: 'ABCD-1234',
+        verificationUri: 'https://github.com/login/device',
+        expiresAt: '2026-09-05T12:00:00.000Z',
+        pollIntervalSeconds: 5,
+      },
+    })
+
+    expect(elements.get('account-auth-code')?.textContent).toBe('ABCD-1234')
+    expect(elements.get('account-auth-link')?.href).toBe('https://github.com/login/device')
+    expect(JSON.stringify(elements.get('account-auth'))).not.toContain('device_code')
   })
 })

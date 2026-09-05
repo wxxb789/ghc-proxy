@@ -1,23 +1,29 @@
 # Dashboard Observability
 
-The built-in dashboard is a read-only projection of the current ghc-proxy
-process. It is intentionally not a request history, analytics, or admin
-system.
+The built-in dashboard is a safe projection of the current ghc-proxy process
+and, in named-account routing mode, the local management surface for adding an
+account and selecting the explicit default. It is intentionally not a request
+history or analytics system.
 
 ## Scope
 
-The dashboard exposes four views under `/dashboard`:
+The dashboard exposes five views under `/dashboard`:
 
 - Overview: process health, version, authentication state, quota, active
   requests, and upstream queue activity.
+- Accounts: each routed account's stable hostname, GitHub identity and tenant,
+  authentication/Copilot state, quota, and default marker; it also starts new
+  device authentication and changes the default account.
 - Models: cached upstream model metadata plus ghc-proxy's effective routing
   and compatibility decisions.
 - Behavior: current configuration, strategy order, and process-local effect
   counters.
 - Requests: active requests plus the most recent 256 terminal requests.
 
-It does not write files, use a database, retain token statistics, accept
-configuration changes, or expose request/response content.
+It does not use a database, retain token statistics, delete or rename accounts,
+or expose request/response content. Account management writes only the existing
+credential and routing configuration files through the transaction described
+below.
 
 ## Request Lifecycle Storage
 
@@ -121,6 +127,28 @@ before caching. A five-second dashboard-only timeout aborts a hung quota fetch
 so later polls can recover; the public `/usage` route keeps its existing
 behavior.
 
+Dashboard device authentication exposes only the user code, verification URL,
+expiry, polling interval, and a random local session ID. The GitHub device code,
+GitHub token, Copilot token, and raw upstream error bodies never enter a
+Dashboard response or log. A new runtime is installed only after GitHub
+identity, Copilot token, and model discovery all succeed.
+
+## Account Mutation Transaction
+
+Every routed account has exactly one dedicated hostname. `baseHostname` is an
+additional alias for `defaultAccount`; changing the default updates only that
+alias and leaves the dedicated hostname map unchanged.
+
+Account mutations are serialized. Adding an account validates the complete next
+routing table before persistence, then journals the exact previous
+`credentials.json` and `config.json`, atomically writes the credential first,
+atomically writes routing second, installs the prevalidated runtime, and removes
+the journal last. A returned failure rolls both files and the runtime map back.
+If the process stops during the operation, startup restores the journaled state
+before reading configuration. A malformed journal fails closed without changing
+either managed file. Default changes use the same transaction boundary, so a
+failed switch leaves the old default active and persistent.
+
 ## Serving and Security
 
 HTML, CSS, and browser JavaScript are TypeScript string constants bundled into
@@ -136,6 +164,10 @@ browser requests with a cross-origin `Origin` header receive 403. The peer
 check means a remote client cannot bypass the boundary by spoofing one of those
 Host values. Runtime values are inserted with DOM `textContent`, not HTML
 parsing.
+
+The same guard covers all account-management methods. When named-account
+routing is disabled, management APIs return `409` instead of inferring a base
+hostname or silently converting legacy single-account state.
 
 `/dashboard` requests are excluded from both the request ring and access log so
 polling does not displace proxy traffic or create console noise.

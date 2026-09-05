@@ -12,6 +12,7 @@ describe('account routing contract', () => {
       baseHostname: 'LOCALHOST.',
       defaultAccount: 'default',
       hostnames: {
+        'Default.Localhost.': 'default',
         'Account1.Localhost.': 'account1',
       },
     }, ['default', 'account1'])
@@ -20,6 +21,7 @@ describe('account routing contract', () => {
       baseHostname: 'localhost',
       defaultAccount: 'default',
       hostnames: new Map([
+        ['default.localhost', 'default'],
         ['account1.localhost', 'account1'],
       ]),
     })
@@ -57,6 +59,27 @@ describe('account routing contract', () => {
       defaultAccount: 'default account',
       hostnames: {},
     }, ['default account'])).toThrow('Expected an account name')
+
+    expect(() => compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: {
+        'account1.localhost': 'account1',
+      },
+    }, ['default', 'account1'])).toThrow(
+      'exactly one dedicated hostname for account "default"',
+    )
+
+    expect(() => compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: {
+        'default.localhost': 'default',
+        'default-alt.localhost': 'default',
+      },
+    }, ['default'])).toThrow(
+      'exactly one dedicated hostname for account "default"',
+    )
   })
 
   test.each([

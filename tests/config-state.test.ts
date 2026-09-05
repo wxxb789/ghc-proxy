@@ -110,6 +110,7 @@ describe('config module', () => {
         baseHostname: 'LOCALHOST.',
         defaultAccount: 'default',
         hostnames: {
+          'Default.Localhost.': 'default',
           'Account1.Localhost.': 'account1',
         },
       },
@@ -119,6 +120,7 @@ describe('config module', () => {
       baseHostname: 'localhost',
       defaultAccount: 'default',
       hostnames: {
+        'default.localhost': 'default',
         'account1.localhost': 'account1',
       },
     })
@@ -226,6 +228,22 @@ describe('config module', () => {
     const content = await fs.readFile(tempConfigPath)
     const parsed = JSON.parse(content.toString()) as unknown
     expect(parsed).toEqual({ existing: 'value', gheDomain: 'company.ghe.com' })
+  })
+
+  test('writeConfigField() can fail closed without replacing an unreadable config', async () => {
+    const original = '{ "accountRouting": '
+    await fs.writeFile(tempConfigPath, original)
+
+    await expect(writeConfigField(
+      'accountRouting',
+      {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: { 'default.localhost': 'default' },
+      },
+      { configPath: tempConfigPath, failOnReadError: true },
+    )).rejects.toThrow('Could not read existing config.json')
+    expect(await fs.readFile(tempConfigPath, 'utf8')).toBe(original)
   })
 
   test('getCachedConfig() — returns last loaded/written config', async () => {

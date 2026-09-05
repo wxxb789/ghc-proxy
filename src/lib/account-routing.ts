@@ -112,6 +112,25 @@ export function compileAccountRouting(
     }
   }
 
+  const dedicatedHostnameCounts = new Map<string, number>()
+  for (const accountName of Object.values(normalized.hostnames)) {
+    dedicatedHostnameCounts.set(
+      accountName,
+      (dedicatedHostnameCounts.get(accountName) ?? 0) + 1,
+    )
+  }
+  const routedAccounts = new Set([
+    normalized.defaultAccount,
+    ...Object.values(normalized.hostnames),
+  ])
+  for (const accountName of routedAccounts) {
+    if (dedicatedHostnameCounts.get(accountName) !== 1) {
+      throw new Error(
+        `accountRouting requires exactly one dedicated hostname for account ${JSON.stringify(accountName)}.`,
+      )
+    }
+  }
+
   return {
     baseHostname: normalized.baseHostname,
     defaultAccount: normalized.defaultAccount,

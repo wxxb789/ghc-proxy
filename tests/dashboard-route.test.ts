@@ -47,6 +47,7 @@ describe('dashboard static routes', () => {
     expect(html).toContain('/dashboard/styles.css')
     expect(html).toContain('/dashboard/app.js')
     expect(html).toContain('Overview')
+    expect(html).toContain('Accounts')
     expect(html).toContain('Models')
     expect(html).toContain('Behavior')
     expect(html).toContain('Requests')
@@ -55,6 +56,7 @@ describe('dashboard static routes', () => {
     expect(html).toContain('id="model-group-vendor"')
     expect(html).toContain('id="model-sort"')
     expect(html).toContain('id="copy-models"')
+    expect(html).toContain('id="account-add-form"')
 
     expect(cssResponse.headers.get('content-type')).toContain('text/css')
     expect(jsResponse.headers.get('content-type')).toContain('text/javascript')
@@ -65,7 +67,10 @@ describe('dashboard static routes', () => {
     expect(js).toContain('\'Model ID\', \'Model Name\', \'Vendor\', \'Version\'')
     expect(js).toContain('[\'Endpoint: \' + localEndpoint, headers.join(\'\\t\')]')
     expect(js).toContain('navigator.clipboard?.writeText')
+    expect(js).toContain('/dashboard/api/accounts/default')
+    expect(js).toContain('/dashboard/api/account-auth/')
     expect(js).not.toContain('innerHTML')
+    expect(await cssResponse.text()).toContain('.account-auth[hidden] { display: none; }')
   })
 
   test('does not record dashboard polling in the request ring', async () => {
@@ -183,6 +188,10 @@ describe('dashboard account management API', () => {
       accountName: 'work',
       hostname: 'work.localhost',
       gheDomain: 'company.ghe.com',
+    })
+    expect(await accountsResponse.clone().json()).toMatchObject({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
     })
     const body = [accountsResponse, startResponse, statusResponse]
       .map(response => response.clone())
@@ -308,6 +317,7 @@ function accountManagerFixture(): DashboardAccountManagement & {
   beginAddAccount: ReturnType<typeof mock>
   setDefaultAccount: ReturnType<typeof mock>
 } {
+  let defaultAccount = 'default'
   return {
     listAccounts: async () => [{
       name: 'default',
@@ -346,6 +356,12 @@ function accountManagerFixture(): DashboardAccountManagement & {
           },
         }
       : undefined,
-    setDefaultAccount: mock(async () => {}),
+    getRoutingSummary: () => ({
+      baseHostname: 'localhost',
+      defaultAccount,
+    }),
+    setDefaultAccount: mock(async (accountName: string) => {
+      defaultAccount = accountName
+    }),
   }
 }

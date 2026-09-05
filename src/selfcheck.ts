@@ -521,15 +521,20 @@ async function probeCredentialStoreMigrationContract(): Promise<void> {
 
 async function probeDashboardBundleContract(): Promise<void> {
   const app = createDashboardRoutes()
-  const [htmlResponse, cssResponse, jsResponse] = await Promise.all([
+  const [htmlResponse, cssResponse, jsResponse, accountsResponse] = await Promise.all([
     app.handle(new Request('http://localhost/dashboard')),
     app.handle(new Request('http://localhost/dashboard/styles.css')),
     app.handle(new Request('http://localhost/dashboard/app.js')),
+    app.handle(new Request('http://localhost/dashboard/api/accounts')),
   ])
 
   assertProbe(htmlResponse.status === 200, `dashboard HTML returned ${htmlResponse.status}`)
   assertProbe(cssResponse.status === 200, `dashboard CSS returned ${cssResponse.status}`)
   assertProbe(jsResponse.status === 200, `dashboard JS returned ${jsResponse.status}`)
+  assertProbe(
+    accountsResponse.status === 409,
+    `dashboard account management availability returned ${accountsResponse.status}`,
+  )
 
   const [html, css, js] = await Promise.all([
     htmlResponse.text(),
@@ -538,8 +543,11 @@ async function probeDashboardBundleContract(): Promise<void> {
   ])
   assertProbe(html.includes('/dashboard/styles.css'), 'dashboard HTML lost its CSS route')
   assertProbe(html.includes('/dashboard/app.js'), 'dashboard HTML lost its JS route')
+  assertProbe(html.includes('data-tab="accounts"'), 'dashboard HTML lost its Accounts view')
   assertProbe(css.includes('.app-header'), 'dashboard CSS was not bundled')
+  assertProbe(css.includes('.account-auth[hidden]'), 'dashboard CSS lost hidden auth state')
   assertProbe(js.includes('fetchJson(\'/dashboard/api/overview\')'), 'dashboard JS was not bundled')
+  assertProbe(js.includes('/dashboard/api/accounts/default'), 'dashboard JS lost default-account management')
   assertProbe(!js.includes('innerHTML'), 'dashboard JS uses unsafe HTML insertion')
 }
 
@@ -585,7 +593,10 @@ async function probeAccountHostnameRouting(): Promise<void> {
     compileAccountRouting({
       baseHostname: 'localhost',
       defaultAccount: 'default',
-      hostnames: { 'account1.localhost': 'account1' },
+      hostnames: {
+        'default.localhost': 'default',
+        'account1.localhost': 'account1',
+      },
     }, ['default', 'account1']),
     [defaultRuntime, account1Runtime],
   )

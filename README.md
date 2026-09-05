@@ -246,15 +246,20 @@ Then opt into hostname routing in `config.json`:
     "baseHostname": "localhost",
     "defaultAccount": "default",
     "hostnames": {
+      "default.localhost": "default",
       "account1.localhost": "account1"
     }
   }
 }
 ```
 
-With that configuration, `http://localhost:4141` always uses `default` and
-`http://account1.localhost:4141` always uses `account1`. DNS hostname matching
-is case-insensitive, ignores the request port, and accepts a trailing root dot.
+With that configuration, `http://localhost:4141` and the stable dedicated
+hostname `http://default.localhost:4141` use `default`, while
+`http://account1.localhost:4141` uses `account1`. Every routed account must have
+exactly one dedicated hostname. The base hostname is an additional alias for
+the currently selected default, so switching the default never changes any
+dedicated hostname. DNS hostname matching is case-insensitive, ignores the
+request port, and accepts a trailing root dot.
 Any other hostname is rejected with HTTP `421` before a route handler or
 upstream request runs. `Forwarded` and `X-Forwarded-Host` are not trusted for
 account selection.
@@ -458,7 +463,7 @@ When the Copilot token response includes `endpoints.api`, `ghc-proxy` now prefer
 
 Incoming requests hit an [Elysia](https://elysiajs.com/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use a native Responses path with explicit compatibility policies. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
 
-The built-in, read-only Dashboard projects process health, model routing, behavior, and recent request lifecycle metadata without storing request or response content. See [Dashboard Observability](./docs/design/dashboard-observability.md).
+The built-in Dashboard projects process health, named account status, model routing, behavior, and recent request lifecycle metadata without storing request or response content. When named-account routing is enabled, its protected account view can authenticate a new account with an explicit dedicated hostname and switch the default account. See [Dashboard Observability](./docs/design/dashboard-observability.md).
 
 For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-opus-4.6` on Copilot native `/v1/messages` accepted top-level search results and pure search-result tool outputs, but rejected top-level `citations` and mixed text/search-result tool output arrays. The native path sanitizes those observed rejection cases, while translated paths flatten search results to text; re-run the probe before treating that dated upstream result as universal.
 
@@ -509,7 +514,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | `GET`  | `/usage` | Copilot quota / usage monitoring |
 | `GET`  | `/token` | Inspect the current Copilot token |
 
-**Local Dashboard (read-only):**
+**Local Dashboard:**
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -520,8 +525,12 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | `GET` | `/dashboard/api/models` | Upstream model metadata and effective proxy capabilities |
 | `GET` | `/dashboard/api/behavior` | Active routing, compatibility policies, strategies, and effect counters |
 | `GET` | `/dashboard/api/requests` | Active requests and the most recent 256 completed request summaries |
+| `GET` | `/dashboard/api/accounts` | Safe per-account identity, tenant, authentication, Copilot status, quota, hostname, and default marker |
+| `POST` | `/dashboard/api/accounts` | Start device authentication for a new named account and its dedicated hostname |
+| `GET` | `/dashboard/api/account-auth/:id` | Read the safe state of an in-progress account authentication |
+| `POST` | `/dashboard/api/accounts/default` | Persist and activate an explicit default account |
 
-Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. They are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection and security contract.
+Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. Account mutations are available only when `accountRouting` is enabled; legacy single-account mode returns `409` for those APIs. Dashboard requests are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection, transaction, and security contract.
 
 > **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses` and its resource routes, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
 

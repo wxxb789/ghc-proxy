@@ -2,16 +2,19 @@ import type {
   AccountDeviceAuthorization,
   AuthenticatedAccount,
 } from './device-auth'
+import type { AccountManagementTransactionPaths } from '~/lib/account-management-transaction'
 import type {
   AccountRoutingConfig,
   CompiledAccountRouting,
 } from '~/lib/account-routing'
+import type { CredentialPaths } from '~/lib/credentials'
 import type { DashboardAccountDescriptor } from '~/routes/dashboard/handler'
 import type { AccountRuntime } from '~/state'
 import type { AuthStore } from '~/state/auth'
 
 import { randomUUID } from 'node:crypto'
 
+import { normalizeGheDomain } from '~/clients/ghe-domain'
 import {
   beginAccountManagementTransaction,
   commitAccountManagementTransaction,
@@ -23,7 +26,8 @@ import {
   normalizeDnsHostname,
 } from '~/lib/account-routing'
 import { readConfig, writeConfigField } from '~/lib/config'
-import { writeGitHubCredential } from '~/lib/credentials'
+import { writeNewGitHubCredential } from '~/lib/credentials'
+import { PATHS } from '~/lib/paths'
 import { getDashboardAccount } from '~/routes/dashboard/handler'
 import { configureAccountRuntimes } from '~/state'
 import {
@@ -73,6 +77,7 @@ export interface AccountManagerDependencies {
 
 export interface AccountManagerState {
   authDefaults?: Partial<AuthStore>
+  knownAccountNames?: Iterable<string>
   refreshCleanups?: ReadonlyMap<string, () => void>
   routing: CompiledAccountRouting
   runtimes: Iterable<AccountRuntime>
@@ -92,37 +97,51 @@ interface InternalAuthenticationSession extends AccountAuthenticationSession {
   settled: Promise<AccountAuthenticationSession>
 }
 
-const defaultPersistence: AccountManagerPersistence = {
-  addAccount: async (input, applyRuntime) => {
-    await runPersistedAccountMutation(async () => {
-      await writeGitHubCredential(
-        input.githubToken,
-        input.gheDomain,
-        undefined,
-        input.accountName,
-      )
-      await writeConfigField('accountRouting', input.routing)
-      applyRuntime()
-    })
-  },
-  setDefault: async (routing, applyRuntime) => {
-    await runPersistedAccountMutation(async () => {
-      await writeConfigField('accountRouting', routing)
-      applyRuntime()
-    })
-  },
+export interface AccountManagerPaths
+  extends AccountManagementTransactionPaths, CredentialPaths {}
+
+export function createAccountManagerPersistence(
+  paths: AccountManagerPaths = PATHS,
+): AccountManagerPersistence {
+  return {
+    addAccount: async (input, applyRuntime) => {
+      await runPersistedAccountMutation(paths, async () => {
+        await writeNewGitHubCredential(
+          input.githubToken,
+          input.gheDomain,
+          paths,
+          input.accountName,
+        )
+        await writeConfigField('accountRouting', input.routing, {
+          configPath: paths.CONFIG_PATH,
+          failOnReadError: true,
+        })
+        applyRuntime()
+      })
+    },
+    setDefault: async (routing, applyRuntime) => {
+      await runPersistedAccountMutation(paths, async () => {
+        await writeConfigField('accountRouting', routing, {
+          configPath: paths.CONFIG_PATH,
+          failOnReadError: true,
+        })
+        applyRuntime()
+      })
+    },
+  }
 }
 
 const defaultDependencies: AccountManagerDependencies = {
   beginAuthentication: beginAccountDeviceAuthentication,
   createSessionId: randomUUID,
-  persistence: defaultPersistence,
+  persistence: createAccountManagerPersistence(),
   projectAccount: getDashboardAccount,
 }
 
 export class AccountManager {
   private readonly authDefaults: Partial<AuthStore>
   private readonly dependencies: AccountManagerDependencies
+  private readonly knownAccountNames: Set<string>
   private readonly refreshCleanups = new Map<string, () => void>()
   private readonly reservedAccountNames = new Set<string>()
   private readonly reservedHostnames = new Set<string>()
@@ -130,6 +149,7 @@ export class AccountManager {
   private mutationTail: Promise<void> = Promise.resolve()
   private routing: CompiledAccountRouting
   private runtimes: Map<string, AccountRuntime>
+  private stopped = false
 
   constructor(
     state: AccountManagerState,
@@ -140,6 +160,9 @@ export class AccountManager {
     this.routing = cloneCompiledRouting(state.routing)
     this.runtimes = new Map(
       Array.from(state.runtimes, runtime => [runtime.name, runtime] as const),
+    )
+    this.knownAccountNames = new Set(
+      state.knownAccountNames ?? this.runtimes.keys(),
     )
     for (const [name, cleanup] of state.refreshCleanups ?? []) {
       this.refreshCleanups.set(name, cleanup)
@@ -158,16 +181,27 @@ export class AccountManager {
     return Promise.all(descriptors.map(this.dependencies.projectAccount))
   }
 
+  getRoutingSummary(): { baseHostname: string, defaultAccount: string } {
+    return {
+      baseHostname: this.routing.baseHostname,
+      defaultAccount: this.routing.defaultAccount,
+    }
+  }
+
   async beginAddAccount(input: AddAccountInput): Promise<AccountAuthenticationSession> {
+    if (this.stopped) {
+      throw new AccountManagementError('Account management is shutting down.', 503)
+    }
     const accountName = parseAccountName(input.accountName)
     const hostname = parseHostname(input.hostname)
+    const gheDomain = parseGheDomain(input.gheDomain)
     if (hostname === this.routing.baseHostname) {
       throw new AccountManagementError(
         'A dedicated account hostname must differ from the base hostname.',
         400,
       )
     }
-    if (this.runtimes.has(accountName) || this.reservedAccountNames.has(accountName)) {
+    if (this.knownAccountNames.has(accountName) || this.reservedAccountNames.has(accountName)) {
       throw new AccountManagementError(
         `Account ${JSON.stringify(accountName)} already exists or is being authenticated.`,
         409,
@@ -188,7 +222,7 @@ export class AccountManager {
       flow = await this.dependencies.beginAuthentication({
         accountName,
         authDefaults: this.authDefaults,
-        gheDomain: input.gheDomain,
+        gheDomain,
         signal: abortController.signal,
       })
     }
@@ -213,7 +247,7 @@ export class AccountManager {
     session.settled = this.completeAuthenticationSession(
       session,
       flow.completion,
-      input.gheDomain,
+      gheDomain,
     )
     this.sessions.set(session.id, session)
     return publicSession(session)
@@ -233,8 +267,14 @@ export class AccountManager {
   }
 
   async setDefaultAccount(rawAccountName: string): Promise<void> {
+    if (this.stopped) {
+      throw new AccountManagementError('Account management is shutting down.', 503)
+    }
     const accountName = parseAccountName(rawAccountName)
     await this.runMutation(async () => {
+      if (this.stopped) {
+        throw new AccountManagementError('Account management is shutting down.', 503)
+      }
       if (!this.runtimes.has(accountName)) {
         throw new AccountManagementError(
           `Account ${JSON.stringify(accountName)} does not exist.`,
@@ -275,12 +315,20 @@ export class AccountManager {
     })
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    if (this.stopped) {
+      return
+    }
+    this.stopped = true
     for (const session of this.sessions.values()) {
       if (session.state === 'pending') {
         session.abortController.abort(new DOMException('Server stopped', 'AbortError'))
       }
     }
+    await Promise.allSettled(
+      Array.from(this.sessions.values(), session => session.settled),
+    )
+    await this.mutationTail
     for (const cleanup of this.refreshCleanups.values()) {
       cleanup()
     }
@@ -294,7 +342,15 @@ export class AccountManager {
   ): Promise<AccountAuthenticationSession> {
     try {
       const authenticated = await completion
+      if (this.stopped) {
+        authenticated.stopRefresh()
+        throw new AccountManagementError('Account management is shutting down.', 503)
+      }
       await this.runMutation(async () => {
+        if (this.stopped) {
+          authenticated.stopRefresh()
+          throw new AccountManagementError('Account management is shutting down.', 503)
+        }
         const nextRuntimes = new Map(this.runtimes)
         nextRuntimes.set(session.accountName, authenticated.runtime)
         const nextConfig = routingConfig(this.routing)
@@ -315,6 +371,7 @@ export class AccountManager {
           })
           this.runtimes = nextRuntimes
           this.routing = nextRouting
+          this.knownAccountNames.add(session.accountName)
           this.refreshCleanups.set(session.accountName, authenticated.stopRefresh)
         }
         catch (error) {
@@ -361,17 +418,20 @@ export class AccountManager {
 }
 
 async function runPersistedAccountMutation(
+  paths: AccountManagerPaths,
   mutation: () => Promise<void>,
 ): Promise<void> {
-  await beginAccountManagementTransaction()
+  await beginAccountManagementTransaction(paths)
   try {
     await mutation()
-    await commitAccountManagementTransaction()
+    await commitAccountManagementTransaction(paths)
   }
   catch (error) {
     try {
-      await rollbackAccountManagementTransaction()
-      await readConfig()
+      await rollbackAccountManagementTransaction(paths)
+      if (paths.CONFIG_PATH === PATHS.CONFIG_PATH) {
+        await readConfig()
+      }
     }
     catch (rollbackError) {
       throw new Error(
@@ -442,5 +502,17 @@ function parseHostname(value: string): string {
   }
   catch (error) {
     throw new AccountManagementError('Invalid account hostname.', 400, { cause: error })
+  }
+}
+
+function parseGheDomain(value: string | undefined): string | undefined {
+  if (value === undefined || value.trim() === '') {
+    return undefined
+  }
+  try {
+    return normalizeGheDomain(value)
+  }
+  catch (error) {
+    throw new AccountManagementError('Invalid GHE tenant.', 400, { cause: error })
   }
 }

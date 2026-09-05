@@ -200,6 +200,8 @@ direct and do not pass through this model.
 | `error.ts`                  | HTTPError class, error forwarding, validation errors |
 | `config.ts`                 | Config file reader (`~/.local/share/ghc-proxy/config.json`) |
 | `account-routing.ts`        | DNS hostname normalization and exact account-routing validation |
+| `account-management-transaction.ts` | Crash-safe rollback journal for Dashboard credential/config mutations |
+| `atomic-file.ts`            | Private atomic file replacement with Windows retry handling |
 | `credentials.ts`            | Versioned named-account credential storage and legacy config migration |
 | `upstream-signal.ts`        | AbortSignal management for upstream requests         |
 | `retry.ts`                  | Retry logic with exponential backoff                 |
@@ -218,6 +220,10 @@ Several modules formerly under `src/lib/` were relocated during the consolidatio
 `src/state/account-runtime.ts` binds each request to an account-specific auth
 store, model cache, rate limiter, Responses emulator state, and upstream queue
 selection while keeping existing `~/state` imports stable.
+
+`src/accounts/device-auth.ts` performs isolated device authentication without
+persisting credentials, while `src/accounts/manager.ts` serializes validated
+account additions and default changes before updating the live runtime map.
 - `upstream-request-queue.ts` -> `src/clients/upstream-queue.ts`; `api-config.ts` -> `src/clients/api-config.ts`; `ghe-domain.ts` -> `src/clients/ghe-domain.ts`.
 - `validation/` -> `src/ingest/validation/`.
 - `model-rewrite.ts`, `request-model-policy.ts` -> `src/transform/`.

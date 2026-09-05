@@ -209,20 +209,37 @@ export function getCachedConfig(): ConfigFile {
 
 type ConfigFieldShape = typeof configFileSchema.shape
 
+interface WriteConfigFieldOptions {
+  configPath?: string
+  failOnReadError?: boolean
+}
+
 export async function writeConfigField<K extends keyof ConfigFieldShape>(
   field: K,
   value: z.input<ConfigFieldShape[K]>,
+  options: WriteConfigFieldOptions = {},
 ): Promise<void> {
+  const configPath = options.configPath ?? PATHS.CONFIG_PATH
   try {
     let existing: Record<string, unknown> = {}
     try {
-      const content = await fs.readFile(PATHS.CONFIG_PATH, 'utf8')
+      const content = await fs.readFile(configPath, 'utf8')
       if (content.trim()) {
-        existing = JSON.parse(content) as Record<string, unknown>
+        const parsed = JSON.parse(content) as unknown
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          throw new Error('config.json is not a JSON object')
+        }
+        existing = parsed as Record<string, unknown>
       }
     }
     catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (options.failOnReadError) {
+          throw new Error(
+            `Could not read existing config.json: ${(error as Error).message}.`,
+            { cause: error },
+          )
+        }
         consola.warn(
           `Could not read existing config.json: ${
             (error as Error).message
@@ -234,7 +251,7 @@ export async function writeConfigField<K extends keyof ConfigFieldShape>(
     const merged = { ...existing, [field]: value }
 
     await writePrivateFileAtomically(
-      PATHS.CONFIG_PATH,
+      configPath,
       JSON.stringify(merged, null, 2),
     )
 

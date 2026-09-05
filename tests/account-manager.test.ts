@@ -5,13 +5,20 @@ import type {
 
 import type { AccountRuntime } from '~/state'
 
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
-import { AccountManager } from '~/accounts/manager'
+import { AccountManager, createAccountManagerPersistence } from '~/accounts/manager'
 import { compileAccountRouting } from '~/lib/account-routing'
+import { readGitHubCredentials, writeGitHubCredential } from '~/lib/credentials'
+import { createServer } from '~/server'
 import {
   configureAccountRuntimes,
   createAccountRuntime,
+  getCurrentAccountName,
   resetAccountRuntimes,
   resolveRequestAccountRuntime,
 } from '~/state'
@@ -300,5 +307,223 @@ describe('AccountManager', () => {
       stopRefresh: () => {},
     })
     await manager.waitForAuthentication(session.id)
+  })
+
+  test('rejects an invalid GHE tenant before starting authentication', async () => {
+    const state = initialState()
+    const beginAuthentication = mock(dependencies().beginAuthentication)
+    const manager = new AccountManager(state, dependencies({ beginAuthentication }))
+
+    await expect(manager.beginAddAccount({
+      accountName: 'account2',
+      hostname: 'account2.localhost',
+      gheDomain: 'github.example.com',
+    })).rejects.toThrow('Invalid GHE tenant.')
+    expect(beginAuthentication).not.toHaveBeenCalled()
+  })
+
+  test('does not replace a stored account that is not currently routed', async () => {
+    const state = initialState()
+    const beginAuthentication = mock(dependencies().beginAuthentication)
+    const manager = new AccountManager({
+      ...state,
+      knownAccountNames: ['default', 'account1', 'stored-only'],
+    }, dependencies({ beginAuthentication }))
+
+    await expect(manager.beginAddAccount({
+      accountName: 'stored-only',
+      hostname: 'stored.localhost',
+    })).rejects.toThrow('already exists or is being authenticated')
+    expect(beginAuthentication).not.toHaveBeenCalled()
+  })
+
+  test('persists an added account and default switch for restart without raw tokens', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ghc-proxy-account-manager-'))
+    const paths = {
+      ACCOUNT_MANAGEMENT_JOURNAL_PATH: path.join(tempDir, 'account-management-transaction.json'),
+      APP_DIR: tempDir,
+      CONFIG_PATH: path.join(tempDir, 'config.json'),
+      CONFIG_MIGRATION_BACKUP_PATH: path.join(tempDir, 'config.json.github-token-migration.bak'),
+      CREDENTIALS_PATH: path.join(tempDir, 'credentials.json'),
+    }
+    try {
+      await writeGitHubCredential('github-default', undefined, paths, 'default')
+      await writeGitHubCredential('github-account1', undefined, paths, 'account1')
+      const state = initialState()
+      await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({
+        accountRouting: {
+          baseHostname: state.routing.baseHostname,
+          defaultAccount: state.routing.defaultAccount,
+          hostnames: Object.fromEntries(state.routing.hostnames),
+        },
+      }))
+      const manager = new AccountManager(state, dependencies({
+        persistence: createAccountManagerPersistence(paths),
+      }))
+
+      const session = await manager.beginAddAccount({
+        accountName: 'account2',
+        hostname: 'account2.localhost',
+      })
+      expect(await manager.waitForAuthentication(session.id)).toMatchObject({
+        state: 'succeeded',
+      })
+      await manager.setDefaultAccount('account2')
+
+      const configContent = await fs.readFile(paths.CONFIG_PATH, 'utf8')
+      const credentialsContent = await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')
+      const config = JSON.parse(configContent) as {
+        accountRouting: {
+          baseHostname: string
+          defaultAccount: string
+          hostnames: Record<string, string>
+        }
+      }
+      const credentials = await readGitHubCredentials(paths)
+      expect(config.accountRouting).toEqual({
+        baseHostname: 'localhost',
+        defaultAccount: 'account2',
+        hostnames: {
+          'default.localhost': 'default',
+          'account1.localhost': 'account1',
+          'account2.localhost': 'account2',
+        },
+      })
+      expect(credentials?.accounts.account2).toMatchObject({
+        accountName: 'account2',
+        githubToken: 'github-account2',
+      })
+      expect(credentialsContent).not.toContain('github-account2')
+      expect(configContent).not.toContain('github-account2')
+
+      const restartedRouting = compileAccountRouting(
+        config.accountRouting,
+        Object.keys(credentials!.accounts),
+      )
+      configureAccountRuntimes(restartedRouting, [
+        runtime('default', 'alice'),
+        runtime('account1', 'bob'),
+        runtime('account2', 'carol'),
+      ])
+      expect(resolveRequestAccountRuntime(new Request('http://localhost/token'))?.name)
+        .toBe('account2')
+      expect(resolveRequestAccountRuntime(new Request('http://default.localhost/token'))?.name)
+        .toBe('default')
+      expect(resolveRequestAccountRuntime(new Request('http://account1.localhost/token'))?.name)
+        .toBe('account1')
+      expect(resolveRequestAccountRuntime(new Request('http://account2.localhost/token'))?.name)
+        .toBe('account2')
+    }
+    finally {
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps Dashboard mutations and routed HTTP identities consistent end to end', async () => {
+    const state = initialState()
+    const manager = new AccountManager(state, dependencies())
+    const app = createServer({ accountManager: manager })
+
+    const startResponse = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'origin': 'http://localhost',
+        },
+        body: JSON.stringify({
+          accountName: 'account2',
+          hostname: 'account2.localhost',
+        }),
+      },
+    ))
+    const authentication = await startResponse.json() as {
+      authentication: { id: string }
+    }
+    await manager.waitForAuthentication(authentication.authentication.id)
+
+    const account2 = await app.handle(new Request('http://account2.localhost/token'))
+    const unknown = await app.handle(new Request('http://unknown.localhost/token'))
+    const switchResponse = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts/default',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'origin': 'http://localhost',
+        },
+        body: JSON.stringify({ accountName: 'account2' }),
+      },
+    ))
+    const base = await app.handle(new Request('http://localhost/token'))
+    const originalDefault = await app.handle(new Request('http://default.localhost/token'))
+
+    expect(startResponse.status).toBe(202)
+    expect(await account2.json()).toEqual({ token: 'copilot-account2' })
+    expect(unknown.status).toBe(421)
+    expect(switchResponse.status).toBe(200)
+    expect(await base.json()).toEqual({ token: 'copilot-account2' })
+    expect(await originalDefault.json()).toEqual({ token: 'copilot-default' })
+  })
+
+  test('does not change the account of an in-flight base-host request during a default switch', async () => {
+    const state = initialState()
+    const manager = new AccountManager(state, dependencies())
+    const app = createServer({ accountManager: manager }).get('/__delayed-account', async () => {
+      await Bun.sleep(20)
+      return getCurrentAccountName()
+    })
+
+    const inFlight = Promise.resolve(
+      app.handle(new Request('http://localhost/__delayed-account')),
+    )
+    await Bun.sleep(1)
+    await manager.setDefaultAccount('account1')
+
+    expect(await (await inFlight).text()).toBe('default')
+    expect(await (await app.handle(new Request('http://localhost/token'))).json())
+      .toEqual({ token: 'copilot-account1' })
+  })
+
+  test('aborts pending authentication and runs existing refresh cleanup on shutdown', async () => {
+    const state = initialState()
+    const cleanupDefault = mock(() => {})
+    const cleanupAccount1 = mock(() => {})
+    const manager = new AccountManager({
+      ...state,
+      refreshCleanups: new Map([
+        ['default', cleanupDefault],
+        ['account1', cleanupAccount1],
+      ]),
+    }, dependencies({
+      beginAuthentication: async options => ({
+        authorization: {
+          userCode: 'ABCD-1234',
+          verificationUri: 'https://github.com/login/device',
+          expiresAt: '2026-09-05T12:00:00.000Z',
+          pollIntervalSeconds: 5,
+        },
+        completion: new Promise((_resolve, reject) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => reject(options.signal?.reason),
+            { once: true },
+          )
+        }),
+      }),
+    }))
+    const session = await manager.beginAddAccount({
+      accountName: 'account2',
+      hostname: 'account2.localhost',
+    })
+
+    await manager.stop()
+
+    expect(manager.getAuthenticationSession(session.id)).toMatchObject({
+      state: 'failed',
+    })
+    expect(cleanupDefault).toHaveBeenCalledTimes(1)
+    expect(cleanupAccount1).toHaveBeenCalledTimes(1)
   })
 })

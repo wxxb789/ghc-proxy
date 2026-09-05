@@ -179,7 +179,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
 
   const shutdown = async () => {
     consola.info('Shutting down gracefully...')
-    accountSetup.cleanup()
+    await accountSetup.cleanup()
     await app.stop()
     process.exit(0)
   }
@@ -299,15 +299,25 @@ async function setupRoutedAccounts(
     throw error
   }
 
-  const accountManager = new AccountManager({
-    authDefaults: serverAuthDefaults(options, accountType),
-    refreshCleanups: cleanups,
-    routing: compiled,
-    runtimes,
-  })
-  return {
-    accountManager,
-    cleanup: () => accountManager.stop(),
+  try {
+    const accountManager = new AccountManager({
+      authDefaults: serverAuthDefaults(options, accountType),
+      knownAccountNames: Object.keys(credentials.accounts),
+      refreshCleanups: cleanups,
+      routing: compiled,
+      runtimes,
+    })
+    return {
+      accountManager,
+      cleanup: () => accountManager.stop(),
+    }
+  }
+  catch (error) {
+    for (const cleanup of Array.from(cleanups.values()).reverse()) {
+      cleanup()
+    }
+    resetAccountRuntimes()
+    throw error
   }
 }
 

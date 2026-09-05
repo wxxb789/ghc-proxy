@@ -53,6 +53,7 @@ function configureTwoAccounts(): {
       baseHostname: 'localhost',
       defaultAccount: 'default',
       hostnames: {
+        'default.localhost': 'default',
         'account1.localhost': 'account1',
       },
     }, ['default', 'account1']),

@@ -19,6 +19,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     </div>
     <nav class="tabs" aria-label="Dashboard views">
       <button type="button" class="tab active" data-tab="overview">Overview</button>
+      <button type="button" class="tab" data-tab="accounts">Accounts</button>
       <button type="button" class="tab" data-tab="models">Models</button>
       <button type="button" class="tab" data-tab="behavior">Behavior</button>
       <button type="button" class="tab" data-tab="requests">Requests</button>
@@ -58,6 +59,29 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <section class="panel full-width">
         <div class="section-heading"><h1>Quota</h1><span id="quota-status" class="muted"></span></div>
         <div class="table-scroll"><table><thead><tr><th>Pool</th><th>Remaining</th><th>Entitlement</th><th>Percent</th><th>Overage</th></tr></thead><tbody id="quota-body"></tbody></table></div>
+      </section>
+    </section>
+
+    <section id="view-accounts" class="view" data-view="accounts" hidden>
+      <div class="toolbar">
+        <div><h1>Accounts</h1><span id="accounts-summary" class="muted"></span></div>
+      </div>
+      <div class="table-scroll accounts-table"><table><thead><tr><th>Default</th><th>Name</th><th>Hostname</th><th>GitHub</th><th>Tenant</th><th>Copilot</th><th>Quota</th><th>Action</th></tr></thead><tbody id="accounts-body"></tbody></table></div>
+
+      <section class="panel full-width account-add-panel">
+        <div class="section-heading"><h2>Add account</h2><span id="account-add-status" class="muted" role="status" aria-live="polite"></span></div>
+        <form id="account-add-form" class="account-form">
+          <label><span>Name</span><input id="account-name" name="accountName" required maxlength="64" autocomplete="off"></label>
+          <label><span>Hostname</span><input id="account-hostname" name="hostname" required maxlength="253" placeholder="account.localhost" autocomplete="off"></label>
+          <label><span>GHE tenant</span><input id="account-ghe-domain" name="gheDomain" placeholder="company.ghe.com" autocomplete="off"></label>
+          <button id="account-add-button" type="submit" class="command primary">Authenticate</button>
+        </form>
+        <div id="account-auth" class="account-auth" hidden>
+          <span id="account-auth-state" class="badge">pending</span>
+          <strong id="account-auth-code" class="mono"></strong>
+          <a id="account-auth-link" target="_blank" rel="noreferrer">Open GitHub device login</a>
+          <span id="account-auth-message" class="muted"></span>
+        </div>
       </section>
     </section>
 
@@ -175,7 +199,7 @@ export const DASHBOARD_CSS = String.raw`:root {
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--page); }
-button, input { font: inherit; letter-spacing: 0; }
+button, input, select { font: inherit; letter-spacing: 0; }
 button { cursor: pointer; }
 
 .app-header {
@@ -228,6 +252,9 @@ button { cursor: pointer; }
   background: var(--surface);
 }
 .command:hover { border-color: var(--text-muted); background: var(--surface-hover); }
+.command.primary { border-color: var(--accent); color: #fff; background: #176b87; }
+.command.primary:hover { background: #12566d; }
+.command:disabled { cursor: default; opacity: 0.55; }
 
 main { width: min(1600px, 100%); margin: 0 auto; padding: 18px 22px 32px; }
 .view { min-height: calc(100vh - 115px); }
@@ -273,6 +300,7 @@ td { padding: 9px 11px; border-bottom: 1px solid var(--border); vertical-align: 
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--surface-hover); }
 .model-table table { min-width: 1220px; }
+.accounts-table table { min-width: 1040px; }
 .model-select-header, .model-select-cell { width: 42px; text-align: center; }
 .model-select-cell input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .model-table tr.selectable { cursor: pointer; }
@@ -282,11 +310,18 @@ tbody tr:hover td { background: var(--surface-hover); }
 .model-name { font-weight: 650; color: var(--text-strong); }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 12px; overflow-wrap: anywhere; }
 .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-subtle); color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
-.badge.ok, .badge.completed { color: var(--ok); border-color: var(--ok-border); background: var(--ok-bg); }
-.badge.degraded, .badge.streaming, .badge.in_flight, .badge.aborted { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
-.badge.failed, .badge.missing { color: var(--bad); border-color: var(--bad-border); background: var(--bad-bg); }
+.badge.ok, .badge.completed, .badge.succeeded, .badge.default { color: var(--ok); border-color: var(--ok-border); background: var(--ok-bg); }
+.badge.degraded, .badge.streaming, .badge.in_flight, .badge.aborted, .badge.pending, .badge.stale { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
+.badge.failed, .badge.missing, .badge.unavailable { color: var(--bad); border-color: var(--bad-border); background: var(--bad-bg); }
 
 .behavior-grid { margin-bottom: 18px; }
+.account-form { display: grid; grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1fr) minmax(200px, 1fr) auto; align-items: end; gap: 12px; padding: 14px; border: 1px solid var(--border); background: var(--surface); }
+.account-form label { min-width: 0; display: grid; gap: 5px; color: var(--text-secondary); font-size: 12px; }
+.account-form input { width: 100%; height: 36px; min-width: 0; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: var(--text); }
+.account-form input:focus { outline: 2px solid var(--focus-ring); border-color: var(--accent); }
+.account-auth { display: grid; grid-template-columns: auto minmax(100px, auto) auto minmax(0, 1fr); align-items: center; gap: 10px 14px; margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border); background: var(--surface-subtle); }
+.account-auth[hidden] { display: none; }
+.account-auth a { color: var(--accent); }
 .request-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.75fr); gap: 16px; min-height: 560px; }
 .request-list { max-height: calc(100vh - 180px); }
 .request-list table { min-width: 920px; }
@@ -307,6 +342,9 @@ tbody tr:hover td { background: var(--surface-hover); }
   .metric-strip > div:nth-child(2n) { border-right: 0; }
   .metric-strip > div:nth-last-child(-n + 2) { border-bottom: 0; }
   .overview-grid, .behavior-grid, .request-layout { grid-template-columns: 1fr; }
+  .account-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .account-form .command { align-self: end; }
+  .account-auth { grid-template-columns: auto minmax(0, 1fr); }
   .request-list, .request-detail pre { max-height: none; }
 }
 
@@ -317,6 +355,8 @@ tbody tr:hover td { background: var(--surface-hover); }
   .model-controls { width: 100%; justify-content: flex-start; }
   .toolbar input[type='search'] { width: 100%; }
   .model-copy-status { text-align: left; }
+  .account-form { grid-template-columns: 1fr; }
+  .account-auth { grid-template-columns: 1fr; }
   .metric-strip { grid-template-columns: 1fr; }
   .metric-strip > div, .metric-strip > div:nth-child(2n) { border-right: 0; border-bottom: 1px solid var(--border); }
   .metric-strip > div:last-child { grid-column: auto; border-bottom: 0; }
@@ -334,6 +374,8 @@ const dashboardState = {
   models: [],
   selectedModelIds: new Set(),
   requests: [],
+  accounts: [],
+  accountAuthTimer: null,
   selectedRequestId: null,
   errors: new Map(),
   refreshing: false,
@@ -426,9 +468,15 @@ function compactJson(value) {
 }
 
 async function fetchJson(path) {
-  const response = await fetch(path, { cache: 'no-store', credentials: 'same-origin' });
-  if (!response.ok) throw new Error('Dashboard request failed: ' + response.status);
-  return response.json();
+  const options = arguments.length > 1 ? arguments[1] : {};
+  const response = await fetch(path, Object.assign({ cache: 'no-store', credentials: 'same-origin' }, options));
+  const data = await response.json().catch(function () { return {}; });
+  if (!response.ok) {
+    const error = new Error(data.error?.message || ('Dashboard request failed: ' + response.status));
+    error.status = response.status;
+    throw error;
+  }
+  return data;
 }
 
 function renderErrors() {
@@ -505,6 +553,154 @@ function appendQuotaRow(body, name, quota) {
     appendCell(row, quota.overagePermitted ? 'Allowed' : 'No');
   }
   body.appendChild(row);
+}
+
+function renderAccounts(data) {
+  dashboardState.accounts = Array.isArray(data.accounts) ? data.accounts : [];
+  byId('accounts-summary').textContent = 'Base ' + (data.baseHostname || '-') + ' / default ' + (data.defaultAccount || '-');
+  const body = byId('accounts-body');
+  clearNode(body);
+  dashboardState.accounts.forEach(function (account) {
+    const row = createElement('tr');
+    const defaultCell = createElement('td');
+    defaultCell.appendChild(makeBadge(account.isDefault ? 'default' : 'named'));
+    row.appendChild(defaultCell);
+    appendCell(row, account.name, 'mono');
+    appendCell(row, account.hostname, 'mono');
+    const githubCell = createElement('td');
+    githubCell.appendChild(makeBadge(account.github?.status));
+    githubCell.appendChild(createElement('div', 'muted mono', account.github?.login || '-'));
+    row.appendChild(githubCell);
+    appendCell(row, account.tenant || '-', 'mono');
+    const copilotCell = createElement('td');
+    copilotCell.appendChild(makeBadge(account.copilot?.status));
+    copilotCell.appendChild(createElement('div', 'muted', account.copilot?.modelsLoaded ? 'models loaded' : 'models unavailable'));
+    row.appendChild(copilotCell);
+    const quotaCell = createElement('td');
+    quotaCell.appendChild(makeBadge(account.quota?.status));
+    quotaCell.appendChild(createElement('div', 'muted mono', 'Premium ' + formatQuotaPool(account.quota?.premiumInteractions)));
+    quotaCell.appendChild(createElement('div', 'muted mono', 'Chat ' + formatQuotaPool(account.quota?.chat)));
+    quotaCell.appendChild(createElement('div', 'muted mono', 'Completions ' + formatQuotaPool(account.quota?.completions)));
+    if (account.quota?.resetDate) quotaCell.appendChild(createElement('div', 'muted', 'Resets ' + formatDate(account.quota.resetDate)));
+    row.appendChild(quotaCell);
+    const actionCell = createElement('td');
+    const button = createElement('button', 'command', account.isDefault ? 'Default' : 'Set default');
+    button.type = 'button';
+    button.disabled = Boolean(account.isDefault);
+    button.addEventListener('click', function () { setDefaultAccount(account.name, button); });
+    actionCell.appendChild(button);
+    row.appendChild(actionCell);
+    body.appendChild(row);
+  });
+}
+
+function formatQuotaPool(quota) {
+  if (!quota) return '-';
+  if (quota.unlimited) return 'Unlimited';
+  return formatNumber(quota.remaining) + ' / ' + formatNumber(quota.entitlement);
+}
+
+function renderAccountAuthentication(session) {
+  const panel = byId('account-auth');
+  panel.hidden = false;
+  byId('account-auth-state').className = 'badge ' + session.state;
+  byId('account-auth-state').textContent = session.state;
+  byId('account-auth-code').textContent = session.authorization?.userCode || '';
+  const link = byId('account-auth-link');
+  link.href = session.authorization?.verificationUri || '#';
+  link.hidden = !session.authorization?.verificationUri;
+  byId('account-auth-message').textContent = session.message || (session.state === 'pending' ? 'Waiting for authorization' : '');
+}
+
+async function loadAccounts() {
+  try {
+    renderAccounts(await fetchJson('/dashboard/api/accounts'));
+    byId('account-add-form').hidden = false;
+  } catch (error) {
+    if (error.status !== 409) throw error;
+    dashboardState.accounts = [];
+    clearNode(byId('accounts-body'));
+    byId('accounts-summary').textContent = 'Named-account routing is not enabled';
+    byId('account-add-form').hidden = true;
+    byId('account-auth').hidden = true;
+  }
+}
+
+async function setDefaultAccount(accountName, button) {
+  button.disabled = true;
+  try {
+    await fetchJson('/dashboard/api/accounts/default', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ accountName: accountName }),
+    });
+    await loadAccounts();
+    dashboardState.errors.delete('accounts');
+  } catch (error) {
+    dashboardState.errors.set('accounts', error);
+  } finally {
+    button.disabled = false;
+    renderErrors();
+  }
+}
+
+async function startAccountAuthentication(event) {
+  event.preventDefault();
+  const button = byId('account-add-button');
+  button.disabled = true;
+  let started = false;
+  byId('account-add-status').textContent = 'Starting authentication';
+  try {
+    const data = await fetchJson('/dashboard/api/accounts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        accountName: byId('account-name').value,
+        hostname: byId('account-hostname').value,
+        gheDomain: byId('account-ghe-domain').value,
+      }),
+    });
+    const session = data.authentication;
+    renderAccountAuthentication(session);
+    byId('account-add-status').textContent = 'Authorize in GitHub';
+    pollAccountAuthentication(session.id);
+    started = true;
+    dashboardState.errors.delete('accounts');
+  } catch (error) {
+    dashboardState.errors.set('accounts', error);
+    byId('account-add-status').textContent = 'Authentication could not start';
+  } finally {
+    if (!started) button.disabled = false;
+    renderErrors();
+  }
+}
+
+function pollAccountAuthentication(sessionId) {
+  if (dashboardState.accountAuthTimer !== null) clearTimeout(dashboardState.accountAuthTimer);
+  dashboardState.accountAuthTimer = setTimeout(async function check() {
+    try {
+      const data = await fetchJson('/dashboard/api/account-auth/' + encodeURIComponent(sessionId));
+      const session = data.authentication;
+      renderAccountAuthentication(session);
+      if (session.state === 'pending') {
+        dashboardState.accountAuthTimer = setTimeout(check, 1000);
+        return;
+      }
+      dashboardState.accountAuthTimer = null;
+      byId('account-add-button').disabled = false;
+      byId('account-add-status').textContent = session.state === 'succeeded' ? 'Account added' : 'Authentication failed';
+      if (session.state === 'succeeded') {
+        byId('account-add-form').reset();
+        await loadAccounts();
+      }
+      dashboardState.errors.delete('accounts');
+    } catch (error) {
+      dashboardState.accountAuthTimer = null;
+      byId('account-add-button').disabled = false;
+      dashboardState.errors.set('accounts', error);
+    }
+    renderErrors();
+  }, 1000);
 }
 
 function renderModels(data) {
@@ -826,6 +1022,7 @@ async function refreshAll() {
   try {
     await settleLoads([
       { scope: 'overview', load: loadOverview },
+      { scope: 'accounts', load: loadAccounts },
       { scope: 'models', load: loadModels },
       { scope: 'behavior', load: loadBehavior },
       { scope: 'requests', load: loadRequests },
@@ -844,6 +1041,7 @@ async function refreshLiveViews() {
     const loads = [{ scope: 'overview', load: loadOverview }];
     if (dashboardState.activeView === 'requests') loads.push({ scope: 'requests', load: loadRequests });
     if (dashboardState.activeView === 'behavior') loads.push({ scope: 'behavior', load: loadBehavior });
+    if (dashboardState.activeView === 'accounts') loads.push({ scope: 'accounts', load: loadAccounts });
     await settleLoads(loads);
   } finally {
     dashboardState.refreshing = false;
@@ -860,6 +1058,7 @@ async function refreshSelectedView(view) {
   try {
     const loads = [];
     if (view === 'overview') loads.push({ scope: 'overview', load: loadOverview });
+    if (view === 'accounts') loads.push({ scope: 'accounts', load: loadAccounts });
     if (view === 'models') loads.push({ scope: 'models', load: loadModels });
     if (view === 'behavior') loads.push({ scope: 'behavior', load: loadBehavior });
     if (view === 'requests') loads.push({ scope: 'requests', load: loadRequests });
@@ -893,6 +1092,7 @@ byId('model-filter').addEventListener('input', renderFilteredModels);
 byId('model-group-vendor').addEventListener('change', renderFilteredModels);
 byId('model-sort').addEventListener('change', renderFilteredModels);
 byId('copy-models').addEventListener('click', copySelectedModels);
+byId('account-add-form').addEventListener('submit', startAccountAuthentication);
 document.addEventListener('visibilitychange', function () {
   if (!document.hidden) refreshLiveViews();
 });
