@@ -199,6 +199,7 @@ direct and do not pass through this model.
 | `model-resolver.ts`         | Model ID resolution with configurable fallbacks      |
 | `error.ts`                  | HTTPError class, error forwarding, validation errors |
 | `config.ts`                 | Config file reader (`~/.local/share/ghc-proxy/config.json`) |
+| `credentials.ts`            | Versioned named-account credential storage and legacy config migration |
 | `upstream-signal.ts`        | AbortSignal management for upstream requests         |
 | `retry.ts`                  | Retry logic with exponential backoff                 |
 | `request-timeout.ts`        | Request timeout helpers                              |

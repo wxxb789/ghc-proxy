@@ -197,11 +197,35 @@ The proxy reads an optional JSON config file at:
 ~/.local/share/ghc-proxy/config.json
 ```
 
+GitHub credentials are stored separately at
+`~/.local/share/ghc-proxy/credentials.json`. The credential file is versioned,
+selects one active named account, and can retain additional named accounts for
+future account-selection features:
+
+```json
+{
+  "version": 1,
+  "activeAccount": "default",
+  "accounts": {
+    "default": {
+      "githubToken": "<base64>",
+      "gheDomain": "company.ghe.com"
+    }
+  }
+}
+```
+
+Base64 is low-cost obfuscation, not encryption; anyone who can read the file can
+decode it. On first startup after upgrading, a legacy `config.json` token is
+copied into this store only after a complete temporary config backup is created.
+The legacy field and backup are removed after the stored credential succeeds at
+both GitHub identity validation and Copilot token acquisition. A failed or
+interrupted migration keeps the backup and reports its recovery path.
+
 All fields are optional. The full schema:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `githubToken` | `string` | unset | Persisted GitHub token. The device-code flow (`auth` or first startup) writes it automatically; `start --github-token` is runtime-only and does not write this field |
 | `modelRewrites` | `{ from, to }[]` | `[]` | Glob-pattern model substitution rules (see [Model Rewrites](#model-rewrites)) |
 | `modelFallback` | `object` | built-in family defaults | Override default model fallbacks (see [Customizing Fallbacks](#customizing-fallbacks)) |
 | `modelFallback.claudeOpus` | `string` | `claude-opus-5` | Fallback for `claude-opus-*` models |

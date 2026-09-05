@@ -103,8 +103,9 @@ Tracks the next allowed request time internally (Unix ms) and exposes
 ### ConfigStore (`src/state/config-store.ts`)
 
 `ConfigStore` is a typed singleton class that centralizes route-facing feature
-and model-policy queries derived from the config file. Authentication, GHE, and
-upstream queue startup still read `getCachedConfig()` directly. Instead of
+and model-policy queries derived from the config file. Authentication reads the
+separate credential store, while GHE selection and upstream queue startup still
+read `getCachedConfig()` directly. Instead of
 adding scattered standalone feature getters, route code uses the
 `configStore` singleton:
 
@@ -139,9 +140,6 @@ Read once at startup via `getCachedConfig()`:
 
 ```typescript
 interface ConfigFile {
-  // Authentication
-  githubToken?: string
-
   // Model fallbacks
   modelFallback?: {
     claudeOpus?: string // Fallback for claude-opus-* models
@@ -188,6 +186,61 @@ interface ConfigFile {
 }
 ```
 
+`githubToken` is intentionally absent. `readConfig()` removes that legacy key
+from its in-memory result even while an interrupted migration keeps the original
+file available for recovery.
+
+## Credential File (`~/.local/share/ghc-proxy/credentials.json`)
+
+Long-lived GitHub credentials have a separate versioned contract:
+
+```typescript
+interface CredentialStoreFile {
+  version: 1
+  activeAccount: string
+  accounts: Record<string, {
+    githubToken: string // Canonical Base64
+    gheDomain?: string // Tenant bound to this credential
+  }>
+}
+```
+
+The current runtime reads and writes the active account, initially `default`.
+Sibling named accounts are preserved so account selection can be added without
+another storage migration. Base64 only reduces accidental disclosure when a
+configuration file is inspected or pasted; it does not resist deliberate file
+access or decoding. On non-Windows platforms, credential and migration files
+are written with mode `0600`; Windows uses its native file ACL behavior.
+
+Legacy migration uses
+`~/.local/share/ghc-proxy/config.json.github-token-migration.bak` as the commit
+record and recovery copy. The sequence is backup the complete config, atomically
+stage the credential file, validate GitHub identity, acquire a Copilot token,
+atomically remove the legacy config field, and delete the backup last. Any
+failure leaves the backup in place and reports its path. A restart resumes the
+same pending migration without starting device login or duplicating accounts.
+Forced re-authentication first tries that normal completion path. When the
+legacy credential is explicitly rejected with `401` or `403`, the replacement
+credential must pass both GitHub identity and Copilot token validation before
+it replaces the staged credential and the legacy backup is removed. Transient
+validation failures remain fail-closed. Replacement commit progress is recorded
+in a versioned
+`config.json.github-token-migration.bak.replacement.json` transaction journal.
+The journal stores only SHA-256 token digests, never either raw token, and is
+deleted last. A restart can therefore distinguish an intentional validated
+replacement from unrelated credential drift, bind validation to the replacement
+tenant, persist that tenant back to `config.json`, and finish cleanup
+idempotently without starting another device flow.
+
+An explicit `--ghe-domain` remains the requested runtime tenant during this
+recovery. The pending replacement is validated and committed against its stored
+tenant first; when the explicit tenant differs, authentication then continues
+against the requested tenant. If that second login fails, the recovered
+credential remains committed instead of rolling back to the legacy token.
+Replacement also accepts the legitimate split state where `config.json` was
+already cleaned but the backup had not yet been deleted, provided the backup and
+active stored legacy credential still match.
+
 ## CLI Arguments → Runtime Settings
 
 The `start` command maps CLI flags onto `authStore` and the upstream queue:
@@ -211,7 +264,7 @@ The `start` command maps CLI flags onto `authStore` and the upstream queue:
 | `--upstream-queue-max-delay` | `upstreamQueueMaxDelaySeconds` | `60` (computed backoff only) |
 | `--proxy-env`          | (http proxy setup)        | `false`        |
 | `--claude-code`        | (interactive setup)       | `false`        |
-| `--github-token` / `-g` | `authStore.githubToken`  | persisted config/device flow |
+| `--github-token` / `-g` | `authStore.githubToken`  | credential store/device flow |
 | `--ghe-domain` / `--ghe` | `authStore.gheDomain`   | persisted config |
 
 ## Environment Variables
@@ -229,7 +282,7 @@ These are the only environment variables the proxy binary reads at runtime for
 configuration (`MODEL_FALLBACK_*` in `src/lib/model-resolver.ts`,
 `DUMP_FAILED_PAYLOADS` in `src/start.ts`). There is **no** `GITHUB_TOKEN` /
 `GH_TOKEN` environment override in application code — supply a GitHub token via
-the `--github-token` (`-g`) flag or a persisted `config.json` (`githubToken`).
+the `--github-token` (`-g`) flag or the persisted credential store.
 The Docker image is the exception: its [`entrypoint.sh`](../../entrypoint.sh)
 forwards a non-empty `GH_TOKEN` to `start --github-token`, so `GH_TOKEN` works
 only inside the container, not for the bare binary.
@@ -254,13 +307,22 @@ retaining other individually valid fields.
    `configureUpstreamRequestQueue()` directly
 5. Apply persisted GHE domain, with the CLI value taking precedence
 6. Cache the VS Code version
-7. Resolve the GitHub token (explicit CLI token, persisted token, or device
-   flow), then obtain and schedule refresh for the Copilot token
-8. Create the Copilot client and cache the upstream model list
-9. Optionally prompt for Claude Code model choices and print its launch command
-10. Print the startup banner, create the Elysia app, and call `listen()` using
+7. When `--github-token` is present, keep it process-only. If a legacy
+   `config.json` credential migration is pending, independently validate that
+   stored candidate against its original GitHub tenant, acquire a Copilot token,
+   and finalize the migration before using the runtime override. The override is
+   never written to the credential store. If legacy validation fails, retain the
+   recovery files, report the migration error, and continue with the explicit
+   runtime override. Otherwise, stage or resume any legacy migration and resolve
+   the GitHub token from the credential store or device flow
+8. For the persisted path, validate the GitHub identity, obtain and schedule
+   refresh for the Copilot token, then finalize a pending migration by removing
+   the legacy field and deleting its backup
+9. Create the Copilot client and cache the upstream model list
+10. Optionally prompt for Claude Code model choices and print its launch command
+11. Print the startup banner, create the Elysia app, and call `listen()` using
     the Bun-native adapter or `@elysiajs/node` fallback
-11. Register `SIGTERM`/`SIGINT` cleanup for token refresh and the HTTP server
+12. Register `SIGTERM`/`SIGINT` cleanup for token refresh and the HTTP server
 ```
 
 ## Responses Official Emulator
@@ -315,5 +377,6 @@ Copilot Token (short-lived, auto-refreshed)
 ```
 
 Token persistence:
-- The GitHub token is persisted in `~/.local/share/ghc-proxy/config.json` (the `githubToken` field, written via `writeConfigField`)
+- The GitHub token is Base64-obfuscated in the active named account in `~/.local/share/ghc-proxy/credentials.json`
+- After migration completes, `config.json` contains non-secret settings only; a legacy raw token remains there solely while a migration backup is pending or recovery is required
 - The Copilot token is always derived at runtime (not persisted)

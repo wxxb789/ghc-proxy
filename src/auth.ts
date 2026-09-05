@@ -3,12 +3,15 @@
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
+import { cacheVSCodeVersion } from '~/clients/factory'
+import { applyGheDomain } from '~/clients/ghe-domain'
+import { getCachedConfig, readConfig } from '~/lib/config'
+import { ensurePaths } from '~/lib/paths'
+import {
+  finalizePendingGitHubCredentialMigration,
+  setupGitHubToken,
+} from '~/lib/token'
 import { authStore } from '~/state'
-import { cacheVSCodeVersion } from './clients/factory'
-import { applyGheDomain } from './clients/ghe-domain'
-import { getCachedConfig, readConfig } from './lib/config'
-import { ensurePaths } from './lib/paths'
-import { setupGitHubToken } from './lib/token'
 
 interface RunAuthOptions {
   verbose: boolean
@@ -32,8 +35,14 @@ async function runAuth(options: RunAuthOptions): Promise<void> {
   applyGheDomain(authStore, getCachedConfig().gheDomain, options.gheDomain)
 
   await cacheVSCodeVersion()
-  await setupGitHubToken({ force: true })
-  consola.success('GitHub token written to config.json')
+  const githubSetup = await setupGitHubToken({
+    force: true,
+    explicitGheDomain: options.gheDomain === undefined
+      ? undefined
+      : { value: authStore.gheDomain },
+  })
+  await finalizePendingGitHubCredentialMigration(githubSetup)
+  consola.success('GitHub credential written to credentials.json')
 }
 
 export const auth = defineCommand({

@@ -77,7 +77,20 @@ describe('config module', () => {
     }
     await fs.writeFile(tempConfigPath, JSON.stringify(fullConfig))
     const config = await readConfig()
-    expect(config).toEqual(fullConfig)
+    expect(config).toEqual({
+      modelFallback: {
+        claudeOpus: 'gpt-4-opus',
+      },
+      upstreamQueueConcurrency: 12,
+      upstreamQueueMaxRetries: 2,
+      upstreamRecoveryBudgetSeconds: 60,
+      overloadFallbacks: {
+        'claude-opus-5': 'claude-opus-4.8',
+      },
+      upstreamQueueBaseDelaySeconds: 3,
+      upstreamQueueMaxDelaySeconds: 45,
+    })
+    expect('githubToken' in getCachedConfig()).toBe(false)
   })
 
   test('readConfig() — partial config → returns partial object', async () => {
@@ -112,10 +125,11 @@ describe('config module', () => {
   test.each([-1, 0.5, 3])('readConfig() rejects upstreamQueueMaxRetries=%p without dropping valid fields', async (value) => {
     await fs.writeFile(tempConfigPath, JSON.stringify({
       githubToken: 'still-valid',
+      smallModel: 'gpt-5-mini',
       upstreamQueueMaxRetries: value,
     }))
 
-    expect(await readConfig()).toEqual({ githubToken: 'still-valid' })
+    expect(await readConfig()).toEqual({ smallModel: 'gpt-5-mini' })
   })
 
   test.each([1, 60, 120])('readConfig() accepts upstreamRecoveryBudgetSeconds=%i', async (value) => {
@@ -127,10 +141,11 @@ describe('config module', () => {
   test.each([0, 1.5, 121])('readConfig() rejects upstreamRecoveryBudgetSeconds=%p without dropping valid fields', async (value) => {
     await fs.writeFile(tempConfigPath, JSON.stringify({
       githubToken: 'still-valid',
+      smallModel: 'gpt-5-mini',
       upstreamRecoveryBudgetSeconds: value,
     }))
 
-    expect(await readConfig()).toEqual({ githubToken: 'still-valid' })
+    expect(await readConfig()).toEqual({ smallModel: 'gpt-5-mini' })
   })
 
   test('readConfig() drops blank, self, and reciprocal fallback entries but keeps unrelated mappings', async () => {
@@ -151,11 +166,11 @@ describe('config module', () => {
   })
 
   test('writeConfigField() — file doesn\'t exist → creates file, keeps platform-appropriate permissions', async () => {
-    await writeConfigField('githubToken', 'new-token')
+    await writeConfigField('gheDomain', 'company.ghe.com')
 
     const content = await fs.readFile(tempConfigPath)
     const parsed = JSON.parse(content.toString()) as unknown
-    expect(parsed).toEqual({ githubToken: 'new-token' })
+    expect(parsed).toEqual({ gheDomain: 'company.ghe.com' })
 
     if (process.platform !== 'win32') {
       const stats = await fs.stat(tempConfigPath)
@@ -165,22 +180,25 @@ describe('config module', () => {
 
   test('writeConfigField() — merges with existing fields', async () => {
     await fs.writeFile(tempConfigPath, JSON.stringify({ existing: 'value' }))
-    await writeConfigField('githubToken', 'new-token')
+    await writeConfigField('gheDomain', 'company.ghe.com')
 
     const content = await fs.readFile(tempConfigPath)
     const parsed = JSON.parse(content.toString()) as unknown
-    expect(parsed).toEqual({ existing: 'value', githubToken: 'new-token' })
+    expect(parsed).toEqual({ existing: 'value', gheDomain: 'company.ghe.com' })
   })
 
   test('getCachedConfig() — returns last loaded/written config', async () => {
-    const testConfig = { githubToken: 'cached-token' }
+    const testConfig = { githubToken: 'legacy-token', smallModel: 'gpt-5-mini' }
     await fs.writeFile(tempConfigPath, JSON.stringify(testConfig))
 
     await readConfig()
-    expect(getCachedConfig()).toEqual(testConfig)
+    expect(getCachedConfig()).toEqual({ smallModel: 'gpt-5-mini' })
 
-    await writeConfigField('githubToken', 'updated-token')
-    expect(getCachedConfig()).toEqual({ githubToken: 'updated-token' })
+    await writeConfigField('gheDomain', 'company.ghe.com')
+    expect(getCachedConfig()).toEqual({
+      smallModel: 'gpt-5-mini',
+      gheDomain: 'company.ghe.com',
+    })
   })
 
   test('responses auto-compaction and auto-context-management are disabled by default', async () => {
@@ -217,16 +235,16 @@ describe('config module', () => {
   })
 
   test('writeConfigField() — gheDomain merges with existing config fields', async () => {
-    await fs.writeFile(tempConfigPath, JSON.stringify({ githubToken: 'existing-token' }))
+    await fs.writeFile(tempConfigPath, JSON.stringify({ existing: 'value' }))
     await writeConfigField('gheDomain', 'my-enterprise.github.com')
 
     const content = await fs.readFile(tempConfigPath)
     const parsed = JSON.parse(content.toString()) as Record<string, unknown>
-    expect(parsed).toEqual({ githubToken: 'existing-token', gheDomain: 'my-enterprise.github.com' })
+    expect(parsed).toEqual({ existing: 'value', gheDomain: 'my-enterprise.github.com' })
   })
 
   test('readConfig() — gheDomain is optional and absent by default', async () => {
-    await fs.writeFile(tempConfigPath, JSON.stringify({ githubToken: 'token-only' }))
+    await fs.writeFile(tempConfigPath, JSON.stringify({ smallModel: 'gpt-5-mini' }))
     const config = await readConfig()
     expect(config.gheDomain).toBeUndefined()
   })
