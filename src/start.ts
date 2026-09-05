@@ -13,7 +13,7 @@ import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
 import { recoverAccountManagementTransaction } from '~/lib/account-management-transaction'
-import { compileAccountRouting } from '~/lib/account-routing'
+import { compileAccountRouting, normalizeAccountName } from '~/lib/account-routing'
 import {
   getCachedConfig,
   MAX_UPSTREAM_QUEUE_RETRIES,
@@ -26,6 +26,7 @@ import { ensurePaths } from '~/lib/paths'
 import { setupAuthTokens, setupRuntimeOverrideTokens } from '~/lib/token'
 import { createServer } from '~/server'
 import {
+  aliasLegacyAccountRuntime,
   authStore,
   configureAccountRuntimes,
   createAccountRuntime,
@@ -58,6 +59,7 @@ interface RunServerOptions {
 }
 
 const UNSIGNED_INTEGER_RE = /^\d+$/
+const LEGACY_BOOTSTRAP_HOSTNAME = 'defaultaccount.localhost'
 
 async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
   const models = modelCache.getModels()
@@ -152,14 +154,36 @@ async function runServer(options: RunServerOptions): Promise<void> {
     maxDelayMs: secondsToMs(upstreamQueueMaxDelaySeconds),
   })
 
-  const accountSetup = cachedConfig.accountRouting
-    ? await setupRoutedAccounts(options, accountType, cachedConfig.accountRouting)
-    : {
-        accountManager: undefined,
-        cleanup: await setupLegacyAccount(options, accountType, cachedConfig.gheDomain),
-      }
+  let accountSetup: {
+    accountManager?: AccountManager
+    cleanup: () => void | Promise<void>
+  }
+  if (cachedConfig.accountRouting) {
+    accountSetup = await setupRoutedAccounts(
+      options,
+      accountType,
+      cachedConfig.accountRouting,
+    )
+  }
+  else if (!options.githubToken && options.gheDomain === undefined) {
+    accountSetup = await setupLegacyAccountManager(
+      options,
+      accountType,
+      cachedConfig.gheDomain,
+    )
+  }
+  else {
+    consola.warn(
+      'Dashboard named-account migration is unavailable while a process-wide GitHub token or GHE tenant override is active.',
+    )
+    accountSetup = {
+      accountManager: undefined,
+      cleanup: await setupLegacyAccount(options, accountType, cachedConfig.gheDomain),
+    }
+  }
 
-  const serverHostname = cachedConfig.accountRouting?.baseHostname ?? 'localhost'
+  const serverHostname = accountSetup.accountManager?.getRoutingSummary().baseHostname
+    ?? 'localhost'
   const serverUrl = `http://${serverHostname}:${options.port}`
 
   try {
@@ -238,8 +262,81 @@ async function setupLegacyAccount(
           : { value: authStore.gheDomain },
       })
 
-  await cacheModels(createCopilotClient())
-  return cleanup
+  try {
+    await cacheModels(createCopilotClient())
+    return cleanup
+  }
+  catch (error) {
+    cleanup()
+    throw error
+  }
+}
+
+async function setupLegacyAccountManager(
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+  persistedGheDomain?: string,
+): Promise<{
+  accountManager?: AccountManager
+  cleanup: () => void | Promise<void>
+}> {
+  const storedCredentials = await readGitHubCredentials()
+  let accountName: string
+  try {
+    accountName = normalizeAccountName(
+      storedCredentials?.activeAccount ?? 'default',
+    )
+  }
+  catch {
+    consola.warn(
+      'Dashboard named-account migration is unavailable because the active legacy account name is not routing-compatible.',
+    )
+    return {
+      accountManager: undefined,
+      cleanup: await setupLegacyAccount(options, accountType, persistedGheDomain),
+    }
+  }
+  const runtime = aliasLegacyAccountRuntime(accountName)
+  let cleanup: (() => void) | undefined
+  try {
+    cleanup = await runWithAccountRuntime(
+      runtime,
+      () => setupLegacyAccount(options, accountType, persistedGheDomain),
+    )
+    const credentials = await readGitHubCredentials()
+    if (!credentials) {
+      throw new Error('Legacy account migration requires a persisted GitHub credential.')
+    }
+    if (credentials.activeAccount !== accountName) {
+      throw new Error('The active legacy account changed while Dashboard migration was being prepared.')
+    }
+
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: accountName,
+      hostnames: { [LEGACY_BOOTSTRAP_HOSTNAME]: accountName },
+    }, Object.keys(credentials.accounts))
+    const accountManager = new AccountManager({
+      authDefaults: serverAuthDefaults(options, accountType),
+      knownAccountNames: Object.keys(credentials.accounts),
+      refreshCleanups: new Map([[accountName, cleanup]]),
+      routing,
+      routingEnabled: false,
+      runtimes: [runtime],
+    })
+    consola.info(
+      `The legacy account ${JSON.stringify(accountName)} remains the default. Enable named-account routing in the Dashboard; ${LEGACY_BOOTSTRAP_HOSTNAME} is the editable suggested hostname.`,
+    )
+    return {
+      accountManager,
+      cleanup: () => accountManager.stop(),
+    }
+  }
+  catch (error) {
+    cleanup?.()
+    resetAccountRuntimes()
+    throw error
+  }
 }
 
 async function setupRoutedAccounts(

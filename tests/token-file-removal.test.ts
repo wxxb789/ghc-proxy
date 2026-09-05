@@ -159,6 +159,7 @@ const {
   getCurrentAccountName,
   modelCache,
   resetAccountRuntimes,
+  resolveRequestAccountRuntime,
 } = await import('../src/state')
 const { getCachedConfig, readConfig } = await import('../src/lib/config')
 
@@ -369,6 +370,75 @@ describe('GitHub credential migration', () => {
     })
     expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
     await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
+  })
+
+  test('start exposes the legacy account for explicit Dashboard routing bootstrap', async () => {
+    await writeGitHubCredential('primary-token', undefined, PATHS, 'primary')
+
+    await runStartCommand(makeStartArgs())
+
+    const firstManager = (serverOptions[0] as {
+      accountManager: {
+        bootstrapAccountRouting: (hostname: string) => Promise<void>
+        getRoutingSummary: () => unknown
+        stop: () => Promise<void>
+      }
+    }).accountManager
+    expect(firstManager.getRoutingSummary()).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'primary',
+      routingEnabled: false,
+    })
+    await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
+
+    await firstManager.bootstrapAccountRouting('personal.localhost')
+
+    expect(resolveRequestAccountRuntime(new Request('http://localhost/token'))?.name)
+      .toBe('primary')
+    expect(resolveRequestAccountRuntime(new Request('http://personal.localhost/token'))?.name)
+      .toBe('primary')
+    expect(JSON.parse(await fs.readFile(PATHS.CONFIG_PATH, 'utf8'))).toMatchObject({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'primary',
+        hostnames: { 'personal.localhost': 'primary' },
+      },
+    })
+
+    await firstManager.stop()
+    resetStores()
+    serverOptions.length = 0
+    listenCalls.length = 0
+    await runStartCommand(makeStartArgs())
+
+    expect(getCurrentAccountName()).toBe('primary')
+    expect((serverOptions[0] as {
+      accountManager: { getRoutingSummary: () => unknown }
+    }).accountManager.getRoutingSummary()).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'primary',
+      routingEnabled: true,
+    })
+  })
+
+  test('keeps legacy mode when the active account name cannot be routed safely', async () => {
+    await fs.writeFile(PATHS.CREDENTIALS_PATH, JSON.stringify({
+      version: 1,
+      activeAccount: 'legacy account',
+      accounts: {
+        'legacy account': {
+          githubToken: Buffer.from('legacy-token').toString('base64'),
+        },
+      },
+    }))
+
+    await runStartCommand(makeStartArgs())
+
+    expect(serverOptions[0]).toMatchObject({ accountManager: undefined })
+    expect(authStore.githubToken).toBe('legacy-token')
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
+      'active legacy account name is not routing-compatible',
+    ))
   })
 
   test('start initializes every routed account and keeps the explicit default active outside requests', async () => {
@@ -749,6 +819,7 @@ describe('GitHub credential migration', () => {
     await runStartCommand(makeStartArgs({ 'ghe-domain': 'requested.ghe.com' }))
 
     expect(listenCalls).toEqual([4141])
+    expect(serverOptions[0]).toMatchObject({ accountManager: undefined })
     expect(mockPollAccessToken).toHaveBeenCalledTimes(1)
     expect(githubUserTokens).toEqual(['replacement-token', 'new-test-token'])
     expect(githubUserApiBaseUrls).toEqual([
@@ -941,6 +1012,7 @@ describe('GitHub credential migration', () => {
     expect(configContent).not.toContain('runtime-override-token')
     expect(credentialsContent).not.toContain('runtime-override-token')
     expect(JSON.parse(configContent)).toEqual({ smallModel: 'gpt-5-mini' })
+    expect(serverOptions[0]).toMatchObject({ accountManager: undefined })
     await expect(fs.access(PATHS.CONFIG_MIGRATION_BACKUP_PATH)).rejects.toThrow()
   })
 

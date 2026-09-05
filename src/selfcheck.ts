@@ -544,9 +544,11 @@ async function probeDashboardBundleContract(): Promise<void> {
   assertProbe(html.includes('/dashboard/styles.css'), 'dashboard HTML lost its CSS route')
   assertProbe(html.includes('/dashboard/app.js'), 'dashboard HTML lost its JS route')
   assertProbe(html.includes('data-tab="accounts"'), 'dashboard HTML lost its Accounts view')
+  assertProbe(html.includes('id="account-bootstrap-form"'), 'dashboard HTML lost legacy routing bootstrap')
   assertProbe(css.includes('.app-header'), 'dashboard CSS was not bundled')
   assertProbe(css.includes('.account-auth[hidden]'), 'dashboard CSS lost hidden auth state')
   assertProbe(js.includes('fetchJson(\'/dashboard/api/overview\')'), 'dashboard JS was not bundled')
+  assertProbe(js.includes('/dashboard/api/accounts/bootstrap'), 'dashboard JS lost legacy routing bootstrap')
   assertProbe(js.includes('/dashboard/api/accounts/default'), 'dashboard JS lost default-account management')
   assertProbe(!js.includes('innerHTML'), 'dashboard JS uses unsafe HTML insertion')
 }

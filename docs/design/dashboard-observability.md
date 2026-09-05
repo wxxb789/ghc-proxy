@@ -149,6 +149,15 @@ before reading configuration. A malformed journal fails closed without changing
 either managed file. Default changes use the same transaction boundary, so a
 failed switch leaves the old default active and persistent.
 
+Legacy single-account startup prepares, but does not commit, a one-account
+routing table. The active legacy credential remains the default and receives the
+editable suggestion `defaultaccount.localhost`. The Dashboard bootstrap action
+validates the chosen hostname, writes `accountRouting` through the same journal,
+and installs the already-authenticated legacy runtime only after the write is
+ready to commit. Before confirmation, arbitrary legacy Host values continue to
+work. After success, the base and dedicated hostnames are exact and unknown
+hosts return `421`. A failed bootstrap restores routing-disabled legacy state.
+
 ## Serving and Security
 
 HTML, CSS, and browser JavaScript are TypeScript string constants bundled into
@@ -165,9 +174,11 @@ check means a remote client cannot bypass the boundary by spoofing one of those
 Host values. Runtime values are inserted with DOM `textContent`, not HTML
 parsing.
 
-The same guard covers all account-management methods. When named-account
-routing is disabled, management APIs return `409` instead of inferring a base
-hostname or silently converting legacy single-account state.
+The same guard covers all account-management methods. In ordinary legacy mode,
+account inspection and the explicit bootstrap action are available, while add
+and default-switch operations return `409` until routing is enabled. A process
+using a global GitHub-token or GHE-tenant override does not expose bootstrap and
+returns `409` for account management rather than persisting ambiguous state.
 
 `/dashboard` requests are excluded from both the request ring and access log so
 polling does not displace proxy traffic or create console noise.

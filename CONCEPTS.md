@@ -73,6 +73,11 @@ balancing. An unknown hostname is rejected before dispatch, and forwarded-host
 headers do not change the selection. This is deterministic routing, not caller
 authorization.
 
+A legacy single-account process may prepare this routing mode for explicit
+Dashboard confirmation. Its active credential remains the default account and
+receives the editable dedicated-hostname suggestion `defaultaccount.localhost`;
+no Host behavior changes until the bootstrap transaction commits.
+
 ### Compact request
 A conversation-summarization request, identified by a recognizable system-prompt signature that Claude Code sends when condensing context. When small-model routing is enabled, a compact request may be rerouted to a cheaper model, provided that model preserves the original's endpoint support and required capabilities.
 

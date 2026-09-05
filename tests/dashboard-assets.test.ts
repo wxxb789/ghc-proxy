@@ -36,6 +36,7 @@ interface DashboardRuntime {
   renderOverview: (data: unknown) => void
   renderRequests: (data: { active: RequestFixture[], recent: RequestFixture[] }) => void
   settleLoads: (loads: Array<{ scope: string, load: () => Promise<void> }>) => Promise<void>
+  startAccountBootstrap: (event: { preventDefault: () => void }) => Promise<void>
 }
 
 interface RequestFixture {
@@ -45,7 +46,11 @@ interface RequestFixture {
   startedAt: number
 }
 
-function createRuntime() {
+function createRuntime(options: {
+  fetch?: (input: Request | URL | string, init?: RequestInit) => Promise<Response>
+  locationHref?: string
+  replaceLocation?: (href: string) => void
+} = {}) {
   const elements = new Map<string, FakeElement>()
   const document = {
     createElement: () => new FakeElement(),
@@ -66,11 +71,19 @@ function createRuntime() {
   const script = DASHBOARD_JS.slice(0, initializationIndex)
   const context = createContext({
     document,
+    fetch: options.fetch,
     navigator: {},
-    window: { matchMedia: () => ({ matches: false }) },
+    URL,
+    window: {
+      location: {
+        href: options.locationHref ?? 'http://localhost:4141/dashboard',
+        replace: options.replaceLocation ?? (() => {}),
+      },
+      matchMedia: () => ({ matches: false }),
+    },
   })
 
-  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads };`).runInContext(context)
+  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads, startAccountBootstrap };`).runInContext(context)
 
   return {
     elements,
@@ -162,6 +175,7 @@ describe('dashboard embedded state', () => {
     runtime.renderAccounts({
       baseHostname: 'localhost',
       defaultAccount: 'personal',
+      routingEnabled: true,
       accounts: [{
         name: 'personal',
         hostname: 'personal.localhost',
@@ -183,6 +197,60 @@ describe('dashboard embedded state', () => {
     expect(JSON.stringify(row)).toContain('personal.localhost')
     expect(JSON.stringify(row)).toContain('octocat')
     expect(JSON.stringify(row)).not.toContain('token')
+  })
+
+  test('shows an editable defaultaccount hostname before legacy routing bootstrap', () => {
+    const { elements, runtime } = createRuntime()
+
+    runtime.renderAccounts({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      routingEnabled: false,
+      accounts: [{
+        name: 'default',
+        hostname: 'defaultaccount.localhost',
+        isDefault: true,
+        tenant: 'github.com',
+        github: { status: 'ok', login: 'octocat' },
+        copilot: { status: 'ok', modelsLoaded: true },
+        quota: { status: 'unavailable' },
+      }],
+    })
+
+    expect(DASHBOARD_HTML).toContain('id="account-bootstrap-form"')
+    expect(DASHBOARD_HTML).toContain('id="account-add-panel" class="panel full-width account-add-panel" hidden')
+    expect(DASHBOARD_HTML).toContain('You can change this hostname before enabling')
+    expect(elements.get('account-bootstrap-panel')?.hidden).toBe(false)
+    expect(elements.get('account-add-panel')?.hidden).toBe(true)
+    expect(elements.get('account-bootstrap-hostname')?.value)
+      .toBe('defaultaccount.localhost')
+    expect(elements.get('accounts-summary')?.textContent)
+      .toBe('Legacy default default / routing not enabled')
+  })
+
+  test.each([
+    'http://127.0.0.1:4187/dashboard',
+    'http://0.0.0.0:4187/dashboard',
+    'http://defaultaccount.localhost:4187/dashboard',
+  ])('redirects %s to the base hostname after bootstrap', async (locationHref) => {
+    const replacements: string[] = []
+    let requestBody = ''
+    const { elements, runtime } = createRuntime({
+      locationHref,
+      replaceLocation: href => replacements.push(href),
+      fetch: async (_input, init) => {
+        requestBody = String(init?.body)
+        return Response.json({ baseHostname: 'localhost' })
+      },
+    })
+    const hostnameInput = new FakeElement()
+    hostnameInput.value = 'primary.localhost'
+    elements.set('account-bootstrap-hostname', hostnameInput)
+
+    await runtime.startAccountBootstrap({ preventDefault: () => {} })
+
+    expect(JSON.parse(requestBody)).toEqual({ hostname: 'primary.localhost' })
+    expect(replacements).toEqual(['http://localhost:4187/dashboard'])
   })
 
   test('renders only public device authorization fields', () => {

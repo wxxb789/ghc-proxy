@@ -155,6 +155,39 @@ describe('dashboard API security projection', () => {
 })
 
 describe('dashboard account management API', () => {
+  test('bootstraps legacy routing with an editable dedicated hostname', async () => {
+    const manager = accountManagerFixture({ routingEnabled: false })
+    const app = createDashboardRoutes({ accountManager: manager })
+
+    const accountsResponse = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts',
+    ))
+    const bootstrapResponse = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts/bootstrap',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'origin': 'http://localhost',
+        },
+        body: JSON.stringify({ hostname: 'personal.localhost' }),
+      },
+    ))
+
+    expect(accountsResponse.status).toBe(200)
+    expect(await accountsResponse.json()).toMatchObject({
+      routingEnabled: false,
+      accounts: [{
+        name: 'default',
+        hostname: 'defaultaccount.localhost',
+        isDefault: true,
+      }],
+    })
+    expect(bootstrapResponse.status).toBe(200)
+    expect(manager.bootstrapAccountRouting).toHaveBeenCalledWith('personal.localhost')
+    expect(await bootstrapResponse.json()).toMatchObject({ routingEnabled: true })
+  })
+
   test('serves account data and authentication state without exposing credentials', async () => {
     const manager = accountManagerFixture()
     const app = createDashboardRoutes({ accountManager: manager })
@@ -242,6 +275,26 @@ describe('dashboard account management API', () => {
     expect(manager.setDefaultAccount).not.toHaveBeenCalled()
   })
 
+  test('applies the existing access guard before legacy routing bootstrap', async () => {
+    const manager = accountManagerFixture({ routingEnabled: false })
+    const app = createDashboardRoutes({ accountManager: manager })
+
+    const response = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts/bootstrap',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'origin': 'https://attacker.example',
+        },
+        body: JSON.stringify({ hostname: 'personal.localhost' }),
+      },
+    ))
+
+    expect(response.status).toBe(403)
+    expect(manager.bootstrapAccountRouting).not.toHaveBeenCalled()
+  })
+
   test('rejects invalid bodies and missing authentication sessions', async () => {
     const manager = accountManagerFixture()
     const app = createDashboardRoutes({ accountManager: manager })
@@ -257,9 +310,18 @@ describe('dashboard account management API', () => {
     const missing = await app.handle(new Request(
       'http://localhost/dashboard/api/account-auth/missing',
     ))
+    const invalidBootstrap = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts/bootstrap',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      },
+    ))
 
     expect(invalid.status).toBe(400)
     expect(missing.status).toBe(404)
+    expect(invalidBootstrap.status).toBe(400)
   })
 
   test('reports account management as unavailable without a configured manager', async () => {
@@ -313,15 +375,19 @@ function usageFixture(): CopilotUsageResponse {
   }
 }
 
-function accountManagerFixture(): DashboardAccountManagement & {
+function accountManagerFixture(
+  options: { routingEnabled?: boolean } = {},
+): DashboardAccountManagement & {
   beginAddAccount: ReturnType<typeof mock>
+  bootstrapAccountRouting: ReturnType<typeof mock>
   setDefaultAccount: ReturnType<typeof mock>
 } {
   let defaultAccount = 'default'
+  let routingEnabled = options.routingEnabled ?? true
   return {
     listAccounts: async () => [{
       name: 'default',
-      hostname: 'default.localhost',
+      hostname: routingEnabled ? 'default.localhost' : 'defaultaccount.localhost',
       isDefault: true,
       tenant: 'github.com',
       github: { status: 'ok', login: 'octocat' },
@@ -359,6 +425,10 @@ function accountManagerFixture(): DashboardAccountManagement & {
     getRoutingSummary: () => ({
       baseHostname: 'localhost',
       defaultAccount,
+      routingEnabled,
+    }),
+    bootstrapAccountRouting: mock(async () => {
+      routingEnabled = true
     }),
     setDefaultAccount: mock(async (accountName: string) => {
       defaultAccount = accountName

@@ -204,8 +204,12 @@ interface ConfigFile {
 }
 ```
 
-`accountRouting` is an opt-in fail-closed boundary. `baseHostname` always maps
-to `defaultAccount`; every routed account must also appear exactly once in
+`accountRouting` is an opt-in fail-closed boundary. A normal legacy process can
+prepare an explicit Dashboard bootstrap without changing routing: the active
+credential remains the default and `defaultaccount.localhost` is an editable
+suggestion. Confirmation persists the routing object and hot-enables exact host
+selection; failure restores legacy routing-disabled state. `baseHostname` always
+maps to `defaultAccount`; every routed account must also appear exactly once in
 `hostnames`, which supplies its stable dedicated DNS hostname. Hostnames are
 converted to ASCII, lower-cased, and
 compared without a trailing root dot; ports are not part of the key. IP
@@ -286,8 +290,9 @@ Dashboard account mutations use
 `~/.local/share/ghc-proxy/account-management-transaction.json` as a private
 write-ahead rollback journal for the exact prior config and credential files.
 Startup restores an unfinished transaction before parsing `config.json`.
-Successful account additions and default changes remove the journal last; a
-failed operation restores both files and the previous in-memory routing map.
+Successful legacy bootstrap, account additions, and default changes remove the
+journal last; a failed operation restores both files and the previous in-memory
+routing mode/map.
 
 ## CLI Arguments → Runtime Settings
 

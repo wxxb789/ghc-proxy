@@ -1,5 +1,9 @@
 import type { DashboardQuotaCache } from './handler'
-import type { AccountAuthenticationSession, AddAccountInput } from '~/accounts/manager'
+import type {
+  AccountAuthenticationSession,
+  AccountRoutingSummary,
+  AddAccountInput,
+} from '~/accounts/manager'
 
 import { Elysia } from 'elysia'
 import { z } from 'zod'
@@ -44,14 +48,19 @@ const addAccountSchema = z.object({
   gheDomain: z.string().optional(),
 }).strict()
 
+const bootstrapAccountRoutingSchema = z.object({
+  hostname: z.string(),
+}).strict()
+
 const setDefaultAccountSchema = z.object({
   accountName: z.string(),
 }).strict()
 
 export interface DashboardAccountManagement {
   beginAddAccount: (input: AddAccountInput) => Promise<AccountAuthenticationSession>
+  bootstrapAccountRouting: (hostname: string) => Promise<void>
   getAuthenticationSession: (id: string) => AccountAuthenticationSession | undefined
-  getRoutingSummary: () => { baseHostname: string, defaultAccount: string }
+  getRoutingSummary: () => AccountRoutingSummary
   listAccounts: () => Promise<unknown[]>
   setDefaultAccount: (accountName: string) => Promise<void>
 }
@@ -123,6 +132,20 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
           gheDomain: parsed.data.gheDomain?.trim() || undefined,
         })
         return apiResponse({ authentication: session }, 202)
+      }
+      catch (error) {
+        return accountManagementError(error)
+      }
+    })
+    .post('/dashboard/api/accounts/bootstrap', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = bootstrapAccountRoutingSchema.safeParse(body)
+      if (!parsed.success)
+        return apiError('Invalid account routing bootstrap request.', 400)
+      try {
+        await accountManager.bootstrapAccountRouting(parsed.data.hostname)
+        return apiResponse(accountManager.getRoutingSummary())
       }
       catch (error) {
         return accountManagementError(error)
@@ -239,7 +262,7 @@ function assetResponse(
 }
 
 function accountManagementUnavailable(): Response {
-  return apiError('Account management requires named-account routing.', 409)
+  return apiError('Account management is unavailable for this process configuration.', 409)
 }
 
 function accountManagementError(error: unknown): Response {

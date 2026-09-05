@@ -68,7 +68,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </div>
       <div class="table-scroll accounts-table"><table><thead><tr><th>Default</th><th>Name</th><th>Hostname</th><th>GitHub</th><th>Tenant</th><th>Copilot</th><th>Quota</th><th>Action</th></tr></thead><tbody id="accounts-body"></tbody></table></div>
 
-      <section class="panel full-width account-add-panel">
+      <section id="account-bootstrap-panel" class="panel full-width account-add-panel" hidden>
+        <div class="section-heading"><h2>Enable named accounts</h2><span id="account-bootstrap-status" class="muted" role="status" aria-live="polite">The current account remains the default.</span></div>
+        <form id="account-bootstrap-form" class="account-form bootstrap-form">
+          <label><span>Dedicated hostname</span><input id="account-bootstrap-hostname" name="hostname" required maxlength="253" autocomplete="off"></label>
+          <button id="account-bootstrap-button" type="submit" class="command primary">Enable routing</button>
+        </form>
+        <div class="muted account-help">The suggested hostname is defaultaccount.localhost. You can change this hostname before enabling.</div>
+      </section>
+
+      <section id="account-add-panel" class="panel full-width account-add-panel" hidden>
         <div class="section-heading"><h2>Add account</h2><span id="account-add-status" class="muted" role="status" aria-live="polite"></span></div>
         <form id="account-add-form" class="account-form">
           <label><span>Name</span><input id="account-name" name="accountName" required maxlength="64" autocomplete="off"></label>
@@ -316,9 +325,11 @@ tbody tr:hover td { background: var(--surface-hover); }
 
 .behavior-grid { margin-bottom: 18px; }
 .account-form { display: grid; grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1fr) minmax(200px, 1fr) auto; align-items: end; gap: 12px; padding: 14px; border: 1px solid var(--border); background: var(--surface); }
+.account-form.bootstrap-form { grid-template-columns: minmax(220px, 1fr) auto; }
 .account-form label { min-width: 0; display: grid; gap: 5px; color: var(--text-secondary); font-size: 12px; }
 .account-form input { width: 100%; height: 36px; min-width: 0; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: var(--text); }
 .account-form input:focus { outline: 2px solid var(--focus-ring); border-color: var(--accent); }
+.account-help { margin-top: 9px; }
 .account-auth { display: grid; grid-template-columns: auto minmax(100px, auto) auto minmax(0, 1fr); align-items: center; gap: 10px 14px; margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border); background: var(--surface-subtle); }
 .account-auth[hidden] { display: none; }
 .account-auth a { color: var(--accent); }
@@ -356,6 +367,7 @@ tbody tr:hover td { background: var(--surface-hover); }
   .toolbar input[type='search'] { width: 100%; }
   .model-copy-status { text-align: left; }
   .account-form { grid-template-columns: 1fr; }
+  .account-form.bootstrap-form { grid-template-columns: 1fr; }
   .account-auth { grid-template-columns: 1fr; }
   .metric-strip { grid-template-columns: 1fr; }
   .metric-strip > div, .metric-strip > div:nth-child(2n) { border-right: 0; border-bottom: 1px solid var(--border); }
@@ -557,7 +569,22 @@ function appendQuotaRow(body, name, quota) {
 
 function renderAccounts(data) {
   dashboardState.accounts = Array.isArray(data.accounts) ? data.accounts : [];
-  byId('accounts-summary').textContent = 'Base ' + (data.baseHostname || '-') + ' / default ' + (data.defaultAccount || '-');
+  const routingEnabled = data.routingEnabled === true;
+  byId('accounts-summary').textContent = routingEnabled
+    ? 'Base ' + (data.baseHostname || '-') + ' / default ' + (data.defaultAccount || '-')
+    : 'Legacy default ' + (data.defaultAccount || '-') + ' / routing not enabled';
+  byId('account-bootstrap-panel').hidden = routingEnabled;
+  byId('account-add-panel').hidden = !routingEnabled;
+  if (!routingEnabled) {
+    const defaultAccount = dashboardState.accounts.find(function (account) { return account.isDefault; });
+    const hostnameInput = byId('account-bootstrap-hostname');
+    if (!defaultAccount?.hostname) throw new Error('Legacy default account is missing its dedicated hostname.');
+    const suggestedHostname = defaultAccount.hostname;
+    if (!hostnameInput.value || hostnameInput.value === hostnameInput.dataset.suggested) {
+      hostnameInput.value = suggestedHostname;
+    }
+    hostnameInput.dataset.suggested = suggestedHostname;
+  }
   const body = byId('accounts-body');
   clearNode(body);
   dashboardState.accounts.forEach(function (account) {
@@ -615,14 +642,38 @@ function renderAccountAuthentication(session) {
 async function loadAccounts() {
   try {
     renderAccounts(await fetchJson('/dashboard/api/accounts'));
-    byId('account-add-form').hidden = false;
   } catch (error) {
     if (error.status !== 409) throw error;
     dashboardState.accounts = [];
     clearNode(byId('accounts-body'));
-    byId('accounts-summary').textContent = 'Named-account routing is not enabled';
-    byId('account-add-form').hidden = true;
+    byId('accounts-summary').textContent = 'Named-account management is unavailable';
+    byId('account-bootstrap-panel').hidden = true;
+    byId('account-add-panel').hidden = true;
     byId('account-auth').hidden = true;
+  }
+}
+
+async function startAccountBootstrap(event) {
+  event.preventDefault();
+  const button = byId('account-bootstrap-button');
+  button.disabled = true;
+  byId('account-bootstrap-status').textContent = 'Enabling named-account routing';
+  try {
+    const data = await fetchJson('/dashboard/api/accounts/bootstrap', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hostname: byId('account-bootstrap-hostname').value }),
+    });
+    dashboardState.errors.delete('accounts');
+    const dashboardUrl = new URL('/dashboard', window.location.href);
+    dashboardUrl.hostname = data.baseHostname;
+    window.location.replace(dashboardUrl.href);
+  } catch (error) {
+    dashboardState.errors.set('accounts', error);
+    byId('account-bootstrap-status').textContent = 'Named-account routing could not be enabled';
+  } finally {
+    button.disabled = false;
+    renderErrors();
   }
 }
 
@@ -1092,6 +1143,7 @@ byId('model-filter').addEventListener('input', renderFilteredModels);
 byId('model-group-vendor').addEventListener('change', renderFilteredModels);
 byId('model-sort').addEventListener('change', renderFilteredModels);
 byId('copy-models').addEventListener('click', copySelectedModels);
+byId('account-bootstrap-form').addEventListener('submit', startAccountBootstrap);
 byId('account-add-form').addEventListener('submit', startAccountAuthentication);
 document.addEventListener('visibilitychange', function () {
   if (!document.hidden) refreshLiveViews();

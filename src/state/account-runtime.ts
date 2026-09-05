@@ -74,6 +74,16 @@ export function createAccountRuntime(
   }
 }
 
+export function aliasLegacyAccountRuntime(name: string): AccountRuntime {
+  return {
+    name,
+    auth: legacyRuntime.auth,
+    models: legacyRuntime.models,
+    rateLimiter: legacyRuntime.rateLimiter,
+    responsesEmulator: legacyRuntime.responsesEmulator,
+  }
+}
+
 export function configureAccountRuntimes(
   nextRouting: CompiledAccountRouting,
   runtimes: Iterable<AccountRuntime>,
@@ -109,10 +119,14 @@ export function resetAccountRuntimes(): void {
       runtime.rateLimiter.reset()
     }
   }
+  disableAccountRouting()
+  accountContext.disable()
+}
+
+export function disableAccountRouting(): void {
   accountRuntimes = new Map([[legacyRuntime.name, legacyRuntime]])
   defaultRuntime = legacyRuntime
   routing = undefined
-  accountContext.disable()
 }
 
 export function getCurrentAccountRuntime(): AccountRuntime {

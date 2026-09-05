@@ -238,7 +238,13 @@ bunx --bun ghc-proxy@latest auth --account work --ghe-domain company.ghe.com
 Account names are case-sensitive, 1-64 characters, and may contain ASCII
 letters, numbers, `.`, `_`, and `-`; the first character must be alphanumeric.
 
-Then opt into hostname routing in `config.json`:
+For an existing single-account installation, open the local Dashboard Accounts
+view. The current legacy account remains the default, and the bootstrap form
+suggests `defaultaccount.localhost` as its dedicated hostname. Edit that value
+if needed, then enable routing. The change is persisted transactionally and
+takes effect without restarting the process.
+
+You can also configure hostname routing directly in `config.json`:
 
 ```json
 {
@@ -271,13 +277,17 @@ rotates, or load-balances the request to another account. Process-wide policy
 configuration remains shared.
 
 `accountRouting` is opt-in so existing single-account installations retain their
-current behavior. In routing mode every referenced account must already exist,
-and `defaultAccount` must be explicit. Invalid or ambiguous routing config fails
-startup. The process-wide `start --github-token` and `start --ghe-domain`
-overrides are rejected in this mode because they cannot identify one named
-account. Hostname routing is a deterministic selector, not an authorization
-boundary: callers that can reach the listener and choose a configured `Host`
-can select that account unless access is enforced separately.
+current Host behavior until the local Dashboard bootstrap is explicitly
+confirmed. The active legacy credential becomes the explicit default account;
+the suggested `defaultaccount.localhost` hostname is editable before commit. In
+routing mode every referenced account must already exist, and `defaultAccount`
+must be explicit. Invalid or ambiguous routing config fails startup. Dashboard
+bootstrap is unavailable while process-wide `start --github-token` or
+`start --ghe-domain` overrides are active, and those overrides are rejected once
+routing is enabled because they cannot identify one named account. Hostname
+routing is a deterministic selector, not an authorization boundary: callers
+that can reach the listener and choose a configured `Host` can select that
+account unless access is enforced separately.
 
 For Docker deployments, leave `GH_TOKEN` unset in routing mode and mount the
 populated credential/config directory. The image healthcheck reads
@@ -463,7 +473,7 @@ When the Copilot token response includes `endpoints.api`, `ghc-proxy` now prefer
 
 Incoming requests hit an [Elysia](https://elysiajs.com/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use a native Responses path with explicit compatibility policies. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
 
-The built-in Dashboard projects process health, named account status, model routing, behavior, and recent request lifecycle metadata without storing request or response content. When named-account routing is enabled, its protected account view can authenticate a new account with an explicit dedicated hostname and switch the default account. See [Dashboard Observability](./docs/design/dashboard-observability.md).
+The built-in Dashboard projects process health, named account status, model routing, behavior, and recent request lifecycle metadata without storing request or response content. Its protected Accounts view can explicitly bootstrap a legacy account into named routing, authenticate a new account with a dedicated hostname, and switch the default account. See [Dashboard Observability](./docs/design/dashboard-observability.md).
 
 For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-opus-4.6` on Copilot native `/v1/messages` accepted top-level search results and pure search-result tool outputs, but rejected top-level `citations` and mixed text/search-result tool output arrays. The native path sanitizes those observed rejection cases, while translated paths flatten search results to text; re-run the probe before treating that dated upstream result as universal.
 
@@ -526,11 +536,12 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | `GET` | `/dashboard/api/behavior` | Active routing, compatibility policies, strategies, and effect counters |
 | `GET` | `/dashboard/api/requests` | Active requests and the most recent 256 completed request summaries |
 | `GET` | `/dashboard/api/accounts` | Safe per-account identity, tenant, authentication, Copilot status, quota, hostname, and default marker |
+| `POST` | `/dashboard/api/accounts/bootstrap` | Persist and enable named routing for the current legacy default account |
 | `POST` | `/dashboard/api/accounts` | Start device authentication for a new named account and its dedicated hostname |
 | `GET` | `/dashboard/api/account-auth/:id` | Read the safe state of an in-progress account authentication |
 | `POST` | `/dashboard/api/accounts/default` | Persist and activate an explicit default account |
 
-Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. Account mutations are available only when `accountRouting` is enabled; legacy single-account mode returns `409` for those APIs. Dashboard requests are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection, transaction, and security contract.
+Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. A normal legacy single-account process exposes an explicit bootstrap action; adding accounts and changing the default remain unavailable until bootstrap succeeds. Processes using `start --github-token` or `start --ghe-domain` retain legacy behavior and return `409` for account management because those overrides cannot be assigned safely. Dashboard requests are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection, transaction, and security contract.
 
 > **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses` and its resource routes, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
 

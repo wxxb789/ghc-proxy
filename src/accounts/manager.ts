@@ -29,7 +29,7 @@ import { readConfig, writeConfigField } from '~/lib/config'
 import { writeNewGitHubCredential } from '~/lib/credentials'
 import { PATHS } from '~/lib/paths'
 import { getDashboardAccount } from '~/routes/dashboard/handler'
-import { configureAccountRuntimes } from '~/state'
+import { configureAccountRuntimes, disableAccountRouting } from '~/state'
 import {
   beginAccountDeviceAuthentication,
 } from './device-auth'
@@ -60,10 +60,16 @@ export interface AccountManagerPersistence {
     input: PersistAccountInput,
     applyRuntime: () => void,
   ) => Promise<void>
-  setDefault: (
+  persistRouting: (
     routing: AccountRoutingConfig,
     applyRuntime: () => void,
   ) => Promise<void>
+}
+
+export interface AccountRoutingSummary {
+  baseHostname: string
+  defaultAccount: string
+  routingEnabled: boolean
 }
 
 export interface AccountManagerDependencies {
@@ -80,6 +86,7 @@ export interface AccountManagerState {
   knownAccountNames?: Iterable<string>
   refreshCleanups?: ReadonlyMap<string, () => void>
   routing: CompiledAccountRouting
+  routingEnabled?: boolean
   runtimes: Iterable<AccountRuntime>
 }
 
@@ -119,7 +126,7 @@ export function createAccountManagerPersistence(
         applyRuntime()
       })
     },
-    setDefault: async (routing, applyRuntime) => {
+    persistRouting: async (routing, applyRuntime) => {
       await runPersistedAccountMutation(paths, async () => {
         await writeConfigField('accountRouting', routing, {
           configPath: paths.CONFIG_PATH,
@@ -152,6 +159,7 @@ export class AccountManager {
   private readonly sessions = new Map<string, InternalAuthenticationSession>()
   private mutationTail: Promise<void> = Promise.resolve()
   private routing: CompiledAccountRouting
+  private routingEnabled: boolean
   private runtimes: Map<string, AccountRuntime>
   private stopped = false
 
@@ -162,6 +170,7 @@ export class AccountManager {
     this.authDefaults = { ...state.authDefaults, showToken: false }
     this.dependencies = { ...defaultDependencies, ...dependencyOverrides }
     this.routing = cloneCompiledRouting(state.routing)
+    this.routingEnabled = state.routingEnabled ?? true
     this.runtimes = new Map(
       Array.from(state.runtimes, runtime => [runtime.name, runtime] as const),
     )
@@ -185,11 +194,62 @@ export class AccountManager {
     return Promise.all(descriptors.map(this.dependencies.projectAccount))
   }
 
-  getRoutingSummary(): { baseHostname: string, defaultAccount: string } {
+  getRoutingSummary(): AccountRoutingSummary {
     return {
       baseHostname: this.routing.baseHostname,
       defaultAccount: this.routing.defaultAccount,
+      routingEnabled: this.routingEnabled,
     }
+  }
+
+  async bootstrapAccountRouting(rawHostname: string): Promise<void> {
+    if (this.stopped) {
+      throw new AccountManagementError('Account management is shutting down.', 503)
+    }
+    const hostname = parseHostname(rawHostname)
+    await this.runMutation(async () => {
+      if (this.stopped) {
+        throw new AccountManagementError('Account management is shutting down.', 503)
+      }
+      if (this.routingEnabled) {
+        throw new AccountManagementError('Named-account routing is already enabled.', 409)
+      }
+      if (hostname === this.routing.baseHostname) {
+        throw new AccountManagementError(
+          'A dedicated account hostname must differ from the base hostname.',
+          400,
+        )
+      }
+
+      const nextConfig: AccountRoutingConfig = {
+        baseHostname: this.routing.baseHostname,
+        defaultAccount: this.routing.defaultAccount,
+        hostnames: { [hostname]: this.routing.defaultAccount },
+      }
+      const nextRouting = compileAccountRouting(nextConfig, this.runtimes.keys())
+      let runtimeApplied = false
+      try {
+        await this.dependencies.persistence.persistRouting(nextConfig, () => {
+          configureAccountRuntimes(nextRouting, this.runtimes.values())
+          runtimeApplied = true
+        })
+        this.routing = nextRouting
+        this.routingEnabled = true
+      }
+      catch (error) {
+        if (runtimeApplied) {
+          disableAccountRouting()
+        }
+        if (error instanceof AccountManagementError) {
+          throw error
+        }
+        throw new AccountManagementError(
+          'Could not enable named-account routing.',
+          500,
+          { cause: error },
+        )
+      }
+    })
   }
 
   beginAddAccount(input: AddAccountInput): Promise<AccountAuthenticationSession> {
@@ -207,6 +267,12 @@ export class AccountManager {
   ): Promise<AccountAuthenticationSession> {
     if (this.stopped) {
       throw new AccountManagementError('Account management is shutting down.', 503)
+    }
+    if (!this.routingEnabled) {
+      throw new AccountManagementError(
+        'Enable named-account routing before adding another account.',
+        409,
+      )
     }
     const accountName = parseAccountName(input.accountName)
     const hostname = parseHostname(input.hostname)
@@ -302,6 +368,12 @@ export class AccountManager {
     if (this.stopped) {
       throw new AccountManagementError('Account management is shutting down.', 503)
     }
+    if (!this.routingEnabled) {
+      throw new AccountManagementError(
+        'Enable named-account routing before changing the default account.',
+        409,
+      )
+    }
     const accountName = parseAccountName(rawAccountName)
     await this.runMutation(async () => {
       if (this.stopped) {
@@ -325,7 +397,7 @@ export class AccountManager {
       const nextRouting = compileAccountRouting(nextConfig, this.runtimes.keys())
       let runtimeApplied = false
       try {
-        await this.dependencies.persistence.setDefault(nextConfig, () => {
+        await this.dependencies.persistence.persistRouting(nextConfig, () => {
           configureAccountRuntimes(nextRouting, this.runtimes.values())
           runtimeApplied = true
         })

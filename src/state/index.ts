@@ -1,7 +1,9 @@
 export {
+  aliasLegacyAccountRuntime,
   authStore,
   configureAccountRuntimes,
   createAccountRuntime,
+  disableAccountRouting,
   getCurrentAccountName,
   getCurrentAccountRuntime,
   getCurrentRoutedAccountName,

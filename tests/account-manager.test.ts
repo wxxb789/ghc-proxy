@@ -52,10 +52,20 @@ function initialState() {
   return { routing, runtimes }
 }
 
+function bootstrapState(accountName = 'default') {
+  const accountRuntime = runtime(accountName, 'alice')
+  const routing = compileAccountRouting({
+    baseHostname: 'localhost',
+    defaultAccount: accountName,
+    hostnames: { 'defaultaccount.localhost': accountName },
+  }, [accountName])
+  return { routing, runtimes: [accountRuntime], routingEnabled: false }
+}
+
 function dependencies(overrides: Partial<AccountManagerDependencies> = {}) {
   const persistence: AccountManagerPersistence = {
     addAccount: async (_input, applyRuntime) => applyRuntime(),
-    setDefault: async (_routing, applyRuntime) => applyRuntime(),
+    persistRouting: async (_routing, applyRuntime) => applyRuntime(),
   }
   return {
     beginAuthentication: async () => {
@@ -104,6 +114,88 @@ beforeEach(() => resetAccountRuntimes())
 afterEach(() => resetAccountRuntimes())
 
 describe('AccountManager', () => {
+  test('bootstraps the legacy account as default with an editable hostname', async () => {
+    const manager = new AccountManager(bootstrapState(), dependencies())
+
+    expect(manager.getRoutingSummary()).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      routingEnabled: false,
+    })
+    expect(await manager.listAccounts()).toEqual([
+      expect.objectContaining({
+        name: 'default',
+        hostname: 'defaultaccount.localhost',
+        isDefault: true,
+      }),
+    ])
+    await expect(manager.beginAddAccount({
+      accountName: 'account1',
+      hostname: 'account1.localhost',
+    })).rejects.toMatchObject({ status: 409 })
+
+    await manager.bootstrapAccountRouting('personal.localhost')
+
+    expect(manager.getRoutingSummary()).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      routingEnabled: true,
+    })
+    expect(resolveRequestAccountRuntime(new Request('http://localhost/token'))?.name)
+      .toBe('default')
+    expect(resolveRequestAccountRuntime(new Request('http://personal.localhost/token'))?.name)
+      .toBe('default')
+    expect(resolveRequestAccountRuntime(new Request('http://defaultaccount.localhost/token')))
+      .toBeUndefined()
+  })
+
+  test('failed legacy bootstrap restores routing-disabled behavior', async () => {
+    const manager = new AccountManager(bootstrapState(), dependencies({
+      persistence: {
+        addAccount: async (_input, applyRuntime) => applyRuntime(),
+        persistRouting: async (_routing, applyRuntime) => {
+          applyRuntime()
+          throw new Error('disk failure')
+        },
+      },
+    }))
+
+    await expect(manager.bootstrapAccountRouting('personal.localhost')).rejects.toThrow(
+      'Could not enable named-account routing.',
+    )
+
+    expect(manager.getRoutingSummary().routingEnabled).toBe(false)
+    expect(resolveRequestAccountRuntime(new Request('http://arbitrary.example/token'))?.name)
+      .toBe('default')
+  })
+
+  test('hot-enables exact routing through the Dashboard bootstrap endpoint', async () => {
+    const manager = new AccountManager(bootstrapState(), dependencies())
+    const app = createServer({ accountManager: manager })
+
+    expect((await app.handle(new Request('http://unknown.localhost/'))).status)
+      .toBe(200)
+
+    const bootstrap = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts/bootstrap',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'origin': 'http://localhost',
+        },
+        body: JSON.stringify({ hostname: 'personal.localhost' }),
+      },
+    ))
+
+    expect(bootstrap.status).toBe(200)
+    expect(await bootstrap.json()).toMatchObject({ routingEnabled: true })
+    expect((await app.handle(new Request('http://unknown.localhost/'))).status)
+      .toBe(421)
+    expect(await (await app.handle(new Request('http://personal.localhost/token'))).json())
+      .toEqual({ token: 'copilot-default' })
+  })
+
   test('lists safe account identity and stable dedicated hostnames', async () => {
     const state = initialState()
     const manager = new AccountManager(state, dependencies())
@@ -129,7 +221,7 @@ describe('AccountManager', () => {
     const manager = new AccountManager(state, dependencies({
       persistence: {
         addAccount,
-        setDefault: async (_routing, applyRuntime) => applyRuntime(),
+        persistRouting: async (_routing, applyRuntime) => applyRuntime(),
       },
     }))
 
@@ -170,7 +262,7 @@ describe('AccountManager', () => {
       }),
       persistence: {
         addAccount,
-        setDefault: async (_routing, applyRuntime) => applyRuntime(),
+        persistRouting: async (_routing, applyRuntime) => applyRuntime(),
       },
     }))
 
@@ -211,7 +303,7 @@ describe('AccountManager', () => {
         addAccount: async () => {
           throw new Error('disk failed with private-token')
         },
-        setDefault: async (_routing, applyRuntime) => applyRuntime(),
+        persistRouting: async (_routing, applyRuntime) => applyRuntime(),
       },
     }))
 
@@ -249,7 +341,7 @@ describe('AccountManager', () => {
     const manager = new AccountManager(state, dependencies({
       persistence: {
         addAccount: async (_input, applyRuntime) => applyRuntime(),
-        setDefault: async () => {
+        persistRouting: async () => {
           throw new Error('disk failure')
         },
       },

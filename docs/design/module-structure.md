@@ -9,6 +9,7 @@ src/
 ├── main.ts                    # CLI entry point (citty commands)
 ├── start.ts                   # Server startup logic
 ├── server.ts                  # Elysia app factory (Bun-native or @elysiajs/node adapter)
+├── accounts/                  # Named-account auth and Dashboard lifecycle management
 ├── routes/                    # HTTP route handlers
 │   ├── chat-completions/      # POST /chat/completions (+ /v1 alias)
 │   ├── messages/              # POST /v1/messages
@@ -90,7 +91,7 @@ routes/responses/
 (Responses context-management and compaction policies now live in `src/transform/context-management.ts`, not under this route directory.)
 
 The embeddings route is intentionally small, and the Dashboard owns a separate
-read-only presentation surface:
+local presentation and account-management surface:
 
 ```text
 routes/embeddings/
@@ -98,10 +99,15 @@ routes/embeddings/
 └── handler.ts                      # Validation + upstream-shape normalization
 
 routes/dashboard/
-├── route.ts                        # Loopback access checks and routes
+├── route.ts                        # Loopback access checks, projections, and account mutations
 ├── handler.ts                      # Sanitized overview/model/behavior/request projections
 └── assets.ts                       # Embedded HTML/CSS/JavaScript assets
 ```
+
+`src/accounts/manager.ts` owns serialized legacy bootstrap, account addition,
+default selection, persistence rollback, and authentication-session lifecycle.
+`src/accounts/device-auth.ts` builds and validates a new isolated account runtime
+before the manager makes it routable.
 
 ### `src/translator/` -- Protocol Translation
 
