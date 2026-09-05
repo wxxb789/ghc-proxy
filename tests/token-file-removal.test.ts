@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -143,7 +144,12 @@ const {
   setupRuntimeOverrideTokens,
 } = await import('../src/lib/token')
 const { HTTPError } = await import('../src/lib/error')
-const { authStore, modelCache } = await import('../src/state')
+const {
+  authStore,
+  getCurrentAccountName,
+  modelCache,
+  resetAccountRuntimes,
+} = await import('../src/state')
 const { getCachedConfig, readConfig } = await import('../src/lib/config')
 
 const originalGetModels = CopilotClient.prototype.getModels
@@ -156,6 +162,7 @@ type StartRunContext = Parameters<NonNullable<typeof start.run>>[0]
 type StartArgs = StartRunContext['args']
 
 function resetStores() {
+  resetAccountRuntimes()
   authStore.githubToken = undefined
   authStore.copilotToken = undefined
   authStore.copilotApiBase = undefined
@@ -190,6 +197,7 @@ function makeAuthArgs(overrides: Partial<AuthArgs> = {}): AuthArgs {
     '_': [],
     'verbose': false,
     'v': false,
+    'account': undefined,
     'show-token': false,
     'ghe-domain': undefined,
     'ghe': undefined,
@@ -309,6 +317,126 @@ describe('GitHub credential migration', () => {
       .then(() => true)
       .catch(() => false)
     expect(appDirExists).toBe(true)
+  })
+
+  test('auth writes an explicitly named account without replacing the active account', async () => {
+    await writeGitHubCredential('default-token')
+
+    await runAuthCommand(makeAuthArgs({
+      'account': 'account1',
+      'ghe-domain': 'corp.ghe.com',
+    }))
+
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'default',
+      githubToken: 'default-token',
+    })
+    expect(await readGitHubCredential(PATHS, 'account1')).toMatchObject({
+      accountName: 'account1',
+      githubToken: 'new-test-token',
+      gheDomain: 'corp.ghe.com',
+    })
+    expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
+  })
+
+  test('start initializes every routed account and keeps the explicit default active outside requests', async () => {
+    await writeGitHubCredential('primary-token', undefined, PATHS, 'primary')
+    await writeGitHubCredential('account1-token', 'corp.ghe.com', PATHS, 'account1')
+    const credentialStore = JSON.parse(
+      await fs.readFile(PATHS.CREDENTIALS_PATH, 'utf8'),
+    ) as { activeAccount: string }
+    credentialStore.activeAccount = 'account1'
+    await fs.writeFile(PATHS.CREDENTIALS_PATH, JSON.stringify(credentialStore))
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'primary',
+        hostnames: {
+          'account1.localhost': 'account1',
+        },
+      },
+    }))
+
+    await runStartCommand(makeStartArgs())
+
+    expect(githubUserTokens).toEqual(['primary-token', 'account1-token'])
+    expect(githubUserApiBaseUrls).toEqual([
+      'https://api.github.com',
+      'https://api.corp.ghe.com',
+    ])
+    expect(copilotTokenTokens).toEqual(['primary-token', 'account1-token'])
+    expect(getCurrentAccountName()).toBe('primary')
+    expect(authStore.githubToken).toBe('primary-token')
+    expect(listenCalls).toEqual([4141])
+  })
+
+  test('restart preserves the configured default instead of the credential-store active account', async () => {
+    await fs.writeFile(PATHS.CREDENTIALS_PATH, JSON.stringify({
+      version: 1,
+      activeAccount: 'account1',
+      accounts: {
+        default: { githubToken: Buffer.from('default-token').toString('base64') },
+        account1: { githubToken: Buffer.from('account1-token').toString('base64') },
+      },
+    }))
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: { 'account1.localhost': 'account1' },
+      },
+    }))
+
+    await runStartCommand(makeStartArgs())
+    resetStores()
+    githubUserTokens.length = 0
+    copilotTokenTokens.length = 0
+    listenCalls.length = 0
+
+    await runStartCommand(makeStartArgs())
+
+    expect(githubUserTokens).toEqual(['default-token', 'account1-token'])
+    expect(copilotTokenTokens).toEqual(['default-token', 'account1-token'])
+    expect(getCurrentAccountName()).toBe('default')
+    expect(authStore.githubToken).toBe('default-token')
+    expect(listenCalls).toEqual([4141])
+  })
+
+  test('start rejects account routing that names a missing credential', async () => {
+    await writeGitHubCredential('default-token')
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: {
+          'missing.localhost': 'missing',
+        },
+      },
+    }))
+
+    await expect(runStartCommand(makeStartArgs())).rejects.toThrow(
+      'selects missing account "missing"',
+    )
+    expect(githubUserTokens).toEqual([])
+    expect(copilotTokenTokens).toEqual([])
+    expect(listenCalls).toEqual([])
+  })
+
+  test('start rejects an ambiguous global token override in account-routing mode', async () => {
+    await writeGitHubCredential('default-token')
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: {},
+      },
+    }))
+
+    await expect(
+      runStartCommand(makeStartArgs({ 'github-token': 'runtime-override-token' })),
+    ).rejects.toThrow('--github-token cannot be used with accountRouting')
+    expect(listenCalls).toEqual([])
   })
 
   test('valid legacy credential migrates after GitHub and Copilot validation', async () => {

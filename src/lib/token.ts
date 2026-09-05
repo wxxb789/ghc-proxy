@@ -19,11 +19,21 @@ import { HTTPError, isTransientUpstreamStatus } from '~/lib/error'
 import { PATHS } from '~/lib/paths'
 import { formatErrorMessage, retryWithBackoff } from '~/lib/retry'
 
-import { authStore, modelCache } from '~/state'
+import {
+  authStore,
+  getCurrentAccountRuntime,
+  modelCache,
+  runWithAccountRuntime,
+} from '~/state'
 
 const TRAILING_SLASHES_RE = /\/+$/
 
-let refreshTimerId: ReturnType<typeof setTimeout> | undefined
+interface RefreshSchedule {
+  stopped: boolean
+  timerId?: ReturnType<typeof setTimeout>
+}
+
+const refreshSchedules = new WeakMap<object, RefreshSchedule>()
 
 export async function setupAuthTokens(
   options?: SetupGitHubTokenOptions,
@@ -86,26 +96,43 @@ export async function setupRuntimeOverrideTokens(): Promise<() => void> {
 }
 
 export async function setupCopilotToken(): Promise<() => void> {
+  const runtime = getCurrentAccountRuntime()
   const { githubClient, response } = await fetchCopilotToken()
 
   const REFRESH_BUFFER_SECONDS = 60
   const refreshInterval = Math.max(30_000, (response.refresh_in - REFRESH_BUFFER_SECONDS) * 1000)
 
-  if (refreshTimerId !== undefined) {
-    clearTimeout(refreshTimerId)
+  const previousSchedule = refreshSchedules.get(runtime)
+  if (previousSchedule) {
+    previousSchedule.stopped = true
+    if (previousSchedule.timerId !== undefined) {
+      clearTimeout(previousSchedule.timerId)
+    }
   }
 
+  const schedule: RefreshSchedule = { stopped: false }
+  refreshSchedules.set(runtime, schedule)
+
   const scheduleRefresh = () => {
-    refreshTimerId = setTimeout(() => {
-      void refreshCopilotToken(githubClient).then(scheduleRefresh)
+    if (schedule.stopped)
+      return
+    schedule.timerId = setTimeout(() => {
+      void runWithAccountRuntime(
+        runtime,
+        () => refreshCopilotToken(githubClient),
+      ).then(scheduleRefresh)
     }, refreshInterval)
   }
   scheduleRefresh()
 
   return () => {
-    if (refreshTimerId !== undefined) {
-      clearTimeout(refreshTimerId)
-      refreshTimerId = undefined
+    schedule.stopped = true
+    if (schedule.timerId !== undefined) {
+      clearTimeout(schedule.timerId)
+      schedule.timerId = undefined
+    }
+    if (refreshSchedules.get(runtime) === schedule) {
+      refreshSchedules.delete(runtime)
     }
   }
 }
@@ -139,6 +166,7 @@ export async function refreshCopilotToken(githubClient: GitHubClient): Promise<v
 }
 
 interface SetupGitHubTokenOptions {
+  accountName?: string
   force?: boolean
   explicitGheDomain?: {
     value?: string
@@ -158,7 +186,7 @@ export async function setupGitHubToken(
   try {
     await ensureVSCodeVersion()
 
-    const credential = await prepareGitHubCredential()
+    const credential = await prepareGitHubCredential(PATHS, options?.accountName)
     if (
       credential?.replacementPending
       && options?.explicitGheDomain
@@ -166,6 +194,7 @@ export async function setupGitHubToken(
     ) {
       await validateAndFinalizePendingGitHubCredentialMigration(credential)
       return setupGitHubToken({
+        accountName: options.accountName,
         force: true,
         explicitGheDomain: options.explicitGheDomain,
         validateBeforePersist: true,
@@ -206,6 +235,7 @@ export async function setupGitHubToken(
         'GHE domain changed — cached token is for a different GitHub instance. Re-authenticating...',
       )
       return setupGitHubToken({
+        accountName: options?.accountName,
         force: true,
         explicitGheDomain: options?.explicitGheDomain,
       })
@@ -229,6 +259,7 @@ export async function setupGitHubToken(
             'Stored GitHub token invalid or expired. Re-authenticating...',
           )
           return setupGitHubToken({
+            accountName: options?.accountName,
             force: true,
             explicitGheDomain: options?.explicitGheDomain,
           })
@@ -284,12 +315,14 @@ export async function setupGitHubToken(
       migrationPending = false
     }
     else {
-      await writeGitHubCredential(token, authStore.gheDomain)
+      await writeGitHubCredential(token, authStore.gheDomain, PATHS, options?.accountName)
     }
 
-    // Persist the current GHE domain so future runs can select the intended tenant.
-    // Writing undefined removes the field from config (clears a previously-persisted domain).
-    await writeConfigField('gheDomain', authStore.gheDomain)
+    if (options?.accountName === undefined) {
+      // The legacy single-account mode keeps its tenant in config.json. Named
+      // accounts carry their tenant beside their credential instead.
+      await writeConfigField('gheDomain', authStore.gheDomain)
+    }
     return { migrationPending }
   }
   catch (error) {

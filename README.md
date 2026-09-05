@@ -110,6 +110,7 @@ ghc-proxy uses a subcommand structure:
 ```bash
 bunx --bun ghc-proxy@latest start          # Start the proxy server
 bunx --bun ghc-proxy@latest auth           # Run GitHub auth flow without starting the server
+bunx --bun ghc-proxy@latest auth --account work # Create or replace a named account
 bunx --bun ghc-proxy@latest check-usage    # Show your Copilot usage/quota in the terminal
 bunx --bun ghc-proxy@latest debug          # Print diagnostic info (version, paths, token status)
 bunx --bun ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node runtime contracts in the packaged bundle
@@ -199,8 +200,8 @@ The proxy reads an optional JSON config file at:
 
 GitHub credentials are stored separately at
 `~/.local/share/ghc-proxy/credentials.json`. The credential file is versioned,
-selects one active named account, and can retain additional named accounts for
-future account-selection features:
+selects one active account for legacy single-account mode, and can retain
+multiple named accounts:
 
 ```json
 {
@@ -221,6 +222,63 @@ copied into this store only after a complete temporary config backup is created.
 The legacy field and backup are removed after the stored credential succeeds at
 both GitHub identity validation and Copilot token acquisition. A failed or
 interrupted migration keeps the backup and reports its recovery path.
+
+### Named Account Routing
+
+Authenticate each account under a stable name:
+
+```bash
+bunx --bun ghc-proxy@latest auth --account default
+bunx --bun ghc-proxy@latest auth --account account1
+
+# A named GHE.com account keeps its own tenant beside its credential.
+bunx --bun ghc-proxy@latest auth --account work --ghe-domain company.ghe.com
+```
+
+Account names are case-sensitive, 1-64 characters, and may contain ASCII
+letters, numbers, `.`, `_`, and `-`; the first character must be alphanumeric.
+
+Then opt into hostname routing in `config.json`:
+
+```json
+{
+  "accountRouting": {
+    "baseHostname": "localhost",
+    "defaultAccount": "default",
+    "hostnames": {
+      "account1.localhost": "account1"
+    }
+  }
+}
+```
+
+With that configuration, `http://localhost:4141` always uses `default` and
+`http://account1.localhost:4141` always uses `account1`. DNS hostname matching
+is case-insensitive, ignores the request port, and accepts a trailing root dot.
+Any other hostname is rejected with HTTP `421` before a route handler or
+upstream request runs. `Forwarded` and `X-Forwarded-Host` are not trusted for
+account selection.
+
+Each account has independent GitHub/Copilot tokens, refresh scheduling, model
+cache, Responses emulator state, local rate limiter, and upstream queue/cooldown
+state. A failure or capacity response on one account never switches, falls back,
+rotates, or load-balances the request to another account. Process-wide policy
+configuration remains shared.
+
+`accountRouting` is opt-in so existing single-account installations retain their
+current behavior. In routing mode every referenced account must already exist,
+and `defaultAccount` must be explicit. Invalid or ambiguous routing config fails
+startup. The process-wide `start --github-token` and `start --ghe-domain`
+overrides are rejected in this mode because they cannot identify one named
+account. Hostname routing is a deterministic selector, not an authorization
+boundary: callers that can reach the listener and choose a configured `Host`
+can select that account unless access is enforced separately.
+
+For Docker deployments, leave `GH_TOKEN` unset in routing mode and mount the
+populated credential/config directory. The image healthcheck reads
+`accountRouting.baseHostname`, applies the same DNS ASCII/case/root-dot
+normalization, and sends it as `Host` while connecting over loopback, so health
+checks do not require an IP-hostname exception.
 
 All fields are optional. The full schema:
 
@@ -250,6 +308,7 @@ All fields are optional. The full schema:
 | `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream retry backoff when `Retry-After` is absent |
 | `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum computed backoff (seconds); does not clamp `Retry-After` |
 | `gheDomain` | `string` | unset | GitHub Enterprise Cloud company domain (persisted automatically after GHE.com auth) |
+| `accountRouting` | `{ baseHostname, defaultAccount, hostnames }` | unset | Opt-in exact DNS hostname to named-account routing; unknown hostnames are rejected |
 
 Example:
 

@@ -6,11 +6,16 @@
 Route -> strategy -> CopilotClient -> UpstreamRequestQueue -> Copilot
 ```
 
-The singleton queue is created in `src/clients/factory.ts`. `src/start.ts` reads CLI/config values and calls `configureUpstreamRequestQueue()` directly; queue startup settings are not queried through `ConfigStore`.
+`src/clients/factory.ts` creates one queue per account runtime. `src/start.ts`
+reads CLI/config values and calls `configureUpstreamRequestQueue()` directly;
+the same queue settings apply to every account, but queue occupancy and cooldown
+state do not cross account boundaries. Queue startup settings are not queried
+through `ConfigStore`.
 
 ## Admission and Cooldown Scope
 
-The queue holds one process-global active-slot count, one process-global pending list, one account deadline, and a deadline map keyed by final effective upstream model.
+Each account queue holds its own active-slot count, pending list, account
+deadline, and deadline map keyed by final effective upstream model.
 
 | Upstream outcome | Cooldown scope | Effect |
 |---|---|---|
@@ -21,7 +26,13 @@ The queue holds one process-global active-slot count, one process-global pending
 
 Capacity cooldown is installed before the triggering lease is released, including when retry count is zero or exhausted. Pending work stays FIFO among currently eligible requests: the drain skips cooled-model waiters and grants the oldest eligible waiter. If a global slot is free, cooled waiters occupying pending depth do not make an eligible request fail admission.
 
-One coalesced timer tracks the earliest shared deadline. A wake grants at most the number of free global slots. Active streams still hold slots, and both active-slot capacity and maximum pending depth remain shared across every model. When all slots are occupied and pending depth is full, an unrelated model can still receive the existing queue-full `503`; this design does not provide per-model reservations or quotas.
+One coalesced timer tracks the earliest shared deadline inside an account queue.
+A wake grants at most the number of free account-local slots. Active streams
+still hold slots, and both active-slot capacity and maximum pending depth remain
+shared across every model within the selected account. When all of that
+account's slots are occupied and pending depth is full, an unrelated model on
+the same account can still receive the existing queue-full `503`; this design
+does not provide per-model reservations or quotas.
 
 ## Retry Policy
 
@@ -90,7 +101,12 @@ numeric inputs to at least one active slot.
 
 ## Diagnostics and Public Errors
 
-Recovery events retain the existing request ID and allowlisted structured fields for tests and injected loggers. The default human console renders only compact one-line summaries, omits zero-wait grants and duplicate cooldown/retry detail, and labels upstream `429` as rate limited and `529` as overloaded. The model trace records a successful substitution as `OVERLOAD_FALLBACK`.
+Recovery events retain the existing request ID, selected account name when
+routing is enabled, and allowlisted structured fields for tests and injected
+loggers. The default human console renders only compact one-line summaries,
+omits zero-wait grants and duplicate cooldown/retry detail, and labels upstream
+`429` as rate limited and `529` as overloaded. The model trace records a
+successful substitution as `OVERLOAD_FALLBACK`.
 
 Recovery-effect projection is currently a direct queue side effect:
 `recordRecoveryEffect()` writes `recovery.queued`, `recovery.retry`,
@@ -98,4 +114,8 @@ Recovery-effect projection is currently a direct queue side effect:
 the process-global `runtimeStore.requests` before logging. Constructing a queue
 with an injected logger does not isolate or replace that global write.
 
-Logs do not serialize prompts, payloads, tools, authorization data, tokens, or credential-derived account IDs. Public errors keep their Anthropic/OpenAI-compatible payload and safe standard `Retry-After`; the queue does not add retry-progress SSE events, custom recovery headers, or a metrics endpoint.
+Logs do not serialize prompts, payloads, tools, authorization data, or tokens.
+The operator-defined account name is included for request attribution when
+hostname routing is enabled. Public errors keep their Anthropic/OpenAI-compatible
+payload and safe standard `Retry-After`; the queue does not add retry-progress
+SSE events, custom recovery headers, or a metrics endpoint.

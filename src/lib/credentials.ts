@@ -49,6 +49,11 @@ export interface GitHubCredential {
   gheDomain?: string
 }
 
+export interface GitHubCredentialStore {
+  activeAccount: string
+  accounts: Record<string, GitHubCredential>
+}
+
 export interface PreparedGitHubCredential extends GitHubCredential {
   migrationPending: boolean
   replacementPending?: true
@@ -76,30 +81,57 @@ export class CredentialMigrationError extends Error {
 
 export async function readGitHubCredential(
   paths: CredentialPaths = PATHS,
+  accountName?: string,
 ): Promise<GitHubCredential | undefined> {
-  const store = await readCredentialStore(paths)
+  const store = await readGitHubCredentials(paths)
   if (!store) {
     return undefined
   }
 
-  const account = store.accounts[store.activeAccount]
+  const selectedAccount = accountName ?? store.activeAccount
+  const account = store.accounts[selectedAccount]
   if (!account) {
+    throw new Error(
+      accountName
+        ? `credentials.json at ${paths.CREDENTIALS_PATH} does not contain account "${accountName}". The file was left unchanged.`
+        : `credentials.json at ${paths.CREDENTIALS_PATH} selects missing account "${store.activeAccount}". The file was left unchanged.`,
+    )
+  }
+  return account
+}
+
+export async function readGitHubCredentials(
+  paths: CredentialPaths = PATHS,
+): Promise<GitHubCredentialStore | undefined> {
+  const store = await readCredentialStore(paths)
+  if (!store) {
+    return undefined
+  }
+  if (!store.accounts[store.activeAccount]) {
     throw new Error(
       `credentials.json at ${paths.CREDENTIALS_PATH} selects missing account "${store.activeAccount}". The file was left unchanged.`,
     )
   }
 
-  return {
-    accountName: store.activeAccount,
-    githubToken: decodeToken(account.githubToken, store.activeAccount, paths),
-    gheDomain: account.gheDomain,
-  }
+  const accounts = Object.fromEntries(
+    Object.entries(store.accounts).map(([accountName, account]) => [
+      accountName,
+      {
+        accountName,
+        githubToken: decodeToken(account.githubToken, accountName, paths),
+        gheDomain: account.gheDomain,
+      },
+    ]),
+  )
+
+  return { activeAccount: store.activeAccount, accounts }
 }
 
 export async function writeGitHubCredential(
   githubToken: string,
   gheDomain?: string,
   paths: CredentialPaths = PATHS,
+  accountName?: string,
 ): Promise<void> {
   const token = githubToken.trim()
   if (!token) {
@@ -107,8 +139,9 @@ export async function writeGitHubCredential(
   }
 
   const existing = await readCredentialStore(paths)
-  const activeAccount = existing?.activeAccount ?? DEFAULT_CREDENTIAL_ACCOUNT
-  const existingAccount = existing?.accounts[activeAccount]
+  const selectedAccount = accountName ?? existing?.activeAccount ?? DEFAULT_CREDENTIAL_ACCOUNT
+  const activeAccount = existing?.activeAccount ?? selectedAccount
+  const existingAccount = existing?.accounts[selectedAccount]
   const account: z.infer<typeof credentialAccountSchema> = {
     ...existingAccount,
     githubToken: Buffer.from(token, 'utf8').toString('base64'),
@@ -126,7 +159,7 @@ export async function writeGitHubCredential(
     activeAccount,
     accounts: {
       ...existing?.accounts,
-      [activeAccount]: account,
+      [selectedAccount]: account,
     },
   }
 
@@ -192,14 +225,21 @@ export async function replaceGitHubCredentialDuringMigration(
 
 export async function prepareGitHubCredential(
   paths: CredentialPaths = PATHS,
+  accountName?: string,
 ): Promise<PreparedGitHubCredential | undefined> {
+  if (accountName !== undefined && accountName !== DEFAULT_CREDENTIAL_ACCOUNT) {
+    const store = await readGitHubCredentials(paths)
+    const credential = store?.accounts[accountName]
+    return credential ? { ...credential, migrationPending: false } : undefined
+  }
+
   const migration = await preparePendingGitHubCredentialMigration(paths)
   if (migration) {
     return migration
   }
 
   await removeStaleMigrationJournal(paths)
-  const credential = await readGitHubCredential(paths)
+  const credential = await readGitHubCredential(paths, accountName)
   return credential ? { ...credential, migrationPending: false } : undefined
 }
 

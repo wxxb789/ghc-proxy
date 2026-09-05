@@ -69,6 +69,9 @@ Observability is emitted where behavior is actually selected or applied:
   completion.
 - `runPipeline()` records the shared model trace and the actual selected
   `StrategyEntry.name`.
+- Hostname-routed requests record the selected operator-defined account name;
+  legacy single-account requests omit the field. Tokens and credential-derived
+  identifiers are never stored.
 - Transform functions return small change indicators (boolean, count, or
   removed keys). Callers increment stable effect IDs only when the real
   transform changed the request.
@@ -111,11 +114,12 @@ Authentication projection is allowlist-only. It contains presence/status,
 login, expiry, and refresh/validation timestamps, never tokens or raw errors.
 
 Quota is fetched only from the dashboard path. A process-local cache keeps one
-safe projection for 60 seconds and coalesces concurrent refreshes. The
-projection includes plan, reset date, and the three quota pools; analytics IDs,
-organization data, and quota IDs are discarded before caching. A five-second
-dashboard-only timeout aborts a hung quota fetch so later polls can recover;
-the public `/usage` route keeps its existing behavior.
+safe projection per selected account for 60 seconds and coalesces concurrent
+refreshes within that account. The projection includes plan, reset date, and the
+three quota pools; analytics IDs, organization data, and quota IDs are discarded
+before caching. A five-second dashboard-only timeout aborts a hung quota fetch
+so later polls can recover; the public `/usage` route keeps its existing
+behavior.
 
 ## Serving and Security
 

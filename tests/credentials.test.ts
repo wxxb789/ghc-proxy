@@ -93,6 +93,58 @@ describe('credential store', () => {
     expect(Buffer.from(stored.accounts.work!.githubToken, 'base64').toString('utf8')).toBe('new-work-token')
   })
 
+  test('reads and updates an explicitly named account without changing the active account', async () => {
+    await fs.writeFile(credentialPaths.CREDENTIALS_PATH, JSON.stringify({
+      version: 1,
+      activeAccount: 'default',
+      accounts: {
+        default: { githubToken: Buffer.from('default-token').toString('base64') },
+        account1: { githubToken: Buffer.from('account1-token').toString('base64') },
+      },
+    }))
+
+    expect(await readGitHubCredential(credentialPaths, 'account1')).toEqual({
+      accountName: 'account1',
+      githubToken: 'account1-token',
+      gheDomain: undefined,
+    })
+
+    await writeGitHubCredential('updated-account1-token', 'corp.ghe.com', credentialPaths, 'account1')
+
+    const stored = JSON.parse(await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')) as {
+      activeAccount: string
+      accounts: Record<string, { githubToken: string, gheDomain?: string }>
+    }
+    expect(stored.activeAccount).toBe('default')
+    expect(Buffer.from(stored.accounts.default!.githubToken, 'base64').toString('utf8')).toBe('default-token')
+    expect(Buffer.from(stored.accounts.account1!.githubToken, 'base64').toString('utf8')).toBe('updated-account1-token')
+    expect(stored.accounts.account1!.gheDomain).toBe('corp.ghe.com')
+  })
+
+  test('rejects a requested named account that does not exist', async () => {
+    await writeGitHubCredential('default-token', undefined, credentialPaths)
+
+    await expect(readGitHubCredential(credentialPaths, 'missing')).rejects.toThrow(
+      'does not contain account "missing"',
+    )
+  })
+
+  test('rejects a credential store whose active account is missing', async () => {
+    const original = JSON.stringify({
+      version: 1,
+      activeAccount: 'missing',
+      accounts: {
+        default: { githubToken: Buffer.from('default-token').toString('base64') },
+      },
+    })
+    await fs.writeFile(credentialPaths.CREDENTIALS_PATH, original)
+
+    await expect(readGitHubCredential(credentialPaths)).rejects.toThrow(
+      'selects missing account "missing"',
+    )
+    expect(await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')).toBe(original)
+  })
+
   test('stages a legacy token with an exact config backup and leaves config untouched', async () => {
     const legacyConfig = '{\n  "githubToken": "legacy-token",\n  "smallModel": "gpt-5-mini"\n}\n'
     await fs.writeFile(credentialPaths.CONFIG_PATH, legacyConfig)

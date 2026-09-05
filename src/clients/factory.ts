@@ -4,28 +4,48 @@ import type { ClientConfig } from '~/clients'
 import consola from 'consola'
 import { CopilotClient, getVSCodeVersion } from '~/clients'
 import { getOrCreateRequestCorrelation } from '~/lib/request-logger'
-import { authStore, modelCache } from '~/state'
+import { getCurrentAccountRuntime, getRequestAccountName } from '~/state'
 import { buildGitHubUrls } from './ghe-domain'
 import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
-const upstreamRequestQueue = createDefaultUpstreamRequestQueue()
+const upstreamRequestQueues = new Set<ReturnType<typeof createDefaultUpstreamRequestQueue>>()
+let upstreamRequestQueueOptions: Partial<UpstreamRequestQueueOptions> = {}
+const accountQueues = new WeakMap<object, ReturnType<typeof createDefaultUpstreamRequestQueue>>()
+let vsCodeVersionPromise: Promise<string> | undefined
+
+function getUpstreamRequestQueue() {
+  const runtime = getCurrentAccountRuntime()
+  const existing = accountQueues.get(runtime)
+  if (existing) {
+    return existing
+  }
+
+  const queue = createDefaultUpstreamRequestQueue(upstreamRequestQueueOptions)
+  accountQueues.set(runtime, queue)
+  upstreamRequestQueues.add(queue)
+  return queue
+}
 
 export function configureUpstreamRequestQueue(
   options: Partial<UpstreamRequestQueueOptions>,
 ): void {
-  upstreamRequestQueue.updateOptions(options)
+  upstreamRequestQueueOptions = { ...upstreamRequestQueueOptions, ...options }
+  for (const queue of upstreamRequestQueues) {
+    queue.updateOptions(options)
+  }
 }
 
 export function getUpstreamRequestQueueSnapshot(): UpstreamRequestQueueSnapshot {
-  return upstreamRequestQueue.snapshot()
+  return getUpstreamRequestQueue().snapshot()
 }
 
 export function getClientConfig(): ClientConfig {
-  const { baseUrl, apiBaseUrl } = buildGitHubUrls(authStore.gheDomain)
+  const runtime = getCurrentAccountRuntime()
+  const { baseUrl, apiBaseUrl } = buildGitHubUrls(runtime.auth.gheDomain)
   return {
-    accountType: authStore.accountType,
-    vsCodeVersion: modelCache.getVSCodeVersion(),
-    copilotApiBase: authStore.copilotApiBase,
+    accountType: runtime.auth.accountType,
+    vsCodeVersion: runtime.models.getVSCodeVersion(),
+    copilotApiBase: runtime.auth.copilotApiBase,
     githubBaseUrl: baseUrl,
     githubApiBaseUrl: apiBaseUrl,
   }
@@ -38,8 +58,9 @@ export function createCopilotClient(
     fallbackAttempt?: boolean
   } = {},
 ): CopilotClient {
-  return new CopilotClient(authStore, getClientConfig(), {
-    requestQueue: upstreamRequestQueue,
+  const runtime = getCurrentAccountRuntime()
+  return new CopilotClient(runtime.auth, getClientConfig(), {
+    requestQueue: getUpstreamRequestQueue(),
     recovery,
     ...options,
   })
@@ -49,6 +70,7 @@ export function createRequestRecoveryRecord(request: Request): UpstreamRecoveryR
   const { requestId, callerRequestId } = getOrCreateRequestCorrelation(request)
   return {
     requestId,
+    accountName: getRequestAccountName(request),
     ...(callerRequestId ? { callerRequestId } : {}),
     callerSignal: request.signal,
     retryCount: 0,
@@ -56,13 +78,18 @@ export function createRequestRecoveryRecord(request: Request): UpstreamRecoveryR
 }
 
 export async function cacheModels(client?: CopilotClient): Promise<void> {
+  const { models } = getCurrentAccountRuntime()
   const copilotClient = client ?? createCopilotClient()
-  const models = await copilotClient.getModels()
-  modelCache.cacheModels(models)
+  const response = await copilotClient.getModels()
+  models.cacheModels(response)
 }
 
 export async function cacheVSCodeVersion() {
-  const response = await getVSCodeVersion()
-  modelCache.setVSCodeVersion(response)
+  const { models } = getCurrentAccountRuntime()
+  const response = await (vsCodeVersionPromise ??= getVSCodeVersion().catch((error) => {
+    vsCodeVersionPromise = undefined
+    throw error
+  }))
+  models.setVSCodeVersion(response)
   consola.debug(`Using VSCode version: ${response}`)
 }

@@ -104,6 +104,47 @@ describe('config module', () => {
     expect(config).toEqual(partialConfig)
   })
 
+  test('readConfig() normalizes an explicit account-routing configuration', async () => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'LOCALHOST.',
+        defaultAccount: 'default',
+        hostnames: {
+          'Account1.Localhost.': 'account1',
+        },
+      },
+    }))
+
+    expect((await readConfig()).accountRouting).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: {
+        'account1.localhost': 'account1',
+      },
+    })
+  })
+
+  test('readConfig() fails closed instead of dropping an invalid account-routing field', async () => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      smallModel: 'gpt-5-mini',
+      accountRouting: {
+        baseHostname: 'localhost:4141',
+        defaultAccount: 'default',
+        hostnames: {},
+      },
+    }))
+
+    await expect(readConfig()).rejects.toThrow('accountRouting')
+    expect(getCachedConfig()).toEqual({})
+  })
+
+  test('readConfig() fails closed when malformed JSON appears to contain account routing', async () => {
+    await fs.writeFile(tempConfigPath, '{ "accountRouting": ')
+
+    await expect(readConfig()).rejects.toThrow('accountRouting')
+    expect(getCachedConfig()).toEqual({})
+  })
+
   test('readConfig() — config is array → returns {}, warns', async () => {
     await fs.writeFile(tempConfigPath, JSON.stringify(['not', 'an', 'object']))
     const config = await readConfig()

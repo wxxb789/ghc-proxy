@@ -7,7 +7,7 @@ import { chatCompletionsStrategyRegistry } from '~/routes/chat-completions/strat
 import { defaultStrategyRegistry, resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
 import { responsesStrategyRegistry } from '~/routes/responses/strategy-registry'
 import { handleUsageCore } from '~/routes/usage/handler'
-import { authStore, configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
+import { authStore, configStore, getCurrentAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 import { resolveResponsesCompactThreshold } from '~/transform/context-management'
 import { getChatCompletionsTokenParameter, resolveStrippedResponsesParams, RESPONSES_MIN_OUTPUT_TOKENS } from '~/transform/parameter-filter'
 import { RESPONSES_INPUT_POLICY } from '~/transform/responses-input'
@@ -35,8 +35,8 @@ interface DashboardQuotaDetail {
 }
 
 export class DashboardQuotaCache {
-  private cached?: { expiresAt: number, value: DashboardQuota }
-  private inFlight?: Promise<DashboardQuota>
+  private readonly cached = new Map<string, { expiresAt: number, value: DashboardQuota }>()
+  private readonly inFlight = new Map<string, Promise<DashboardQuota>>()
   private readonly load: (signal?: AbortSignal) => Promise<CopilotUsageResponse>
   private readonly now: () => number
   private readonly ttlMs: number
@@ -55,11 +55,14 @@ export class DashboardQuotaCache {
   }
 
   get(): Promise<DashboardQuota> {
+    const accountName = getCurrentAccountName()
     const now = this.now()
-    if (this.cached && now < this.cached.expiresAt)
-      return Promise.resolve(this.cached.value)
-    if (this.inFlight)
-      return this.inFlight
+    const cached = this.cached.get(accountName)
+    if (cached && now < cached.expiresAt)
+      return Promise.resolve(cached.value)
+    const inFlight = this.inFlight.get(accountName)
+    if (inFlight)
+      return inFlight
 
     const controller = new AbortController()
     let timeout: ReturnType<typeof setTimeout> | undefined
@@ -71,34 +74,36 @@ export class DashboardQuotaCache {
       }, this.timeoutMs)
     })
 
-    this.inFlight = Promise.race([this.load(controller.signal), timeoutPromise])
+    const load = Promise.race([this.load(controller.signal), timeoutPromise])
       .then((usage) => {
         const fetchedAt = this.now()
         const value = projectQuota(usage, fetchedAt)
-        this.cached = { expiresAt: fetchedAt + this.ttlMs, value }
+        this.cached.set(accountName, { expiresAt: fetchedAt + this.ttlMs, value })
         return value
       })
       .catch(() => {
-        const value: DashboardQuota = this.cached
-          ? { ...this.cached.value, status: 'stale' }
+        const lastValue = this.cached.get(accountName)
+        const value: DashboardQuota = lastValue
+          ? { ...lastValue.value, status: 'stale' }
           : { status: 'unavailable' }
-        this.cached = {
+        this.cached.set(accountName, {
           expiresAt: this.now() + this.ttlMs,
           value,
-        }
+        })
         return value
       })
       .finally(() => {
         if (timeout !== undefined)
           clearTimeout(timeout)
-        this.inFlight = undefined
+        this.inFlight.delete(accountName)
       })
-    return this.inFlight
+    this.inFlight.set(accountName, load)
+    return load
   }
 
   reset(): void {
-    this.cached = undefined
-    this.inFlight = undefined
+    this.cached.clear()
+    this.inFlight.clear()
   }
 }
 

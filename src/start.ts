@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
+import type { AuthStore } from '~/state/auth'
 import process from 'node:process'
+
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
@@ -9,6 +11,7 @@ import { generateEnvScript } from '~/cli/shell'
 import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
+import { compileAccountRouting } from '~/lib/account-routing'
 import {
   getCachedConfig,
   MAX_UPSTREAM_QUEUE_RETRIES,
@@ -16,10 +19,19 @@ import {
   MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS,
   readConfig,
 } from '~/lib/config'
+import { inspectGitHubCredential, readGitHubCredentials } from '~/lib/credentials'
 import { ensurePaths } from '~/lib/paths'
 import { setupAuthTokens, setupRuntimeOverrideTokens } from '~/lib/token'
 import { createServer } from '~/server'
-import { authStore, modelCache, runtimeStore } from '~/state'
+import {
+  authStore,
+  configureAccountRuntimes,
+  createAccountRuntime,
+  modelCache,
+  resetAccountRuntimes,
+  runtimeStore,
+  runWithAccountRuntime,
+} from '~/state'
 
 interface RunServerOptions {
   port: number
@@ -113,24 +125,13 @@ async function runServer(options: RunServerOptions): Promise<void> {
     consola.info('Verbose logging enabled')
   }
 
-  authStore.accountType = accountType
   if (accountType !== 'individual') {
     consola.info(`Using ${accountType} plan GitHub account`)
   }
-
-  if (options.githubToken) {
-    authStore.githubToken = options.githubToken
-    consola.info('Using provided GitHub token')
-  }
-
-  authStore.manualApprove = options.manual
-  authStore.rateLimitSeconds = options.rateLimit
-  authStore.rateLimitWait = options.rateLimitWait
-  authStore.showToken = options.showToken
-  authStore.upstreamTimeoutSeconds = options.upstreamTimeoutSeconds
   runtimeStore.dumpFailedPayloads = resolveDumpFailedPayloadsOption(options.dumpFailedPayloads)
 
   await ensurePaths()
+  resetAccountRuntimes()
   await readConfig()
   const cachedConfig = getCachedConfig()
 
@@ -148,24 +149,12 @@ async function runServer(options: RunServerOptions): Promise<void> {
     maxDelayMs: secondsToMs(upstreamQueueMaxDelaySeconds),
   })
 
-  // Load persisted GHE domain from config, then override with CLI arg if provided.
-  // Pass --ghe-domain "" (empty string) to explicitly clear a persisted domain.
-  applyGheDomain(authStore, cachedConfig.gheDomain, options.gheDomain)
+  const tokenCleanup = cachedConfig.accountRouting
+    ? await setupRoutedAccounts(options, accountType, cachedConfig.accountRouting)
+    : await setupLegacyAccount(options, accountType, cachedConfig.gheDomain)
 
-  await cacheVSCodeVersion()
-
-  const tokenCleanup = options.githubToken
-    ? await setupRuntimeOverrideTokens()
-    : await setupAuthTokens({
-        explicitGheDomain: options.gheDomain === undefined
-          ? undefined
-          : { value: authStore.gheDomain },
-      })
-
-  const copilotClient = createCopilotClient()
-  await cacheModels(copilotClient)
-
-  const serverUrl = `http://localhost:${options.port}`
+  const serverHostname = cachedConfig.accountRouting?.baseHostname ?? 'localhost'
+  const serverUrl = `http://${serverHostname}:${options.port}`
 
   if (options.claudeCode) {
     if (!modelCache.getModels()) {
@@ -188,6 +177,124 @@ async function runServer(options: RunServerOptions): Promise<void> {
 
   process.on('SIGTERM', shutdown)
   process.on('SIGINT', shutdown)
+}
+
+function applyServerAuthOptions(
+  target: AuthStore,
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+): void {
+  target.accountType = accountType
+  target.manualApprove = options.manual
+  target.rateLimitSeconds = options.rateLimit
+  target.rateLimitWait = options.rateLimitWait
+  target.showToken = options.showToken
+  target.upstreamTimeoutSeconds = options.upstreamTimeoutSeconds
+}
+
+async function setupLegacyAccount(
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+  persistedGheDomain?: string,
+): Promise<() => void> {
+  applyServerAuthOptions(authStore, options, accountType)
+
+  if (options.githubToken) {
+    authStore.githubToken = options.githubToken
+    consola.info('Using provided GitHub token')
+  }
+
+  // Load persisted GHE domain from config, then override with CLI arg if provided.
+  // Pass --ghe-domain "" (empty string) to explicitly clear a persisted domain.
+  applyGheDomain(authStore, persistedGheDomain, options.gheDomain)
+  await cacheVSCodeVersion()
+
+  const cleanup = options.githubToken
+    ? await setupRuntimeOverrideTokens()
+    : await setupAuthTokens({
+        explicitGheDomain: options.gheDomain === undefined
+          ? undefined
+          : { value: authStore.gheDomain },
+      })
+
+  await cacheModels(createCopilotClient())
+  return cleanup
+}
+
+async function setupRoutedAccounts(
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+  routingConfig: NonNullable<ReturnType<typeof getCachedConfig>['accountRouting']>,
+): Promise<() => void> {
+  if (options.githubToken) {
+    throw new Error('--github-token cannot be used with accountRouting because it is not bound to a named account.')
+  }
+  if (options.gheDomain !== undefined) {
+    throw new Error('--ghe-domain cannot be used with accountRouting; configure the tenant on each named credential.')
+  }
+
+  const migrationStatus = await inspectGitHubCredential()
+  if (migrationStatus.migrationPending) {
+    applyServerAuthOptions(authStore, options, accountType)
+    applyGheDomain(authStore, getCachedConfig().gheDomain)
+    const cleanupMigration = await setupAuthTokens()
+    cleanupMigration()
+  }
+
+  const credentials = await readGitHubCredentials()
+  if (!credentials) {
+    throw new Error('accountRouting requires credentials.json with every referenced named account.')
+  }
+
+  const compiled = compileAccountRouting(
+    routingConfig,
+    Object.keys(credentials.accounts),
+  )
+  const accountNames = new Set([
+    compiled.defaultAccount,
+    ...compiled.hostnames.values(),
+  ])
+  const runtimes = Array.from(accountNames, (accountName) => {
+    const credential = credentials.accounts[accountName]!
+    const runtime = createAccountRuntime(accountName)
+    applyServerAuthOptions(runtime.auth, options, accountType)
+    applyGheDomain(runtime.auth, credential.gheDomain)
+    return runtime
+  })
+
+  configureAccountRuntimes(compiled, runtimes)
+  const cleanups: Array<() => void> = []
+  try {
+    for (const runtime of runtimes) {
+      consola.info(`Initializing GitHub account ${JSON.stringify(runtime.name)}`)
+      const cleanup = await runWithAccountRuntime(runtime, async () => {
+        await cacheVSCodeVersion()
+        const stopRefresh = await setupAuthTokens({ accountName: runtime.name })
+        try {
+          await cacheModels(createCopilotClient())
+          return stopRefresh
+        }
+        catch (error) {
+          stopRefresh()
+          throw error
+        }
+      })
+      cleanups.push(cleanup)
+    }
+  }
+  catch (error) {
+    for (const cleanup of cleanups.reverse()) {
+      cleanup()
+    }
+    resetAccountRuntimes()
+    throw error
+  }
+
+  return () => {
+    for (const cleanup of cleanups.reverse()) {
+      cleanup()
+    }
+  }
 }
 
 export function parseIntArg(

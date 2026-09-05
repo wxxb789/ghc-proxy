@@ -102,6 +102,7 @@ export type RecoveryEventName
 
 export interface RecoveryEvent {
   requestId: string
+  accountName?: string
   callerRequestId?: string
   event: RecoveryEventName
   retryCount?: number
@@ -128,11 +129,19 @@ interface RecoveryEventLogger {
 
 const MAX_LOGGED_CALLER_REQUEST_ID_LENGTH = 128
 const UNSAFE_CALLER_REQUEST_ID_CHARACTERS = /[^\w.:@/-]/g
+const MAX_LOGGED_ACCOUNT_NAME_LENGTH = 64
+const UNSAFE_ACCOUNT_NAME_CHARACTERS = /[^\w.-]/g
 
 function sanitizeCallerRequestId(value: string | undefined): string | undefined {
   return value
     ? value.replace(UNSAFE_CALLER_REQUEST_ID_CHARACTERS, '_').slice(0, MAX_LOGGED_CALLER_REQUEST_ID_LENGTH)
     : undefined
+}
+
+function sanitizeAccountName(value: string): string {
+  return value
+    .replace(UNSAFE_ACCOUNT_NAME_CHARACTERS, '_')
+    .slice(0, MAX_LOGGED_ACCOUNT_NAME_LENGTH)
 }
 
 const RECOVERY_EVENT_OPTIONAL_FIELDS = [
@@ -176,6 +185,7 @@ function formatRecoveryEventLine(fields: RecoveryEvent): string {
   const details = [
     `Upstream ${kind}`,
     fields.decision ?? fields.event,
+    fields.accountName ? `account=${JSON.stringify(fields.accountName).slice(1, -1)}` : undefined,
     fields.status !== undefined ? `status=${fields.status}` : undefined,
     fields.effectiveModel ? `model=${JSON.stringify(fields.effectiveModel).slice(1, -1)}` : undefined,
     fields.scope ? `scope=${fields.scope}` : undefined,
@@ -210,6 +220,7 @@ export function logRecoveryEvent(
   const callerRequestId = sanitizeCallerRequestId(input.callerRequestId)
   const fields: RecoveryEvent = {
     requestId: input.requestId,
+    ...(input.accountName ? { accountName: sanitizeAccountName(input.accountName) } : {}),
     ...(callerRequestId ? { callerRequestId } : {}),
     event: input.event,
   }
@@ -337,6 +348,7 @@ export function logRequest(
   modelInfo?: ModelMappingInfo,
   requestId?: string,
   callerRequestId?: string,
+  accountName?: string,
 ): void {
   const path = formatPath(url)
   const line = [
@@ -352,7 +364,10 @@ export function logRequest(
   const callerRid = safeCallerRequestId
     ? ` ${colorize('dim', `callerRid=${safeCallerRequestId}`)}`
     : ''
+  const account = accountName
+    ? ` ${colorize('dim', `account=${sanitizeAccountName(accountName)}`)}`
+    : ''
 
   // eslint-disable-next-line no-console
-  console.log(`${line}${formatModelMapping(modelInfo)}${rid}${callerRid}`)
+  console.log(`${line}${formatModelMapping(modelInfo)}${account}${rid}${callerRid}`)
 }

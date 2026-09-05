@@ -5,7 +5,9 @@ import consola from 'consola'
 
 import { cacheVSCodeVersion } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
+import { normalizeAccountName } from '~/lib/account-routing'
 import { getCachedConfig, readConfig } from '~/lib/config'
+import { readGitHubCredentials } from '~/lib/credentials'
 import { ensurePaths } from '~/lib/paths'
 import {
   finalizePendingGitHubCredentialMigration,
@@ -14,6 +16,7 @@ import {
 import { authStore } from '~/state'
 
 interface RunAuthOptions {
+  account?: string
   verbose: boolean
   showToken: boolean
   gheDomain?: string
@@ -30,19 +33,35 @@ async function runAuth(options: RunAuthOptions): Promise<void> {
   await ensurePaths()
   await readConfig()
 
+  const accountName = options.account === undefined
+    ? undefined
+    : normalizeAccountName(options.account)
+  const storedAccount = accountName
+    ? (await readGitHubCredentials())?.accounts[accountName]
+    : undefined
+
   // Load persisted GHE domain from config, then override with CLI arg if provided.
   // Pass --ghe-domain "" (empty string) to explicitly clear a persisted domain.
-  applyGheDomain(authStore, getCachedConfig().gheDomain, options.gheDomain)
+  applyGheDomain(
+    authStore,
+    accountName ? storedAccount?.gheDomain : getCachedConfig().gheDomain,
+    options.gheDomain,
+  )
 
   await cacheVSCodeVersion()
   const githubSetup = await setupGitHubToken({
+    accountName,
     force: true,
     explicitGheDomain: options.gheDomain === undefined
       ? undefined
       : { value: authStore.gheDomain },
   })
   await finalizePendingGitHubCredentialMigration(githubSetup)
-  consola.success('GitHub credential written to credentials.json')
+  consola.success(
+    accountName
+      ? `GitHub credential for account ${JSON.stringify(accountName)} written to credentials.json`
+      : 'GitHub credential written to credentials.json',
+  )
 }
 
 export const auth = defineCommand({
@@ -51,6 +70,10 @@ export const auth = defineCommand({
     description: 'Run GitHub auth flow without running the server',
   },
   args: {
+    'account': {
+      type: 'string',
+      description: 'Named account to create or replace',
+    },
     'verbose': {
       alias: 'v',
       type: 'boolean',
@@ -70,6 +93,7 @@ export const auth = defineCommand({
   },
   run({ args }) {
     return runAuth({
+      account: args.account,
       verbose: args.verbose,
       showToken: args['show-token'],
       gheDomain: args['ghe-domain'],

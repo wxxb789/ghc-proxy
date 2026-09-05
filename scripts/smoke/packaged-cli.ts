@@ -27,6 +27,7 @@ const EXPECTED_RUNTIME_PROBES = [
   'credential-store-migration-contract',
   'dashboard-bundle-contract',
   'dashboard-node-listener-boundary',
+  'account-hostname-routing',
 ]
 
 async function main() {

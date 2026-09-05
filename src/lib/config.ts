@@ -3,6 +3,7 @@ import process from 'node:process'
 import consola from 'consola'
 import { z } from 'zod'
 
+import { accountRoutingSchema } from '~/lib/account-routing'
 import { PATHS } from '~/lib/paths'
 
 const reasoningEffortSchema = z.enum([
@@ -56,6 +57,7 @@ const configFileSchema = z.object({
   upstreamQueueBaseDelaySeconds: z.number().int().nonnegative().optional(),
   upstreamQueueMaxDelaySeconds: z.number().int().positive().optional(),
   gheDomain: z.string().optional(),
+  accountRouting: accountRoutingSchema.optional(),
 }).passthrough()
 
 export type ConfigFile = z.infer<typeof configFileSchema>
@@ -63,6 +65,13 @@ export type ConfigFile = z.infer<typeof configFileSchema>
 const KNOWN_CONFIG_KEYS = new Set(Object.keys(configFileSchema.shape))
 
 let cachedConfig: ConfigFile = {}
+
+export class ConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ConfigValidationError'
+  }
+}
 
 export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'high'
 export const DEFAULT_USE_FUNCTION_APPLY_PATCH = true
@@ -74,8 +83,9 @@ export const DEFAULT_RESPONSES_OFFICIAL_EMULATOR = false
 export const DEFAULT_RESPONSES_OFFICIAL_EMULATOR_TTL_SECONDS = 14_400
 
 export async function readConfig(): Promise<ConfigFile> {
+  let content: string | undefined
   try {
-    const content = await fs.readFile(PATHS.CONFIG_PATH, 'utf8')
+    content = await fs.readFile(PATHS.CONFIG_PATH, 'utf8')
 
     if (!content.trim()) {
       cachedConfig = {}
@@ -95,6 +105,15 @@ export async function readConfig(): Promise<ConfigFile> {
     }
 
     const rawConfig = withoutLegacyGitHubToken(raw as Record<string, unknown>)
+    if ('accountRouting' in rawConfig) {
+      const accountRoutingResult = accountRoutingSchema.safeParse(rawConfig.accountRouting)
+      if (!accountRoutingResult.success) {
+        cachedConfig = {}
+        throw new ConfigValidationError(
+          `config.json accountRouting is invalid: ${accountRoutingResult.error.issues.map(issue => issue.message).join('; ')}`,
+        )
+      }
+    }
     const result = configFileSchema.safeParse(rawConfig)
     if (!result.success) {
       consola.warn(
@@ -128,6 +147,15 @@ export async function readConfig(): Promise<ConfigFile> {
     return cachedConfig
   }
   catch (error: unknown) {
+    if (error instanceof ConfigValidationError) {
+      throw error
+    }
+    if (content?.includes('"accountRouting"')) {
+      cachedConfig = {}
+      throw new ConfigValidationError(
+        `config.json accountRouting could not be parsed: ${(error as Error).message}`,
+      )
+    }
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       cachedConfig = {}
       return {}

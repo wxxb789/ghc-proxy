@@ -15,13 +15,38 @@ import { createModelRoutes } from './routes/models/route'
 import { createResponsesRoutes } from './routes/responses/route'
 import { createTokenRoute } from './routes/token/route'
 import { createUsageRoute } from './routes/usage/route'
-import { authStore, modelCache, runtimeStore } from './state'
+import { authStore, getRequestAccountName, modelCache, resolveRequestAccountRuntime, runtimeStore, runWithAccountRuntime } from './state'
 import { VERSION } from './util/version'
 
 const isBun = typeof globalThis.Bun !== 'undefined'
 
+// Elysia higher-order wrappers cover both the general fetch handler and Bun's
+// per-path system router, keeping every public path inside the same account
+// context without leaking that context back to the caller.
+const accountRoutingWrapper: Parameters<Elysia['wrap']>[0] = (handle, request) => {
+  return () => {
+    const runtime = resolveRequestAccountRuntime(request)
+    if (!runtime) {
+      const { hostname, pathname } = new URL(request.url)
+      const message = `No account is configured for hostname ${JSON.stringify(hostname)}.`
+      const normalizedPathname = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+      const anthropic = normalizedPathname === '/v1/messages'
+        || normalizedPathname === '/v1/messages/count_tokens'
+      return Response.json(
+        anthropic
+          ? { type: 'error', error: { message, type: 'invalid_request_error' } }
+          : { error: { message, type: 'invalid_request_error' } },
+        { status: 421 },
+      )
+    }
+
+    return runWithAccountRuntime(runtime, () => handle(request))
+  }
+}
+
 export interface ServerOptions {
   idleTimeout?: number
+  logRequests?: boolean
 }
 
 /**
@@ -152,13 +177,13 @@ export function handleRouteError(
 }
 
 export function createServer(options?: ServerOptions) {
-  return new Elysia({
+  const app = new Elysia({
     adapter: isBun ? undefined : node(),
     serve: options?.idleTimeout !== undefined
       ? { idleTimeout: options.idleTimeout }
       : undefined,
   })
-    .use(cors())
+    .wrap(accountRoutingWrapper)
     .error({ HTTP: HTTPError })
     // Block body, not a concise arrow: Elysia turns any non-undefined
     // `onRequest` return into the response, and a WeakMap setter returns the
@@ -172,10 +197,12 @@ export function createServer(options?: ServerOptions) {
       const { requestId } = getOrCreateRequestCorrelation(request)
       runtimeStore.requests.start({
         requestId,
+        accountName: getRequestAccountName(request),
         method: request.method,
         endpoint,
       })
     })
+    .use(cors())
     .derive(({ request }) => ({
       ...getOrCreateRequestCorrelation(request),
     }))
@@ -200,11 +227,22 @@ export function createServer(options?: ServerOptions) {
       const status = typeof set.status === 'number' ? set.status : 200
       if (!runtimeStore.requests.complete(internalRequestId, status))
         return
+      if (options?.logRequests === false)
+        return
 
       const elapsed = formatElapsed(getRequestStart(request))
       const externalRequestId = callerRequestId ?? correlation.callerRequestId
       const modelMapping = getRequestModelMapping(request)
-      logRequest(request.method, request.url, status, elapsed, modelMapping, internalRequestId, externalRequestId)
+      logRequest(
+        request.method,
+        request.url,
+        status,
+        elapsed,
+        modelMapping,
+        internalRequestId,
+        externalRequestId,
+        getRequestAccountName(request),
+      )
     })
     .onError(({ code, error, request, set }) => {
       const response = handleRouteError({ code, error, set })
@@ -246,4 +284,6 @@ export function createServer(options?: ServerOptions) {
         .use(createResponsesRoutes())
         .use(createMessageRoutes())
     })
+
+  return app
 }
