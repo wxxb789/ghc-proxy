@@ -3,6 +3,7 @@ import type { StateSnapshot } from './helpers'
 import type { ChatCompletionsPayload } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import consola from 'consola'
 
 import { authStore, modelCache } from '~/state'
 import { CopilotClient } from '../src/clients/copilot-client'
@@ -256,6 +257,46 @@ describe('GitHubClient URL routing', () => {
 
       expect(recorder.mock.calls[0]?.[0]).toBe('https://company.ghe.com/login/oauth/access_token')
       expect(token).toBe('ghe-token')
+    })
+
+    test('stops polling when the caller aborts', async () => {
+      const controller = new AbortController()
+      let calls = 0
+      const fetchImpl = (async () => {
+        calls++
+        controller.abort(new DOMException('cancelled', 'AbortError'))
+        return okJson({ error: 'authorization_pending' })
+      }) as unknown as typeof fetch
+      const client = new GitHubClient(baseAuth, defaultConfig, { fetch: fetchImpl })
+
+      await expect(client.pollAccessToken(deviceCode, {
+        signal: controller.signal,
+      })).rejects.toThrow('cancelled')
+      expect(calls).toBe(1)
+    })
+
+    test('does not write the access token to debug logs', async () => {
+      const originalDebug = consola.debug
+      const debugCalls: unknown[][] = []
+      consola.debug = ((...args: unknown[]) => {
+        debugCalls.push(args)
+      }) as typeof consola.debug
+
+      try {
+        const { fetchImpl } = createFetchSpy({
+          access_token: 'must-not-be-logged',
+          token_type: 'bearer',
+          scope: '',
+        })
+        const client = new GitHubClient(baseAuth, defaultConfig, { fetch: fetchImpl })
+
+        await client.pollAccessToken(deviceCode)
+
+        expect(JSON.stringify(debugCalls)).not.toContain('must-not-be-logged')
+      }
+      finally {
+        consola.debug = originalDebug
+      }
     })
   })
 

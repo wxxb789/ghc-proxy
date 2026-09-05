@@ -273,7 +273,9 @@ export async function setupGitHubToken(
       consola.info('Not logged in, getting new access token')
       const githubClient = createGitHubClient()
       const response = await githubClient.getDeviceCode()
-      consola.debug('Device code response:', response)
+      consola.debug(
+        `GitHub device authorization created; expires in ${response.expires_in}s`,
+      )
 
       consola.info(
         `Please enter the code "${response.user_code}" in ${response.verification_uri}`,
