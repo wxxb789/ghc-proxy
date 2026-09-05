@@ -1,19 +1,21 @@
 import { Buffer } from 'node:buffer'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
 import fs from 'node:fs/promises'
-import process from 'node:process'
 import consola from 'consola'
 import { z } from 'zod'
 
+import {
+  applyPrivateFilePermissions,
+  writePrivateFileAtomically,
+  writePrivateFileAtomicallyIfAbsent,
+} from '~/lib/atomic-file'
 import { PATHS } from '~/lib/paths'
 import { formatErrorMessage } from '~/lib/retry'
 
 const CREDENTIALS_VERSION = 1
 const CREDENTIAL_MIGRATION_JOURNAL_VERSION = 1
 const DEFAULT_CREDENTIAL_ACCOUNT = 'default'
-const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 25, 50] as const
-
 const BASE64_RE = /^(?:[a-z0-9+/]{4})*(?:[a-z0-9+/]{2}==|[a-z0-9+/]{3}=)?$/i
 const SHA256_RE = /^[a-f0-9]{64}$/
 
@@ -726,61 +728,6 @@ async function requireGitHubCredential(paths: CredentialPaths): Promise<GitHubCr
     throw new Error(`No active GitHub credential exists in ${paths.CREDENTIALS_PATH}.`)
   }
   return credential
-}
-
-async function writePrivateFileAtomically(filePath: string, content: string): Promise<void> {
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  try {
-    await fs.writeFile(temporaryPath, content, { encoding: 'utf8', mode: 0o600 })
-    await applyPrivateFilePermissions(temporaryPath)
-    await replacePrivateFile(temporaryPath, filePath)
-    await applyPrivateFilePermissions(filePath)
-  }
-  finally {
-    await fs.rm(temporaryPath, { force: true }).catch(() => {})
-  }
-}
-
-async function replacePrivateFile(temporaryPath: string, filePath: string): Promise<void> {
-  for (const delayMs of WINDOWS_RENAME_RETRY_DELAYS_MS) {
-    try {
-      await fs.rename(temporaryPath, filePath)
-      return
-    }
-    catch (error) {
-      if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') {
-        throw error
-      }
-      await new Promise(resolve => setTimeout(resolve, delayMs))
-    }
-  }
-  await fs.rename(temporaryPath, filePath)
-}
-
-async function writePrivateFileAtomicallyIfAbsent(filePath: string, content: string): Promise<void> {
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  try {
-    await fs.writeFile(temporaryPath, content, { encoding: 'utf8', mode: 0o600 })
-    await applyPrivateFilePermissions(temporaryPath)
-    try {
-      await fs.link(temporaryPath, filePath)
-    }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw error
-      }
-    }
-  }
-  finally {
-    await fs.rm(temporaryPath, { force: true }).catch(() => {})
-  }
-}
-
-async function applyPrivateFilePermissions(filePath: string): Promise<void> {
-  if (process.platform === 'win32') {
-    return
-  }
-  await fs.chmod(filePath, 0o600)
 }
 
 async function pathExists(filePath: string): Promise<boolean> {

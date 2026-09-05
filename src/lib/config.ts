@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises'
-import process from 'node:process'
 import consola from 'consola'
 import { z } from 'zod'
 
 import { accountRoutingSchema } from '~/lib/account-routing'
+import { writePrivateFileAtomically } from '~/lib/atomic-file'
 import { PATHS } from '~/lib/paths'
 
 const reasoningEffortSchema = z.enum([
@@ -233,12 +233,10 @@ export async function writeConfigField<K extends keyof ConfigFieldShape>(
 
     const merged = { ...existing, [field]: value }
 
-    await fs.writeFile(
+    await writePrivateFileAtomically(
       PATHS.CONFIG_PATH,
       JSON.stringify(merged, null, 2),
-      'utf8',
     )
-    await applyConfigFilePermissions(PATHS.CONFIG_PATH)
 
     cachedConfig = sanitizeConfig(
       withoutLegacyGitHubToken(merged) as ConfigFile,
@@ -256,19 +254,4 @@ function withoutLegacyGitHubToken(
   const sanitized = { ...config }
   delete sanitized.githubToken
   return sanitized
-}
-
-async function applyConfigFilePermissions(filePath: string): Promise<void> {
-  if (process.platform === 'win32') {
-    return
-  }
-
-  try {
-    await fs.chmod(filePath, 0o600)
-  }
-  catch (error) {
-    consola.warn(
-      `Could not set config.json permissions to 0600: ${(error as Error).message}`,
-    )
-  }
 }
