@@ -1,7 +1,8 @@
+import type { DashboardAccountManagement } from './routes/dashboard/route'
 import { cors } from '@elysiajs/cors'
 import { node } from '@elysiajs/node'
-import { Elysia } from 'elysia'
 
+import { Elysia } from 'elysia'
 import { HTTPError } from './lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
 import { isTimeoutLikeError } from './lib/timeout-error'
@@ -45,6 +46,7 @@ const accountRoutingWrapper: Parameters<Elysia['wrap']>[0] = (handle, request) =
 }
 
 export interface ServerOptions {
+  accountManager?: DashboardAccountManagement
   idleTimeout?: number
   logRequests?: boolean
 }
@@ -263,7 +265,7 @@ export function createServer(options?: ServerOptions) {
       modelsLoaded: !!modelCache.getModels(),
       version: VERSION,
     }))
-    .use(createDashboardRoutes())
+    .use(createDashboardRoutes({ accountManager: options?.accountManager }))
     // Root-level routes: completions, models, embeddings, responses are registered here
     // for clients that omit the /v1 prefix. Token and usage routes are root-only
     // because they are proxy-specific endpoints, not part of any upstream API spec.

@@ -1,8 +1,9 @@
+import type { DashboardAccountManagement } from '~/routes/dashboard/route'
+
 import type { CopilotUsageResponse } from '~/types'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Elysia } from 'elysia'
-
 import { DashboardQuotaCache, dashboardQuotaCache } from '~/routes/dashboard/handler'
 import { createDashboardRoutes, isLoopbackAddress } from '~/routes/dashboard/route'
 import { createServer } from '~/server'
@@ -148,6 +149,122 @@ describe('dashboard API security projection', () => {
   })
 })
 
+describe('dashboard account management API', () => {
+  test('serves account data and authentication state without exposing credentials', async () => {
+    const manager = accountManagerFixture()
+    const app = createDashboardRoutes({ accountManager: manager })
+
+    const accountsResponse = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts',
+    ))
+    const startResponse = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'origin': 'http://localhost',
+        },
+        body: JSON.stringify({
+          accountName: 'work',
+          hostname: 'work.localhost',
+          gheDomain: 'company.ghe.com',
+        }),
+      },
+    ))
+    const statusResponse = await app.handle(new Request(
+      'http://localhost/dashboard/api/account-auth/session-1',
+    ))
+
+    expect(accountsResponse.status).toBe(200)
+    expect(startResponse.status).toBe(202)
+    expect(statusResponse.status).toBe(200)
+    expect(manager.beginAddAccount).toHaveBeenCalledWith({
+      accountName: 'work',
+      hostname: 'work.localhost',
+      gheDomain: 'company.ghe.com',
+    })
+    const body = [accountsResponse, startResponse, statusResponse]
+      .map(response => response.clone())
+    const serialized = (await Promise.all(body.map(response => response.text()))).join('\n')
+    expect(serialized).not.toContain('github-secret-token')
+    expect(serialized).not.toContain('copilot-secret-token')
+    expect(serialized).not.toContain('private-device-code')
+  })
+
+  test('switches default through the protected management service', async () => {
+    const manager = accountManagerFixture()
+    const app = createDashboardRoutes({ accountManager: manager })
+
+    const response = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts/default',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'origin': 'http://localhost',
+        },
+        body: JSON.stringify({ accountName: 'work' }),
+      },
+    ))
+
+    expect(response.status).toBe(200)
+    expect(manager.setDefaultAccount).toHaveBeenCalledWith('work')
+    expect(await response.json()).toMatchObject({ defaultAccount: 'work' })
+  })
+
+  test('applies the existing access guard before account mutations', async () => {
+    const manager = accountManagerFixture()
+    const app = createDashboardRoutes({ accountManager: manager })
+
+    const response = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts/default',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'origin': 'https://attacker.example',
+        },
+        body: JSON.stringify({ accountName: 'work' }),
+      },
+    ))
+
+    expect(response.status).toBe(403)
+    expect(manager.setDefaultAccount).not.toHaveBeenCalled()
+  })
+
+  test('rejects invalid bodies and missing authentication sessions', async () => {
+    const manager = accountManagerFixture()
+    const app = createDashboardRoutes({ accountManager: manager })
+
+    const invalid = await app.handle(new Request(
+      'http://localhost/dashboard/api/accounts',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountName: 'work' }),
+      },
+    ))
+    const missing = await app.handle(new Request(
+      'http://localhost/dashboard/api/account-auth/missing',
+    ))
+
+    expect(invalid.status).toBe(400)
+    expect(missing.status).toBe(404)
+  })
+
+  test('reports account management as unavailable without a configured manager', async () => {
+    const response = await createDashboardRoutes().handle(new Request(
+      'http://localhost/dashboard/api/accounts',
+    ))
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({
+      error: { type: 'invalid_request_error' },
+    })
+  })
+})
+
 function srvxNodeRequest(ip: string): Request {
   return Object.assign(
     new Request('http://localhost/dashboard/api/models'),
@@ -184,5 +301,51 @@ function usageFixture(): CopilotUsageResponse {
       completions: quota,
       premium_interactions: quota,
     },
+  }
+}
+
+function accountManagerFixture(): DashboardAccountManagement & {
+  beginAddAccount: ReturnType<typeof mock>
+  setDefaultAccount: ReturnType<typeof mock>
+} {
+  return {
+    listAccounts: async () => [{
+      name: 'default',
+      hostname: 'default.localhost',
+      isDefault: true,
+      tenant: 'github.com',
+      github: { status: 'ok', login: 'octocat' },
+      copilot: { status: 'ok', modelsLoaded: true },
+      quota: { status: 'unavailable' },
+      githubToken: undefined,
+      copilotToken: undefined,
+    }],
+    beginAddAccount: mock(async () => ({
+      id: 'session-1',
+      state: 'pending' as const,
+      accountName: 'work',
+      hostname: 'work.localhost',
+      authorization: {
+        userCode: 'ABCD-1234',
+        verificationUri: 'https://github.com/login/device',
+        expiresAt: '2026-09-05T12:00:00.000Z',
+        pollIntervalSeconds: 5,
+      },
+    })),
+    getAuthenticationSession: id => id === 'session-1'
+      ? {
+          id: 'session-1',
+          state: 'pending',
+          accountName: 'work',
+          hostname: 'work.localhost',
+          authorization: {
+            userCode: 'ABCD-1234',
+            verificationUri: 'https://github.com/login/device',
+            expiresAt: '2026-09-05T12:00:00.000Z',
+            pollIntervalSeconds: 5,
+          },
+        }
+      : undefined,
+    setDefaultAccount: mock(async () => {}),
   }
 }

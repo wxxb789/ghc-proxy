@@ -248,7 +248,9 @@ describe('AccountManager', () => {
       },
     }))
 
-    await expect(manager.setDefaultAccount('account1')).rejects.toThrow('disk failure')
+    await expect(manager.setDefaultAccount('account1')).rejects.toThrow(
+      'Could not switch the default account.',
+    )
     expect(resolveRequestAccountRuntime(new Request('http://localhost/token'))?.name)
       .toBe('default')
   })

@@ -39,13 +39,17 @@ await mock.module('consola', () => ({
 }))
 
 const listenCalls: Array<number> = []
+const serverOptions: unknown[] = []
 await mock.module('../src/server', () => ({
-  createServer: () => ({
-    listen: (port: number) => {
-      listenCalls.push(port)
-    },
-    stop: async () => {},
-  }),
+  createServer: (options?: unknown) => {
+    serverOptions.push(options)
+    return {
+      listen: (port: number) => {
+        listenCalls.push(port)
+      },
+      stop: async () => {},
+    }
+  },
 }))
 
 await mock.module('../src/cli/startup-banner', () => ({
@@ -298,6 +302,7 @@ describe('GitHub credential migration', () => {
     mockError.mockClear()
     mockSuccess.mockClear()
     listenCalls.length = 0
+    serverOptions.length = 0
   })
 
   afterEach(() => {
@@ -374,6 +379,7 @@ describe('GitHub credential migration', () => {
         baseHostname: 'localhost',
         defaultAccount: 'primary',
         hostnames: {
+          'primary.localhost': 'primary',
           'account1.localhost': 'account1',
         },
       },
@@ -390,6 +396,9 @@ describe('GitHub credential migration', () => {
     expect(getCurrentAccountName()).toBe('primary')
     expect(authStore.githubToken).toBe('primary-token')
     expect(listenCalls).toEqual([4141])
+    expect(serverOptions[0]).toMatchObject({
+      accountManager: expect.any(Object),
+    })
   })
 
   test('restart preserves the configured default instead of the credential-store active account', async () => {
@@ -405,7 +414,10 @@ describe('GitHub credential migration', () => {
       accountRouting: {
         baseHostname: 'localhost',
         defaultAccount: 'default',
-        hostnames: { 'account1.localhost': 'account1' },
+        hostnames: {
+          'default.localhost': 'default',
+          'account1.localhost': 'account1',
+        },
       },
     }))
 
@@ -450,7 +462,7 @@ describe('GitHub credential migration', () => {
       accountRouting: {
         baseHostname: 'localhost',
         defaultAccount: 'default',
-        hostnames: {},
+        hostnames: { 'default.localhost': 'default' },
       },
     }))
 

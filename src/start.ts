@@ -6,6 +6,7 @@ import process from 'node:process'
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
+import { AccountManager } from '~/accounts/manager'
 import { initProxyFromEnv } from '~/cli/proxy'
 import { generateEnvScript } from '~/cli/shell'
 import { printStartupBanner } from '~/cli/startup-banner'
@@ -151,9 +152,12 @@ async function runServer(options: RunServerOptions): Promise<void> {
     maxDelayMs: secondsToMs(upstreamQueueMaxDelaySeconds),
   })
 
-  const tokenCleanup = cachedConfig.accountRouting
+  const accountSetup = cachedConfig.accountRouting
     ? await setupRoutedAccounts(options, accountType, cachedConfig.accountRouting)
-    : await setupLegacyAccount(options, accountType, cachedConfig.gheDomain)
+    : {
+        accountManager: undefined,
+        cleanup: await setupLegacyAccount(options, accountType, cachedConfig.gheDomain),
+      }
 
   const serverHostname = cachedConfig.accountRouting?.baseHostname ?? 'localhost'
   const serverUrl = `http://${serverHostname}:${options.port}`
@@ -167,12 +171,15 @@ async function runServer(options: RunServerOptions): Promise<void> {
 
   printStartupBanner(serverUrl)
 
-  const app = createServer({ idleTimeout: options.idleTimeoutSeconds })
+  const app = createServer({
+    accountManager: accountSetup.accountManager,
+    idleTimeout: options.idleTimeoutSeconds,
+  })
   app.listen(options.port)
 
   const shutdown = async () => {
     consola.info('Shutting down gracefully...')
-    tokenCleanup()
+    accountSetup.cleanup()
     await app.stop()
     process.exit(0)
   }
@@ -227,7 +234,7 @@ async function setupRoutedAccounts(
   options: RunServerOptions,
   accountType: AuthStore['accountType'],
   routingConfig: NonNullable<ReturnType<typeof getCachedConfig>['accountRouting']>,
-): Promise<() => void> {
+): Promise<{ accountManager: AccountManager, cleanup: () => void }> {
   if (options.githubToken) {
     throw new Error('--github-token cannot be used with accountRouting because it is not bound to a named account.')
   }
@@ -265,7 +272,7 @@ async function setupRoutedAccounts(
   })
 
   configureAccountRuntimes(compiled, runtimes)
-  const cleanups: Array<() => void> = []
+  const cleanups = new Map<string, () => void>()
   try {
     for (const runtime of runtimes) {
       consola.info(`Initializing GitHub account ${JSON.stringify(runtime.name)}`)
@@ -281,21 +288,40 @@ async function setupRoutedAccounts(
           throw error
         }
       })
-      cleanups.push(cleanup)
+      cleanups.set(runtime.name, cleanup)
     }
   }
   catch (error) {
-    for (const cleanup of cleanups.reverse()) {
+    for (const cleanup of Array.from(cleanups.values()).reverse()) {
       cleanup()
     }
     resetAccountRuntimes()
     throw error
   }
 
-  return () => {
-    for (const cleanup of cleanups.reverse()) {
-      cleanup()
-    }
+  const accountManager = new AccountManager({
+    authDefaults: serverAuthDefaults(options, accountType),
+    refreshCleanups: cleanups,
+    routing: compiled,
+    runtimes,
+  })
+  return {
+    accountManager,
+    cleanup: () => accountManager.stop(),
+  }
+}
+
+function serverAuthDefaults(
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+): Partial<AuthStore> {
+  return {
+    accountType,
+    manualApprove: options.manual,
+    rateLimitSeconds: options.rateLimit,
+    rateLimitWait: options.rateLimitWait,
+    showToken: false,
+    upstreamTimeoutSeconds: options.upstreamTimeoutSeconds,
   }
 }
 

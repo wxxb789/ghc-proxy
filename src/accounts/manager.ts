@@ -36,6 +36,16 @@ export interface AddAccountInput {
   hostname: string
 }
 
+export class AccountManagementError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'AccountManagementError'
+    this.status = status
+  }
+}
+
 interface PersistAccountInput extends AddAccountInput {
   githubToken: string
   routing: AccountRoutingConfig
@@ -149,16 +159,25 @@ export class AccountManager {
   }
 
   async beginAddAccount(input: AddAccountInput): Promise<AccountAuthenticationSession> {
-    const accountName = normalizeAccountName(input.accountName)
-    const hostname = normalizeDnsHostname(input.hostname)
+    const accountName = parseAccountName(input.accountName)
+    const hostname = parseHostname(input.hostname)
     if (hostname === this.routing.baseHostname) {
-      throw new Error('A dedicated account hostname must differ from the base hostname.')
+      throw new AccountManagementError(
+        'A dedicated account hostname must differ from the base hostname.',
+        400,
+      )
     }
     if (this.runtimes.has(accountName) || this.reservedAccountNames.has(accountName)) {
-      throw new Error(`Account ${JSON.stringify(accountName)} already exists or is being authenticated.`)
+      throw new AccountManagementError(
+        `Account ${JSON.stringify(accountName)} already exists or is being authenticated.`,
+        409,
+      )
     }
     if (this.routing.hostnames.has(hostname) || this.reservedHostnames.has(hostname)) {
-      throw new Error(`Hostname ${JSON.stringify(hostname)} is already configured or reserved.`)
+      throw new AccountManagementError(
+        `Hostname ${JSON.stringify(hostname)} is already configured or reserved.`,
+        409,
+      )
     }
 
     this.reservedAccountNames.add(accountName)
@@ -175,7 +194,11 @@ export class AccountManager {
     }
     catch (error) {
       this.releaseReservation(accountName, hostname)
-      throw error
+      throw new AccountManagementError(
+        'Could not start account authentication.',
+        502,
+        { cause: error },
+      )
     }
 
     const session: InternalAuthenticationSession = {
@@ -204,16 +227,19 @@ export class AccountManager {
   async waitForAuthentication(id: string): Promise<AccountAuthenticationSession> {
     const session = this.sessions.get(id)
     if (!session) {
-      throw new Error(`Unknown account authentication session ${JSON.stringify(id)}.`)
+      throw new AccountManagementError('Account authentication session was not found.', 404)
     }
     return session.settled
   }
 
   async setDefaultAccount(rawAccountName: string): Promise<void> {
-    const accountName = normalizeAccountName(rawAccountName)
+    const accountName = parseAccountName(rawAccountName)
     await this.runMutation(async () => {
       if (!this.runtimes.has(accountName)) {
-        throw new Error(`Account ${JSON.stringify(accountName)} does not exist.`)
+        throw new AccountManagementError(
+          `Account ${JSON.stringify(accountName)} does not exist.`,
+          404,
+        )
       }
       if (accountName === this.routing.defaultAccount) {
         return
@@ -237,7 +263,14 @@ export class AccountManager {
         if (runtimeApplied) {
           configureAccountRuntimes(previousRouting, this.runtimes.values())
         }
-        throw error
+        if (error instanceof AccountManagementError) {
+          throw error
+        }
+        throw new AccountManagementError(
+          'Could not switch the default account.',
+          500,
+          { cause: error },
+        )
       }
     })
   }
@@ -391,5 +424,23 @@ function publicSession(
     hostname: session.hostname,
     authorization: session.authorization,
     ...(session.message ? { message: session.message } : {}),
+  }
+}
+
+function parseAccountName(value: string): string {
+  try {
+    return normalizeAccountName(value)
+  }
+  catch (error) {
+    throw new AccountManagementError('Invalid account name.', 400, { cause: error })
+  }
+}
+
+function parseHostname(value: string): string {
+  try {
+    return normalizeDnsHostname(value)
+  }
+  catch (error) {
+    throw new AccountManagementError('Invalid account hostname.', 400, { cause: error })
   }
 }
