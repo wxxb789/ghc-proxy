@@ -11,6 +11,7 @@ const tempDir = await fs.mkdtemp(
 )
 
 const testPaths = {
+  ACCOUNT_MANAGEMENT_JOURNAL_PATH: path.join(tempDir, 'account-management-transaction.json'),
   APP_DIR: tempDir,
   CONFIG_PATH: path.join(tempDir, 'config.json'),
   CREDENTIALS_PATH: path.join(tempDir, 'credentials.json'),
@@ -129,6 +130,7 @@ await mock.module('../src/clients/github-client', () => ({
 }))
 
 const { PATHS, ensurePaths } = await import('../src/lib/paths')
+const { beginAccountManagementTransaction } = await import('../src/lib/account-management-transaction')
 const { auth } = await import('../src/auth')
 const { start } = await import('../src/start')
 const { CopilotClient } = await import('../src/clients')
@@ -317,6 +319,25 @@ describe('GitHub credential migration', () => {
       .then(() => true)
       .catch(() => false)
     expect(appDirExists).toBe(true)
+  })
+
+  test('start rolls back an interrupted account-management transaction before loading config', async () => {
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({ smallModel: 'gpt-5-mini' }))
+    await writeGitHubCredential('default-token')
+    await beginAccountManagementTransaction(PATHS)
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'missing',
+        hostnames: {},
+      },
+    }))
+
+    await runStartCommand(makeStartArgs())
+
+    expect(await fs.readFile(PATHS.CONFIG_PATH, 'utf8')).toBe(JSON.stringify({ smallModel: 'gpt-5-mini' }))
+    await expect(fs.access(PATHS.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toThrow()
+    expect(listenCalls).toEqual([4141])
   })
 
   test('auth writes an explicitly named account without replacing the active account', async () => {

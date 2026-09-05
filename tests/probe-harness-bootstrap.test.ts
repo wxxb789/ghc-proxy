@@ -6,6 +6,7 @@ import consola from 'consola'
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ghc-proxy-probe-bootstrap-'))
 const paths = {
+  ACCOUNT_MANAGEMENT_JOURNAL_PATH: path.join(tempDir, 'account-management-transaction.json'),
   APP_DIR: tempDir,
   CONFIG_PATH: path.join(tempDir, 'config.json'),
   CREDENTIALS_PATH: path.join(tempDir, 'credentials.json'),

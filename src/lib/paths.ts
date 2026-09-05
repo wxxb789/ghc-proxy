@@ -6,12 +6,17 @@ const APP_DIR = path.join(os.homedir(), '.local', 'share', 'ghc-proxy')
 
 const CONFIG_PATH = path.join(APP_DIR, 'config.json')
 const CREDENTIALS_PATH = path.join(APP_DIR, 'credentials.json')
+const ACCOUNT_MANAGEMENT_JOURNAL_PATH = path.join(
+  APP_DIR,
+  'account-management-transaction.json',
+)
 const CONFIG_MIGRATION_BACKUP_PATH = path.join(
   APP_DIR,
   'config.json.github-token-migration.bak',
 )
 
 export const PATHS = {
+  ACCOUNT_MANAGEMENT_JOURNAL_PATH,
   APP_DIR,
   CONFIG_PATH,
   CONFIG_MIGRATION_BACKUP_PATH,

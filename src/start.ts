@@ -11,6 +11,7 @@ import { generateEnvScript } from '~/cli/shell'
 import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
+import { recoverAccountManagementTransaction } from '~/lib/account-management-transaction'
 import { compileAccountRouting } from '~/lib/account-routing'
 import {
   getCachedConfig,
@@ -132,6 +133,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
 
   await ensurePaths()
   resetAccountRuntimes()
+  await recoverAccountManagementTransaction()
   await readConfig()
   const cachedConfig = getCachedConfig()
 

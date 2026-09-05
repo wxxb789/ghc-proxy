@@ -23,18 +23,20 @@ export async function writePrivateFileAtomically(
 export async function writePrivateFileAtomicallyIfAbsent(
   filePath: string,
   content: string,
-): Promise<void> {
+): Promise<boolean> {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
   try {
     await fs.writeFile(temporaryPath, content, { encoding: 'utf8', mode: 0o600 })
     await applyPrivateFilePermissions(temporaryPath)
     try {
       await fs.link(temporaryPath, filePath)
+      return true
     }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
         throw error
       }
+      return false
     }
   }
   finally {
