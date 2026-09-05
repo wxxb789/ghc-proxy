@@ -1,4 +1,5 @@
 import type { RecoveryEvent } from '~/lib/request-logger'
+import type { AccountRuntime } from '~/state'
 import type { CopilotUsageResponse, Model } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -7,10 +8,16 @@ import { UpstreamRequestQueue } from '~/clients/upstream-queue'
 import { getCachedConfig } from '~/lib/config'
 import {
   DashboardQuotaCache,
+  getDashboardAccount,
   getDashboardBehavior,
   getDashboardModels,
 } from '~/routes/dashboard/handler'
-import { modelCache, runtimeStore } from '~/state'
+import {
+  authStore,
+  createAccountRuntime,
+  modelCache,
+  runtimeStore,
+} from '~/state'
 
 import {
   buildGptModel,
@@ -163,6 +170,58 @@ describe('dashboard behavior introspection', () => {
     })
     expect(behavior.effects.find(effect => effect.id === 'responses.parameter_filter'))
       .toMatchObject({ count: 3 })
+  })
+})
+
+describe('dashboard account projection', () => {
+  test('projects concurrent account identity, tenant, auth, and quota without tokens', async () => {
+    const personal = accountRuntime('personal', 'github-personal', 'copilot-personal', 'alice')
+    const work = accountRuntime('work', 'github-work', 'copilot-work', 'bob', 'company.ghe.com')
+    const cache = new DashboardQuotaCache(async () => ({
+      ...quotaUsageFixture(),
+      copilot_plan: authStore.githubToken === 'github-personal'
+        ? 'personal-plan'
+        : 'work-plan',
+    }))
+
+    const [personalView, workView] = await Promise.all([
+      getDashboardAccount({
+        name: 'personal',
+        hostname: 'personal.localhost',
+        isDefault: true,
+        runtime: personal,
+      }, cache),
+      getDashboardAccount({
+        name: 'work',
+        hostname: 'work.localhost',
+        isDefault: false,
+        runtime: work,
+      }, cache),
+    ])
+
+    expect(personalView).toMatchObject({
+      name: 'personal',
+      hostname: 'personal.localhost',
+      isDefault: true,
+      tenant: 'github.com',
+      github: { status: 'ok', login: 'alice' },
+      copilot: { status: 'ok', modelsLoaded: true },
+      quota: { plan: 'personal-plan' },
+    })
+    expect(workView).toMatchObject({
+      name: 'work',
+      hostname: 'work.localhost',
+      isDefault: false,
+      tenant: 'company.ghe.com',
+      github: { status: 'ok', login: 'bob' },
+      copilot: { status: 'ok', modelsLoaded: true },
+      quota: { plan: 'work-plan' },
+    })
+    const json = JSON.stringify([personalView, workView])
+    expect(json).not.toContain('github-personal')
+    expect(json).not.toContain('github-work')
+    expect(json).not.toContain('copilot-personal')
+    expect(json).not.toContain('copilot-work')
   })
 })
 
@@ -447,4 +506,24 @@ function quotaUsageFixture(): CopilotUsageResponse {
       premium_interactions: quota(300, 250),
     },
   }
+}
+
+function accountRuntime(
+  name: string,
+  githubToken: string,
+  copilotToken: string,
+  login: string,
+  gheDomain?: string,
+): AccountRuntime {
+  const runtime = createAccountRuntime(name)
+  runtime.auth.githubToken = githubToken
+  runtime.auth.copilotToken = copilotToken
+  runtime.auth.githubLogin = login
+  runtime.auth.githubValidatedAt = Date.now()
+  runtime.auth.copilotTokenExpiresAt = Date.now() + 60_000
+  runtime.auth.copilotTokenLastRefreshAt = Date.now()
+  runtime.auth.copilotTokenLastRefreshSucceeded = true
+  runtime.auth.gheDomain = gheDomain
+  runtime.models.cacheModels(buildModelsResponse(buildGptModel(`${name}-model`)))
+  return runtime
 }

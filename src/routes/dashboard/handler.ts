@@ -1,3 +1,4 @@
+import type { AccountRuntime } from '~/state'
 import type { CopilotUsageResponse, Model, QuotaDetail } from '~/types'
 
 import { getUpstreamRequestQueueSnapshot } from '~/clients/factory'
@@ -7,7 +8,7 @@ import { chatCompletionsStrategyRegistry } from '~/routes/chat-completions/strat
 import { defaultStrategyRegistry, resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
 import { responsesStrategyRegistry } from '~/routes/responses/strategy-registry'
 import { handleUsageCore } from '~/routes/usage/handler'
-import { authStore, configStore, getCurrentAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
+import { authStore, configStore, getCurrentAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore, runWithAccountRuntime } from '~/state'
 import { resolveResponsesCompactThreshold } from '~/transform/context-management'
 import { getChatCompletionsTokenParameter, resolveStrippedResponsesParams, RESPONSES_MIN_OUTPUT_TOKENS } from '~/transform/parameter-filter'
 import { RESPONSES_INPUT_POLICY } from '~/transform/responses-input'
@@ -109,6 +110,31 @@ export class DashboardQuotaCache {
 
 export const dashboardQuotaCache = new DashboardQuotaCache()
 
+export interface DashboardAccountDescriptor {
+  name: string
+  hostname: string
+  isDefault: boolean
+  runtime: AccountRuntime
+}
+
+export async function getDashboardAccount(
+  account: DashboardAccountDescriptor,
+  quotaCache: DashboardQuotaCache = dashboardQuotaCache,
+) {
+  return runWithAccountRuntime(account.runtime, async () => {
+    const health = await getDashboardAccountHealth(quotaCache)
+    return {
+      name: account.name,
+      hostname: account.hostname,
+      isDefault: account.isDefault,
+      tenant: authStore.gheDomain ?? 'github.com',
+      github: health.github,
+      copilot: health.copilot,
+      quota: health.quota,
+    }
+  })
+}
+
 export function getDashboardModels() {
   return (modelCache.getModels()?.data ?? []).map(projectModel)
 }
@@ -166,6 +192,30 @@ export async function getDashboardOverview(
   quotaCache: DashboardQuotaCache = dashboardQuotaCache,
 ) {
   const requests = runtimeStore.requests.summary()
+  const account = await getDashboardAccountHealth(quotaCache)
+
+  return {
+    status: account.status,
+    version: VERSION,
+    startedAt: runtimeStore.startedAt,
+    uptimeMs: Math.max(0, Date.now() - Date.parse(runtimeStore.startedAt)),
+    auth: {
+      github: account.github,
+      copilot: account.copilot,
+    },
+    quota: account.quota,
+    activity: {
+      activeRequests: requests.active,
+      recentRequests: requests.recent,
+      ...requests.totals,
+      upstreamQueue: getUpstreamRequestQueueSnapshot(),
+    },
+  }
+}
+
+async function getDashboardAccountHealth(
+  quotaCache: DashboardQuotaCache,
+) {
   const modelsLoaded = modelCache.getModels() !== undefined
   const githubConfigured = Boolean(authStore.githubToken)
   const copilotConfigured = Boolean(authStore.copilotToken)
@@ -181,35 +231,24 @@ export async function getDashboardOverview(
 
   return {
     status: copilotHealthy ? 'ok' : 'degraded',
-    version: VERSION,
-    startedAt: runtimeStore.startedAt,
-    uptimeMs: Math.max(0, Date.now() - Date.parse(runtimeStore.startedAt)),
-    auth: {
-      github: {
-        status: githubConfigured
-          ? authStore.githubValidatedAt ? 'ok' : 'unknown'
-          : 'missing',
-        login: authStore.githubLogin,
-        lastValidatedAt: toIso(authStore.githubValidatedAt),
-        accountType: authStore.accountType,
-      },
-      copilot: {
-        status: copilotConfigured
-          ? copilotHealthy ? 'ok' : 'degraded'
-          : 'missing',
-        modelsLoaded,
-        expiresAt: toIso(authStore.copilotTokenExpiresAt),
-        lastRefreshAt: toIso(authStore.copilotTokenLastRefreshAt),
-        lastRefreshSucceeded: authStore.copilotTokenLastRefreshSucceeded,
-      },
+    github: {
+      status: githubConfigured
+        ? authStore.githubValidatedAt ? 'ok' : 'unknown'
+        : 'missing',
+      login: authStore.githubLogin,
+      lastValidatedAt: toIso(authStore.githubValidatedAt),
+      accountType: authStore.accountType,
+    },
+    copilot: {
+      status: copilotConfigured
+        ? copilotHealthy ? 'ok' : 'degraded'
+        : 'missing',
+      modelsLoaded,
+      expiresAt: toIso(authStore.copilotTokenExpiresAt),
+      lastRefreshAt: toIso(authStore.copilotTokenLastRefreshAt),
+      lastRefreshSucceeded: authStore.copilotTokenLastRefreshSucceeded,
     },
     quota,
-    activity: {
-      activeRequests: requests.active,
-      recentRequests: requests.recent,
-      ...requests.totals,
-      upstreamQueue: getUpstreamRequestQueueSnapshot(),
-    },
   }
 }
 
