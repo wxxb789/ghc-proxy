@@ -9,6 +9,7 @@ src/
 ├── main.ts                    # CLI entry point (citty commands)
 ├── start.ts                   # Server startup logic
 ├── server.ts                  # Elysia app factory (Bun-native or @elysiajs/node adapter)
+├── accounts/                  # Named-account auth and Dashboard lifecycle management
 ├── routes/                    # HTTP route handlers
 │   ├── chat-completions/      # POST /chat/completions (+ /v1 alias)
 │   ├── messages/              # POST /v1/messages
@@ -90,7 +91,7 @@ routes/responses/
 (Responses context-management and compaction policies now live in `src/transform/context-management.ts`, not under this route directory.)
 
 The embeddings route is intentionally small, and the Dashboard owns a separate
-read-only presentation surface:
+local presentation and account-management surface:
 
 ```text
 routes/embeddings/
@@ -98,10 +99,15 @@ routes/embeddings/
 └── handler.ts                      # Validation + upstream-shape normalization
 
 routes/dashboard/
-├── route.ts                        # Loopback access checks and routes
+├── route.ts                        # Loopback access checks, projections, and account mutations
 ├── handler.ts                      # Sanitized overview/model/behavior/request projections
 └── assets.ts                       # Embedded HTML/CSS/JavaScript assets
 ```
+
+`src/accounts/manager.ts` owns serialized legacy bootstrap, account addition,
+default selection, persistence rollback, and authentication-session lifecycle.
+`src/accounts/device-auth.ts` builds and validates a new isolated account runtime
+before the manager makes it routable.
 
 ### `src/translator/` -- Protocol Translation
 
@@ -199,6 +205,9 @@ direct and do not pass through this model.
 | `model-resolver.ts`         | Model ID resolution with configurable fallbacks      |
 | `error.ts`                  | HTTPError class, error forwarding, validation errors |
 | `config.ts`                 | Config file reader (`~/.local/share/ghc-proxy/config.json`) |
+| `account-routing.ts`        | DNS hostname normalization and exact account-routing validation |
+| `account-management-transaction.ts` | Crash-safe rollback journal for Dashboard credential/config mutations |
+| `atomic-file.ts`            | Private atomic file replacement with Windows retry handling |
 | `credentials.ts`            | Versioned named-account credential storage and legacy config migration |
 | `upstream-signal.ts`        | AbortSignal management for upstream requests         |
 | `retry.ts`                  | Retry logic with exponential backoff                 |
@@ -213,6 +222,14 @@ Several modules formerly under `src/lib/` were relocated during the consolidatio
 
 - `state.ts` -> decomposed into `src/state/` singletons (no monolithic `AppState` object remains).
 - `responses-emulator-state.ts` -> `src/state/responses-emulator-state.ts`.
+
+`src/state/account-runtime.ts` binds each request to an account-specific auth
+store, model cache, rate limiter, Responses emulator state, and upstream queue
+selection while keeping existing `~/state` imports stable.
+
+`src/accounts/device-auth.ts` performs isolated device authentication without
+persisting credentials, while `src/accounts/manager.ts` serializes validated
+account additions and default changes before updating the live runtime map.
 - `upstream-request-queue.ts` -> `src/clients/upstream-queue.ts`; `api-config.ts` -> `src/clients/api-config.ts`; `ghe-domain.ts` -> `src/clients/ghe-domain.ts`.
 - `validation/` -> `src/ingest/validation/`.
 - `model-rewrite.ts`, `request-model-policy.ts` -> `src/transform/`.

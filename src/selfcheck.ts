@@ -5,7 +5,7 @@ import type { Dispatcher } from 'undici'
 
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
-import { createServer, request as httpRequest } from 'node:http'
+import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { networkInterfaces, tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -15,6 +15,7 @@ import { Elysia } from 'elysia'
 import { Agent } from 'undici'
 
 import { UpstreamRequestQueue } from '~/clients/upstream-queue'
+import { compileAccountRouting } from '~/lib/account-routing'
 import {
   finalizeGitHubCredentialMigration,
   prepareGitHubCredential,
@@ -25,6 +26,12 @@ import {
 import { HTTPError, isRetryableConnectionEstablishmentError } from '~/lib/error'
 import { getTokenCount } from '~/lib/tokenizer'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
+import { createServer as createProxyServer } from '~/server'
+import {
+  configureAccountRuntimes,
+  createAccountRuntime,
+  resetAccountRuntimes,
+} from '~/state'
 
 interface RunSelfCheckOptions {
   json: boolean
@@ -161,7 +168,7 @@ async function probeResponseBodyCancellation(): Promise<void> {
   const sockets = new Set<Socket>()
   let requests = 0
   let firstResponseClosed = false
-  const server = createServer((_request, response) => {
+  const server = createHttpServer((_request, response) => {
     requests++
     if (requests === 1) {
       response.once('close', () => {
@@ -514,15 +521,20 @@ async function probeCredentialStoreMigrationContract(): Promise<void> {
 
 async function probeDashboardBundleContract(): Promise<void> {
   const app = createDashboardRoutes()
-  const [htmlResponse, cssResponse, jsResponse] = await Promise.all([
+  const [htmlResponse, cssResponse, jsResponse, accountsResponse] = await Promise.all([
     app.handle(new Request('http://localhost/dashboard')),
     app.handle(new Request('http://localhost/dashboard/styles.css')),
     app.handle(new Request('http://localhost/dashboard/app.js')),
+    app.handle(new Request('http://localhost/dashboard/api/accounts')),
   ])
 
   assertProbe(htmlResponse.status === 200, `dashboard HTML returned ${htmlResponse.status}`)
   assertProbe(cssResponse.status === 200, `dashboard CSS returned ${cssResponse.status}`)
   assertProbe(jsResponse.status === 200, `dashboard JS returned ${jsResponse.status}`)
+  assertProbe(
+    accountsResponse.status === 409,
+    `dashboard account management availability returned ${accountsResponse.status}`,
+  )
 
   const [html, css, js] = await Promise.all([
     htmlResponse.text(),
@@ -531,8 +543,13 @@ async function probeDashboardBundleContract(): Promise<void> {
   ])
   assertProbe(html.includes('/dashboard/styles.css'), 'dashboard HTML lost its CSS route')
   assertProbe(html.includes('/dashboard/app.js'), 'dashboard HTML lost its JS route')
+  assertProbe(html.includes('data-tab="accounts"'), 'dashboard HTML lost its Accounts view')
+  assertProbe(html.includes('id="account-bootstrap-form"'), 'dashboard HTML lost legacy routing bootstrap')
   assertProbe(css.includes('.app-header'), 'dashboard CSS was not bundled')
+  assertProbe(css.includes('.account-auth[hidden]'), 'dashboard CSS lost hidden auth state')
   assertProbe(js.includes('fetchJson(\'/dashboard/api/overview\')'), 'dashboard JS was not bundled')
+  assertProbe(js.includes('/dashboard/api/accounts/bootstrap'), 'dashboard JS lost legacy routing bootstrap')
+  assertProbe(js.includes('/dashboard/api/accounts/default'), 'dashboard JS lost default-account management')
   assertProbe(!js.includes('innerHTML'), 'dashboard JS uses unsafe HTML insertion')
 }
 
@@ -569,6 +586,98 @@ async function probeDashboardNodeListenerBoundary(): Promise<void> {
   }
 }
 
+async function probeAccountHostnameRouting(): Promise<void> {
+  const defaultRuntime = createAccountRuntime('default')
+  defaultRuntime.auth.copilotToken = 'selfcheck-default-token'
+  const account1Runtime = createAccountRuntime('account1')
+  account1Runtime.auth.copilotToken = 'selfcheck-account1-token'
+  configureAccountRuntimes(
+    compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: {
+        'default.localhost': 'default',
+        'account1.localhost': 'account1',
+      },
+    }, ['default', 'account1']),
+    [defaultRuntime, account1Runtime],
+  )
+
+  const app = createProxyServer({ logRequests: false })
+  let nodeListener: NodeDashboardListener | undefined
+  try {
+    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
+      if (!process.versions.bun) {
+        nodeListener = server as unknown as NodeDashboardListener
+      }
+    })
+
+    let port: number
+    if (process.versions.bun) {
+      port = (app.server as unknown as { port: number }).port
+    }
+    else {
+      assertProbe(nodeListener !== undefined, 'Node account-routing listener was not created')
+      await nodeListener.raw.ready()
+      assertProbe(nodeListener.raw.url !== undefined, 'Node account-routing listener has no URL')
+      port = Number(new URL(nodeListener.raw.url).port)
+    }
+    assertProbe(Number.isInteger(port) && port > 0, 'account-routing listener has no bound port')
+
+    const defaultResponse = await requestAccountRoute(port, 'localhost')
+    const loopbackResponse = await requestAccountRoute(port, '127.0.0.1')
+    const account1Response = await requestAccountRoute(port, 'account1.localhost')
+    const unknownResponse = await requestAccountRoute(port, 'unknown.localhost')
+    const unknownRootResponse = await requestAccountRoute(port, 'unknown.localhost', '/')
+
+    assertProbe(defaultResponse.status === 200, `default hostname returned ${defaultResponse.status}`)
+    assertProbe(
+      JSON.parse(defaultResponse.body).token === 'selfcheck-default-token',
+      'default hostname selected the wrong account',
+    )
+    assertProbe(loopbackResponse.status === 200, `loopback hostname returned ${loopbackResponse.status}`)
+    assertProbe(
+      JSON.parse(loopbackResponse.body).token === 'selfcheck-default-token',
+      'loopback hostname selected the wrong account',
+    )
+    assertProbe(account1Response.status === 200, `named hostname returned ${account1Response.status}`)
+    assertProbe(
+      JSON.parse(account1Response.body).token === 'selfcheck-account1-token',
+      'named hostname selected the wrong account',
+    )
+    assertProbe(unknownResponse.status === 421, `unknown hostname returned ${unknownResponse.status}`)
+    assertProbe(unknownRootResponse.status === 421, `unknown hostname root returned ${unknownRootResponse.status}`)
+  }
+  finally {
+    if (process.versions.bun) {
+      await app.stop()
+    }
+    else {
+      await nodeListener?.raw.close(true)
+    }
+    resetAccountRuntimes()
+  }
+}
+
+async function requestAccountRoute(
+  port: number,
+  hostname: string,
+  requestPath = '/token',
+): Promise<HttpProbeResult> {
+  try {
+    if (process.versions.bun) {
+      const response = await fetch(`http://127.0.0.1:${port}${requestPath}`, {
+        headers: { host: `${hostname}:${port}` },
+      })
+      return { body: await response.text(), status: response.status }
+    }
+    return await requestLocal('127.0.0.1', port, `${hostname}:${port}`, requestPath)
+  }
+  catch (error) {
+    throw new Error(`account-routing request for ${hostname} failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 function firstNonLoopbackIpv4Address(): string | undefined {
   for (const addresses of Object.values(networkInterfaces())) {
     for (const address of addresses ?? []) {
@@ -579,15 +688,24 @@ function firstNonLoopbackIpv4Address(): string | undefined {
 }
 
 function requestDashboard(address: string, port: number): Promise<HttpProbeResult> {
+  return requestLocal(address, port, `localhost:${port}`, '/dashboard')
+}
+
+function requestLocal(
+  address: string,
+  port: number,
+  host: string,
+  requestPath: string,
+): Promise<HttpProbeResult> {
   return new Promise((resolve, reject) => {
     const request = httpRequest({
       headers: {
         connection: 'close',
-        host: `localhost:${port}`,
+        host,
       },
       hostname: address,
       method: 'GET',
-      path: '/dashboard',
+      path: requestPath,
       port,
     }, (response) => {
       let body = ''
@@ -631,9 +749,13 @@ function assertProbe(condition: unknown, message: string): asserts condition {
 
 async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
   const probes = await Promise.all(PROBE_ENCODINGS.map(probeEncoding))
-  const runtimeProbes = await Promise.all(
+  const parallelRuntimeProbes = await Promise.all(
     RUNTIME_PROBES.map(([name, probe]) => runRuntimeProbe(name, probe)),
   )
+  const runtimeProbes = [
+    ...parallelRuntimeProbes,
+    await runRuntimeProbe('account-hostname-routing', probeAccountHostnameRouting),
+  ]
   const failed = [...probes, ...runtimeProbes].filter(p => !p.ok)
 
   const result = {

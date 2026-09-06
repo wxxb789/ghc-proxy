@@ -23,7 +23,7 @@ import {
   createUpstreamSignalFromConfig,
 } from '~/lib/upstream-signal'
 import { effectForStrategy } from '~/observability/effects'
-import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
+import { configStore, getCurrentRoutedAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 import { resolveRequestModel } from '~/transform/resolve-model'
 
 export interface PipelineParams {
@@ -594,6 +594,7 @@ function emitFallbackEvent(
   const now = performance.now()
   logRecoveryEvent({
     requestId: recovery.requestId,
+    accountName: recovery.accountName,
     callerRequestId: recovery.callerRequestId,
     event: 'fallback',
     retryCount: recovery.retryCount,
@@ -616,6 +617,7 @@ export function createRecoveryRecord(
 ): UpstreamRecoveryRecord {
   return {
     requestId: request.requestId,
+    accountName: getCurrentRoutedAccountName(),
     ...(request.callerRequestId ? { callerRequestId: request.callerRequestId } : {}),
     callerSignal: request.signal,
     retryCount: 0,

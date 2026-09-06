@@ -1,7 +1,14 @@
 import type { DashboardQuotaCache } from './handler'
+import type {
+  AccountAuthenticationSession,
+  AccountRoutingSummary,
+  AddAccountInput,
+} from '~/accounts/manager'
 
 import { Elysia } from 'elysia'
+import { z } from 'zod'
 
+import { AccountManagementError } from '~/accounts/manager'
 import { RECENT_REQUEST_LIMIT } from '~/observability/request-store'
 import { DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS } from './assets'
 
@@ -35,7 +42,31 @@ const BASE_HEADERS = {
   'x-frame-options': 'DENY',
 }
 
+const addAccountSchema = z.object({
+  accountName: z.string(),
+  hostname: z.string(),
+  gheDomain: z.string().optional(),
+}).strict()
+
+const bootstrapAccountRoutingSchema = z.object({
+  hostname: z.string(),
+}).strict()
+
+const setDefaultAccountSchema = z.object({
+  accountName: z.string(),
+}).strict()
+
+export interface DashboardAccountManagement {
+  beginAddAccount: (input: AddAccountInput) => Promise<AccountAuthenticationSession>
+  bootstrapAccountRouting: (hostname: string) => Promise<void>
+  getAuthenticationSession: (id: string) => AccountAuthenticationSession | undefined
+  getRoutingSummary: () => AccountRoutingSummary
+  listAccounts: () => Promise<unknown[]>
+  setDefaultAccount: (accountName: string) => Promise<void>
+}
+
 interface DashboardRouteOptions {
+  accountManager?: DashboardAccountManagement
   quotaCache?: DashboardQuotaCache
 }
 
@@ -52,6 +83,7 @@ interface SrvxNodeRequest extends Request {
 }
 
 export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
+  const accountManager = options.accountManager
   const quotaCache = options.quotaCache ?? dashboardQuotaCache
 
   return new Elysia({ name: 'dashboard' })
@@ -80,6 +112,67 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
       apiResponse(getDashboardBehavior()))
     .get('/dashboard/api/requests', () =>
       apiResponse({ capacity: RECENT_REQUEST_LIMIT, ...getDashboardRequests() }))
+    .get('/dashboard/api/accounts', async () => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      return apiResponse({
+        ...accountManager.getRoutingSummary(),
+        accounts: await accountManager.listAccounts(),
+      })
+    })
+    .post('/dashboard/api/accounts', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = addAccountSchema.safeParse(body)
+      if (!parsed.success)
+        return apiError('Invalid account authentication request.', 400)
+      try {
+        const session = await accountManager.beginAddAccount({
+          ...parsed.data,
+          gheDomain: parsed.data.gheDomain?.trim() || undefined,
+        })
+        return apiResponse({ authentication: session }, 202)
+      }
+      catch (error) {
+        return accountManagementError(error)
+      }
+    })
+    .post('/dashboard/api/accounts/bootstrap', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = bootstrapAccountRoutingSchema.safeParse(body)
+      if (!parsed.success)
+        return apiError('Invalid account routing bootstrap request.', 400)
+      try {
+        await accountManager.bootstrapAccountRouting(parsed.data.hostname)
+        return apiResponse(accountManager.getRoutingSummary())
+      }
+      catch (error) {
+        return accountManagementError(error)
+      }
+    })
+    .get('/dashboard/api/account-auth/:id', ({ params }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const session = accountManager.getAuthenticationSession(params.id)
+      return session
+        ? apiResponse({ authentication: session })
+        : apiError('Account authentication session was not found.', 404)
+    })
+    .post('/dashboard/api/accounts/default', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = setDefaultAccountSchema.safeParse(body)
+      if (!parsed.success)
+        return apiError('Invalid default account request.', 400)
+      try {
+        await accountManager.setDefaultAccount(parsed.data.accountName)
+        return apiResponse(accountManager.getRoutingSummary())
+      }
+      catch (error) {
+        return accountManagementError(error)
+      }
+    })
 }
 
 function getDashboardPeer(
@@ -168,13 +261,30 @@ function assetResponse(
   })
 }
 
-function apiResponse(data: unknown): Response {
+function accountManagementUnavailable(): Response {
+  return apiError('Account management is unavailable for this process configuration.', 409)
+}
+
+function accountManagementError(error: unknown): Response {
+  return error instanceof AccountManagementError
+    ? apiError(error.message, error.status)
+    : apiError('Account management request failed.', 500)
+}
+
+function apiError(message: string, status: number): Response {
+  return Response.json(
+    { error: { message, type: 'invalid_request_error' } },
+    { status, headers: BASE_HEADERS },
+  )
+}
+
+function apiResponse(data: unknown, status = 200): Response {
   return Response.json(
     {
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),
       ...(typeof data === 'object' && data !== null ? data : { data }),
     },
-    { headers: BASE_HEADERS },
+    { status, headers: BASE_HEADERS },
   )
 }

@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 
+import type { AuthStore } from '~/state/auth'
 import process from 'node:process'
+
 import { defineCommand } from 'citty'
 import consola from 'consola'
 
+import { AccountManager } from '~/accounts/manager'
 import { initProxyFromEnv } from '~/cli/proxy'
 import { generateEnvScript } from '~/cli/shell'
 import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
+import { recoverAccountManagementTransaction } from '~/lib/account-management-transaction'
+import { compileAccountRouting, normalizeAccountName } from '~/lib/account-routing'
 import {
   getCachedConfig,
   MAX_UPSTREAM_QUEUE_RETRIES,
@@ -16,10 +21,20 @@ import {
   MIN_UPSTREAM_RECOVERY_BUDGET_SECONDS,
   readConfig,
 } from '~/lib/config'
+import { inspectGitHubCredential, readGitHubCredentials } from '~/lib/credentials'
 import { ensurePaths } from '~/lib/paths'
 import { setupAuthTokens, setupRuntimeOverrideTokens } from '~/lib/token'
 import { createServer } from '~/server'
-import { authStore, modelCache, runtimeStore } from '~/state'
+import {
+  aliasLegacyAccountRuntime,
+  authStore,
+  configureAccountRuntimes,
+  createAccountRuntime,
+  modelCache,
+  resetAccountRuntimes,
+  runtimeStore,
+  runWithAccountRuntime,
+} from '~/state'
 
 interface RunServerOptions {
   port: number
@@ -44,6 +59,7 @@ interface RunServerOptions {
 }
 
 const UNSIGNED_INTEGER_RE = /^\d+$/
+const LEGACY_BOOTSTRAP_HOSTNAME = 'defaultaccount.localhost'
 
 async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
   const models = modelCache.getModels()
@@ -113,24 +129,14 @@ async function runServer(options: RunServerOptions): Promise<void> {
     consola.info('Verbose logging enabled')
   }
 
-  authStore.accountType = accountType
   if (accountType !== 'individual') {
     consola.info(`Using ${accountType} plan GitHub account`)
   }
-
-  if (options.githubToken) {
-    authStore.githubToken = options.githubToken
-    consola.info('Using provided GitHub token')
-  }
-
-  authStore.manualApprove = options.manual
-  authStore.rateLimitSeconds = options.rateLimit
-  authStore.rateLimitWait = options.rateLimitWait
-  authStore.showToken = options.showToken
-  authStore.upstreamTimeoutSeconds = options.upstreamTimeoutSeconds
   runtimeStore.dumpFailedPayloads = resolveDumpFailedPayloadsOption(options.dumpFailedPayloads)
 
   await ensurePaths()
+  resetAccountRuntimes()
+  await recoverAccountManagementTransaction()
   await readConfig()
   const cachedConfig = getCachedConfig()
 
@@ -148,13 +154,107 @@ async function runServer(options: RunServerOptions): Promise<void> {
     maxDelayMs: secondsToMs(upstreamQueueMaxDelaySeconds),
   })
 
+  let accountSetup: {
+    accountManager?: AccountManager
+    cleanup: () => void | Promise<void>
+  }
+  if (cachedConfig.accountRouting) {
+    accountSetup = await setupRoutedAccounts(
+      options,
+      accountType,
+      cachedConfig.accountRouting,
+    )
+  }
+  else if (!options.githubToken && options.gheDomain === undefined) {
+    accountSetup = await setupLegacyAccountManager(
+      options,
+      accountType,
+      cachedConfig.gheDomain,
+    )
+  }
+  else {
+    consola.warn(
+      'Dashboard named-account migration is unavailable while a process-wide GitHub token or GHE tenant override is active.',
+    )
+    accountSetup = {
+      accountManager: undefined,
+      cleanup: await setupLegacyAccount(options, accountType, cachedConfig.gheDomain),
+    }
+  }
+
+  const serverHostname = accountSetup.accountManager?.getRoutingSummary().baseHostname
+    ?? 'localhost'
+  const serverUrl = `http://${serverHostname}:${options.port}`
+
+  try {
+    if (options.claudeCode) {
+      if (!modelCache.getModels()) {
+        throw new Error('Models should be loaded by now')
+      }
+      await maybeCopyClaudeCodeCommand(serverUrl)
+    }
+
+    printStartupBanner(serverUrl)
+
+    const app = createServer({
+      accountManager: accountSetup.accountManager,
+      idleTimeout: options.idleTimeoutSeconds,
+    })
+    app.listen(options.port)
+
+    const shutdown = async () => {
+      consola.info('Shutting down gracefully...')
+      await accountSetup.cleanup()
+      await app.stop()
+      process.exit(0)
+    }
+
+    process.on('SIGTERM', shutdown)
+    process.on('SIGINT', shutdown)
+  }
+  catch (error) {
+    try {
+      await accountSetup.cleanup()
+    }
+    catch {
+      consola.error('Failed to clean up account resources after startup failure.')
+    }
+    resetAccountRuntimes()
+    throw error
+  }
+}
+
+function applyServerAuthOptions(
+  target: AuthStore,
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+): void {
+  target.accountType = accountType
+  target.manualApprove = options.manual
+  target.rateLimitSeconds = options.rateLimit
+  target.rateLimitWait = options.rateLimitWait
+  target.showToken = options.showToken
+  target.upstreamTimeoutSeconds = options.upstreamTimeoutSeconds
+}
+
+async function setupLegacyAccount(
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+  persistedGheDomain?: string,
+): Promise<() => void> {
+  applyServerAuthOptions(authStore, options, accountType)
+
+  if (options.githubToken) {
+    authStore.githubToken = options.githubToken
+    consola.info('Using provided GitHub token')
+  }
+
   // Load persisted GHE domain from config, then override with CLI arg if provided.
   // Pass --ghe-domain "" (empty string) to explicitly clear a persisted domain.
-  applyGheDomain(authStore, cachedConfig.gheDomain, options.gheDomain)
-
+  applyGheDomain(authStore, persistedGheDomain, options.gheDomain)
   await cacheVSCodeVersion()
 
-  const tokenCleanup = options.githubToken
+  const cleanup = options.githubToken
     ? await setupRuntimeOverrideTokens()
     : await setupAuthTokens({
         explicitGheDomain: options.gheDomain === undefined
@@ -162,32 +262,189 @@ async function runServer(options: RunServerOptions): Promise<void> {
           : { value: authStore.gheDomain },
       })
 
-  const copilotClient = createCopilotClient()
-  await cacheModels(copilotClient)
+  try {
+    await cacheModels(createCopilotClient())
+    return cleanup
+  }
+  catch (error) {
+    cleanup()
+    throw error
+  }
+}
 
-  const serverUrl = `http://localhost:${options.port}`
-
-  if (options.claudeCode) {
-    if (!modelCache.getModels()) {
-      throw new Error('Models should be loaded by now')
+async function setupLegacyAccountManager(
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+  persistedGheDomain?: string,
+): Promise<{
+  accountManager?: AccountManager
+  cleanup: () => void | Promise<void>
+}> {
+  const storedCredentials = await readGitHubCredentials()
+  const activeGheDomain = storedCredentials
+    ? storedCredentials.accounts[storedCredentials.activeAccount]!.gheDomain
+    : persistedGheDomain
+  let accountName: string
+  try {
+    accountName = normalizeAccountName(
+      storedCredentials?.activeAccount ?? 'default',
+    )
+  }
+  catch {
+    consola.warn(
+      'Dashboard named-account migration is unavailable because the active legacy account name is not routing-compatible.',
+    )
+    return {
+      accountManager: undefined,
+      cleanup: await setupLegacyAccount(options, accountType, activeGheDomain),
     }
-    await maybeCopyClaudeCodeCommand(serverUrl)
+  }
+  const runtime = aliasLegacyAccountRuntime(accountName)
+  let cleanup: (() => void) | undefined
+  try {
+    cleanup = await runWithAccountRuntime(
+      runtime,
+      () => setupLegacyAccount(options, accountType, activeGheDomain),
+    )
+    const credentials = await readGitHubCredentials()
+    if (!credentials) {
+      throw new Error('Legacy account migration requires a persisted GitHub credential.')
+    }
+    if (credentials.activeAccount !== accountName) {
+      throw new Error('The active legacy account changed while Dashboard migration was being prepared.')
+    }
+
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: accountName,
+      hostnames: { [LEGACY_BOOTSTRAP_HOSTNAME]: accountName },
+    }, Object.keys(credentials.accounts))
+    const accountManager = new AccountManager({
+      authDefaults: serverAuthDefaults(options, accountType),
+      knownAccountNames: Object.keys(credentials.accounts),
+      refreshCleanups: new Map([[accountName, cleanup]]),
+      routing,
+      routingEnabled: false,
+      runtimes: [runtime],
+    })
+    consola.info(
+      `The legacy account ${JSON.stringify(accountName)} remains the default. Enable named-account routing in the Dashboard; ${LEGACY_BOOTSTRAP_HOSTNAME} is the editable suggested hostname.`,
+    )
+    return {
+      accountManager,
+      cleanup: () => accountManager.stop(),
+    }
+  }
+  catch (error) {
+    cleanup?.()
+    resetAccountRuntimes()
+    throw error
+  }
+}
+
+async function setupRoutedAccounts(
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+  routingConfig: NonNullable<ReturnType<typeof getCachedConfig>['accountRouting']>,
+): Promise<{ accountManager: AccountManager, cleanup: () => void }> {
+  if (options.githubToken) {
+    throw new Error('--github-token cannot be used with accountRouting because it is not bound to a named account.')
+  }
+  if (options.gheDomain !== undefined) {
+    throw new Error('--ghe-domain cannot be used with accountRouting; configure the tenant on each named credential.')
   }
 
-  printStartupBanner(serverUrl)
-
-  const app = createServer({ idleTimeout: options.idleTimeoutSeconds })
-  app.listen(options.port)
-
-  const shutdown = async () => {
-    consola.info('Shutting down gracefully...')
-    tokenCleanup()
-    await app.stop()
-    process.exit(0)
+  const migrationStatus = await inspectGitHubCredential()
+  if (migrationStatus.migrationPending) {
+    applyServerAuthOptions(authStore, options, accountType)
+    applyGheDomain(authStore, getCachedConfig().gheDomain)
+    const cleanupMigration = await setupAuthTokens()
+    cleanupMigration()
   }
 
-  process.on('SIGTERM', shutdown)
-  process.on('SIGINT', shutdown)
+  const credentials = await readGitHubCredentials()
+  if (!credentials) {
+    throw new Error('accountRouting requires credentials.json with every referenced named account.')
+  }
+
+  const compiled = compileAccountRouting(
+    routingConfig,
+    Object.keys(credentials.accounts),
+  )
+  const accountNames = new Set([
+    compiled.defaultAccount,
+    ...compiled.hostnames.values(),
+  ])
+  const runtimes = Array.from(accountNames, (accountName) => {
+    const credential = credentials.accounts[accountName]!
+    const runtime = createAccountRuntime(accountName)
+    applyServerAuthOptions(runtime.auth, options, accountType)
+    applyGheDomain(runtime.auth, credential.gheDomain)
+    return runtime
+  })
+
+  configureAccountRuntimes(compiled, runtimes)
+  const cleanups = new Map<string, () => void>()
+  try {
+    for (const runtime of runtimes) {
+      consola.info(`Initializing GitHub account ${JSON.stringify(runtime.name)}`)
+      const cleanup = await runWithAccountRuntime(runtime, async () => {
+        await cacheVSCodeVersion()
+        const stopRefresh = await setupAuthTokens({ accountName: runtime.name })
+        try {
+          await cacheModels(createCopilotClient())
+          return stopRefresh
+        }
+        catch (error) {
+          stopRefresh()
+          throw error
+        }
+      })
+      cleanups.set(runtime.name, cleanup)
+    }
+  }
+  catch (error) {
+    for (const cleanup of Array.from(cleanups.values()).reverse()) {
+      cleanup()
+    }
+    resetAccountRuntimes()
+    throw error
+  }
+
+  try {
+    const accountManager = new AccountManager({
+      authDefaults: serverAuthDefaults(options, accountType),
+      knownAccountNames: Object.keys(credentials.accounts),
+      refreshCleanups: cleanups,
+      routing: compiled,
+      runtimes,
+    })
+    return {
+      accountManager,
+      cleanup: () => accountManager.stop(),
+    }
+  }
+  catch (error) {
+    for (const cleanup of Array.from(cleanups.values()).reverse()) {
+      cleanup()
+    }
+    resetAccountRuntimes()
+    throw error
+  }
+}
+
+function serverAuthDefaults(
+  options: RunServerOptions,
+  accountType: AuthStore['accountType'],
+): Partial<AuthStore> {
+  return {
+    accountType,
+    manualApprove: options.manual,
+    rateLimitSeconds: options.rateLimit,
+    rateLimitWait: options.rateLimitWait,
+    showToken: false,
+    upstreamTimeoutSeconds: options.upstreamTimeoutSeconds,
+  }
 }
 
 export function parseIntArg(

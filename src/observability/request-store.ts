@@ -58,6 +58,7 @@ export type ObservedModelMapping = ModelMappingInfo
 
 export interface ObservedRequest {
   requestId: string
+  accountName?: string
   method: string
   endpoint: string
   state: ObservedRequestState
@@ -98,6 +99,7 @@ export interface RequestActivitySummary {
 
 interface StartRequestInput {
   requestId: string
+  accountName?: string
   method: string
   endpoint: string
   requestedModel?: string
@@ -175,6 +177,7 @@ export class RequestActivityStore {
     const startedAtMs = this.now()
     this.active.set(input.requestId, {
       requestId: input.requestId,
+      ...(input.accountName ? { accountName: sanitizeTag(input.accountName) } : {}),
       method: sanitizeMethod(input.method),
       endpoint: input.endpoint,
       state: 'in_flight',
@@ -432,6 +435,7 @@ function projectRequest(
 ): ObservedRequest {
   return {
     requestId: request.requestId,
+    ...(request.accountName ? { accountName: request.accountName } : {}),
     method: request.method,
     endpoint: request.endpoint,
     state,

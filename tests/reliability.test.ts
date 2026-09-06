@@ -768,6 +768,7 @@ describe('Request correlation and recovery logging', () => {
 
     logRecoveryEvent({
       requestId: 'internal-id',
+      accountName: 'work account\n',
       callerRequestId: `caller id\n${'x'.repeat(200)}`,
       event: 'retry',
       retryCount: 1,
@@ -782,6 +783,7 @@ describe('Request correlation and recovery logging', () => {
       'Upstream recovery',
       {
         requestId: 'internal-id',
+        accountName: 'work_account_',
         callerRequestId: `caller_id_${'x'.repeat(118)}`,
         event: 'retry',
         retryCount: 1,
@@ -816,6 +818,7 @@ describe('Request correlation and recovery logging', () => {
       })
       logRecoveryEvent({
         requestId: 'recovered-id',
+        accountName: 'account1',
         event: 'retry',
         retryCount: 1,
         status: 200,
@@ -838,7 +841,7 @@ describe('Request correlation and recovery logging', () => {
     }
 
     expect(calls).toEqual([
-      ['Upstream recovery recovered status=200 model=gpt\\nforged retry=1 rid=recovere'],
+      ['Upstream recovery recovered account=account1 status=200 model=gpt\\nforged retry=1 rid=recovere'],
       ['Upstream rate limit retry-limit status=429 model=gpt-5.6-luna scope=account retry=1 budget=12s rid=rate-lim'],
     ])
   })

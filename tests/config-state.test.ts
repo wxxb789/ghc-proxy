@@ -104,6 +104,49 @@ describe('config module', () => {
     expect(config).toEqual(partialConfig)
   })
 
+  test('readConfig() normalizes an explicit account-routing configuration', async () => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'LOCALHOST.',
+        defaultAccount: 'default',
+        hostnames: {
+          'Default.Localhost.': 'default',
+          'Account1.Localhost.': 'account1',
+        },
+      },
+    }))
+
+    expect((await readConfig()).accountRouting).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: {
+        'default.localhost': 'default',
+        'account1.localhost': 'account1',
+      },
+    })
+  })
+
+  test('readConfig() fails closed instead of dropping an invalid account-routing field', async () => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      smallModel: 'gpt-5-mini',
+      accountRouting: {
+        baseHostname: 'localhost:4141',
+        defaultAccount: 'default',
+        hostnames: {},
+      },
+    }))
+
+    await expect(readConfig()).rejects.toThrow('accountRouting')
+    expect(getCachedConfig()).toEqual({})
+  })
+
+  test('readConfig() fails closed when malformed JSON appears to contain account routing', async () => {
+    await fs.writeFile(tempConfigPath, '{ "accountRouting": ')
+
+    await expect(readConfig()).rejects.toThrow('accountRouting')
+    expect(getCachedConfig()).toEqual({})
+  })
+
   test('readConfig() — config is array → returns {}, warns', async () => {
     await fs.writeFile(tempConfigPath, JSON.stringify(['not', 'an', 'object']))
     const config = await readConfig()
@@ -185,6 +228,22 @@ describe('config module', () => {
     const content = await fs.readFile(tempConfigPath)
     const parsed = JSON.parse(content.toString()) as unknown
     expect(parsed).toEqual({ existing: 'value', gheDomain: 'company.ghe.com' })
+  })
+
+  test('writeConfigField() can fail closed without replacing an unreadable config', async () => {
+    const original = '{ "accountRouting": '
+    await fs.writeFile(tempConfigPath, original)
+
+    await expect(writeConfigField(
+      'accountRouting',
+      {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: { 'default.localhost': 'default' },
+      },
+      { configPath: tempConfigPath, failOnReadError: true },
+    )).rejects.toThrow('Could not read existing config.json')
+    expect(await fs.readFile(tempConfigPath, 'utf8')).toBe(original)
   })
 
   test('getCachedConfig() — returns last loaded/written config', async () => {

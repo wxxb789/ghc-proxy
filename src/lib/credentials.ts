@@ -1,19 +1,21 @@
 import { Buffer } from 'node:buffer'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
 import fs from 'node:fs/promises'
-import process from 'node:process'
 import consola from 'consola'
 import { z } from 'zod'
 
+import {
+  applyPrivateFilePermissions,
+  writePrivateFileAtomically,
+  writePrivateFileAtomicallyIfAbsent,
+} from '~/lib/atomic-file'
 import { PATHS } from '~/lib/paths'
 import { formatErrorMessage } from '~/lib/retry'
 
 const CREDENTIALS_VERSION = 1
 const CREDENTIAL_MIGRATION_JOURNAL_VERSION = 1
 const DEFAULT_CREDENTIAL_ACCOUNT = 'default'
-const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 25, 50] as const
-
 const BASE64_RE = /^(?:[a-z0-9+/]{4})*(?:[a-z0-9+/]{2}==|[a-z0-9+/]{3}=)?$/i
 const SHA256_RE = /^[a-f0-9]{64}$/
 
@@ -49,6 +51,11 @@ export interface GitHubCredential {
   gheDomain?: string
 }
 
+export interface GitHubCredentialStore {
+  activeAccount: string
+  accounts: Record<string, GitHubCredential>
+}
+
 export interface PreparedGitHubCredential extends GitHubCredential {
   migrationPending: boolean
   replacementPending?: true
@@ -76,30 +83,88 @@ export class CredentialMigrationError extends Error {
 
 export async function readGitHubCredential(
   paths: CredentialPaths = PATHS,
+  accountName?: string,
 ): Promise<GitHubCredential | undefined> {
-  const store = await readCredentialStore(paths)
+  const store = await readGitHubCredentials(paths)
   if (!store) {
     return undefined
   }
 
-  const account = store.accounts[store.activeAccount]
+  const selectedAccount = accountName ?? store.activeAccount
+  const account = store.accounts[selectedAccount]
   if (!account) {
+    throw new Error(
+      accountName
+        ? `credentials.json at ${paths.CREDENTIALS_PATH} does not contain account "${accountName}". The file was left unchanged.`
+        : `credentials.json at ${paths.CREDENTIALS_PATH} selects missing account "${store.activeAccount}". The file was left unchanged.`,
+    )
+  }
+  return account
+}
+
+export async function readGitHubCredentials(
+  paths: CredentialPaths = PATHS,
+): Promise<GitHubCredentialStore | undefined> {
+  const store = await readCredentialStore(paths)
+  if (!store) {
+    return undefined
+  }
+  if (!store.accounts[store.activeAccount]) {
     throw new Error(
       `credentials.json at ${paths.CREDENTIALS_PATH} selects missing account "${store.activeAccount}". The file was left unchanged.`,
     )
   }
 
-  return {
-    accountName: store.activeAccount,
-    githubToken: decodeToken(account.githubToken, store.activeAccount, paths),
-    gheDomain: account.gheDomain,
-  }
+  const accounts = Object.fromEntries(
+    Object.entries(store.accounts).map(([accountName, account]) => [
+      accountName,
+      {
+        accountName,
+        githubToken: decodeToken(account.githubToken, accountName, paths),
+        gheDomain: account.gheDomain,
+      },
+    ]),
+  )
+
+  return { activeAccount: store.activeAccount, accounts }
 }
 
 export async function writeGitHubCredential(
   githubToken: string,
   gheDomain?: string,
   paths: CredentialPaths = PATHS,
+  accountName?: string,
+): Promise<void> {
+  await writeGitHubCredentialEntry(
+    githubToken,
+    gheDomain,
+    paths,
+    accountName,
+    false,
+  )
+}
+
+export async function writeNewGitHubCredential(
+  githubToken: string,
+  gheDomain: string | undefined,
+  paths: CredentialPaths,
+  accountName: string,
+): Promise<void> {
+  await writeGitHubCredentialEntry(
+    githubToken,
+    gheDomain,
+    paths,
+    accountName,
+    true,
+  )
+}
+
+async function writeGitHubCredentialEntry(
+  githubToken: string,
+  gheDomain: string | undefined,
+  paths: CredentialPaths,
+  accountName: string | undefined,
+  createOnly: boolean,
 ): Promise<void> {
   const token = githubToken.trim()
   if (!token) {
@@ -107,8 +172,14 @@ export async function writeGitHubCredential(
   }
 
   const existing = await readCredentialStore(paths)
-  const activeAccount = existing?.activeAccount ?? DEFAULT_CREDENTIAL_ACCOUNT
-  const existingAccount = existing?.accounts[activeAccount]
+  const selectedAccount = accountName ?? existing?.activeAccount ?? DEFAULT_CREDENTIAL_ACCOUNT
+  const activeAccount = existing?.activeAccount ?? selectedAccount
+  const existingAccount = existing?.accounts[selectedAccount]
+  if (createOnly && existingAccount) {
+    throw new Error(
+      `credentials.json at ${paths.CREDENTIALS_PATH} already contains account ${JSON.stringify(selectedAccount)}. The file was left unchanged.`,
+    )
+  }
   const account: z.infer<typeof credentialAccountSchema> = {
     ...existingAccount,
     githubToken: Buffer.from(token, 'utf8').toString('base64'),
@@ -126,7 +197,7 @@ export async function writeGitHubCredential(
     activeAccount,
     accounts: {
       ...existing?.accounts,
-      [activeAccount]: account,
+      [selectedAccount]: account,
     },
   }
 
@@ -192,14 +263,21 @@ export async function replaceGitHubCredentialDuringMigration(
 
 export async function prepareGitHubCredential(
   paths: CredentialPaths = PATHS,
+  accountName?: string,
 ): Promise<PreparedGitHubCredential | undefined> {
+  if (accountName !== undefined && accountName !== DEFAULT_CREDENTIAL_ACCOUNT) {
+    const store = await readGitHubCredentials(paths)
+    const credential = store?.accounts[accountName]
+    return credential ? { ...credential, migrationPending: false } : undefined
+  }
+
   const migration = await preparePendingGitHubCredentialMigration(paths)
   if (migration) {
     return migration
   }
 
   await removeStaleMigrationJournal(paths)
-  const credential = await readGitHubCredential(paths)
+  const credential = await readGitHubCredential(paths, accountName)
   return credential ? { ...credential, migrationPending: false } : undefined
 }
 
@@ -686,61 +764,6 @@ async function requireGitHubCredential(paths: CredentialPaths): Promise<GitHubCr
     throw new Error(`No active GitHub credential exists in ${paths.CREDENTIALS_PATH}.`)
   }
   return credential
-}
-
-async function writePrivateFileAtomically(filePath: string, content: string): Promise<void> {
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  try {
-    await fs.writeFile(temporaryPath, content, { encoding: 'utf8', mode: 0o600 })
-    await applyPrivateFilePermissions(temporaryPath)
-    await replacePrivateFile(temporaryPath, filePath)
-    await applyPrivateFilePermissions(filePath)
-  }
-  finally {
-    await fs.rm(temporaryPath, { force: true }).catch(() => {})
-  }
-}
-
-async function replacePrivateFile(temporaryPath: string, filePath: string): Promise<void> {
-  for (const delayMs of WINDOWS_RENAME_RETRY_DELAYS_MS) {
-    try {
-      await fs.rename(temporaryPath, filePath)
-      return
-    }
-    catch (error) {
-      if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') {
-        throw error
-      }
-      await new Promise(resolve => setTimeout(resolve, delayMs))
-    }
-  }
-  await fs.rename(temporaryPath, filePath)
-}
-
-async function writePrivateFileAtomicallyIfAbsent(filePath: string, content: string): Promise<void> {
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  try {
-    await fs.writeFile(temporaryPath, content, { encoding: 'utf8', mode: 0o600 })
-    await applyPrivateFilePermissions(temporaryPath)
-    try {
-      await fs.link(temporaryPath, filePath)
-    }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw error
-      }
-    }
-  }
-  finally {
-    await fs.rm(temporaryPath, { force: true }).catch(() => {})
-  }
-}
-
-async function applyPrivateFilePermissions(filePath: string): Promise<void> {
-  if (process.platform === 'win32') {
-    return
-  }
-  await fs.chmod(filePath, 0o600)
 }
 
 async function pathExists(filePath: string): Promise<boolean> {

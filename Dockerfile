@@ -23,7 +23,7 @@ RUN chmod 755 /entrypoint.sh
 EXPOSE 4141
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD bun -e "const response = await fetch('http://127.0.0.1:4141/health'); process.exit(response.ok ? 0 : 1)"
+  CMD bun -e "import { readFile } from 'node:fs/promises'; import { domainToASCII } from 'node:url'; let hostname = 'localhost'; try { const config = JSON.parse(await readFile((process.env.HOME ?? '/home/bun') + '/.local/share/ghc-proxy/config.json', 'utf8')); hostname = domainToASCII((config.accountRouting?.baseHostname ?? hostname).trim()).replace(/\.$/, '').toLowerCase(); } catch {} const response = await fetch('http://127.0.0.1:4141/health', { headers: { host: hostname + ':4141' } }); process.exit(response.ok ? 0 : 1)"
 
 USER bun
 ENTRYPOINT ["/entrypoint.sh"]

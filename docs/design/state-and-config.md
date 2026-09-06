@@ -1,11 +1,13 @@
 # State and Configuration
 
-This document describes the global state management and configuration system.
+This document describes process-wide configuration and request-selected account
+state.
 
 ## Global State (`src/state/`)
 
-There is no single `AppState` object. State is decomposed into a set of
-singletons under `src/state/`, each re-exported from `~/state`:
+There is no single `AppState` object. Process-wide state is decomposed under
+`src/state/`; account-scoped exports are contextual facades that select the
+runtime bound to the current request:
 
 ```typescript
 import {
@@ -18,9 +20,18 @@ import {
 } from '~/state'
 ```
 
+`src/state/account-runtime.ts` owns the `AsyncLocalStorage` request context,
+the configured account registry, and one `AuthStore`, `ModelCache`,
+`RateLimiter`, and Responses emulator state instance per account. Without
+`accountRouting`, the facades resolve to the original legacy singleton and
+preserve single-account behavior. With routing enabled, `src/server.ts` binds a
+request to exactly one account before CORS or route handling; an unknown
+hostname returns `421` before any upstream work.
+
 The client/queue factory (`createCopilotClient`, `getClientConfig`,
 `cacheModels`, `cacheVSCodeVersion`, `configureUpstreamRequestQueue`) lives in
-`src/clients/factory.ts`.
+`src/clients/factory.ts`. It creates one upstream queue per account runtime so
+account and model cooldowns cannot cross account boundaries.
 
 ### AuthStore (`src/state/auth.ts`)
 
@@ -44,9 +55,9 @@ class AuthStore {
 }
 ```
 
-Tokens are refreshed automatically when they expire. The `authStore` singleton
-holds both authentication tokens and the server runtime settings derived from
-CLI flags.
+Tokens are refreshed automatically when they expire. In hostname-routing mode,
+each account has its own refresh schedule and `AuthStore`; the exported
+`authStore` facade resolves to the account already selected for the request.
 
 ### RunServerOptions (`src/start.ts`)
 
@@ -183,8 +194,37 @@ interface ConfigFile {
 
   // GitHub Enterprise
   gheDomain?: string // GitHub Enterprise domain
+
+  // Optional multi-account routing
+  accountRouting?: {
+    baseHostname: string
+    defaultAccount: string
+    hostnames: Record<string, string>
+  }
 }
 ```
+
+`accountRouting` is an opt-in fail-closed boundary. A normal legacy process can
+prepare an explicit Dashboard bootstrap without changing routing: the active
+credential remains the default and `defaultaccount.localhost` is an editable
+suggestion. Confirmation persists the routing object and hot-enables exact host
+selection; failure restores legacy routing-disabled state. `baseHostname` always
+maps to `defaultAccount`, and request hostname `127.0.0.1` is a fixed alias for
+the same account; every routed account must also appear exactly once in
+`hostnames`, which supplies its stable dedicated DNS hostname. Hostnames are
+converted to ASCII, lower-cased, and
+compared without a trailing root dot; ports are not part of the key. IP
+addresses remain invalid configuration values; authorities containing ports,
+duplicate normalized names, missing accounts, and incomplete routing objects
+fail validation. Untrusted
+`Forwarded` and `X-Forwarded-Host` values do not participate in selection.
+Account names are case-sensitive, contain 1-64 ASCII letters, numbers, dots,
+underscores, or hyphens, and must begin with an alphanumeric character.
+
+The request-lifetime binding uses Elysia's higher-order `wrap()` hook because it
+covers both the general fetch path and Bun's compiled per-route system router.
+That hook is an internal Elysia API, so the packaged `account-hostname-routing`
+selfcheck is a required compatibility gate under both Bun and Node.
 
 `githubToken` is intentionally absent. `readConfig()` removes that legacy key
 from its in-memory result even while an interrupted migration keeps the original
@@ -205,12 +245,14 @@ interface CredentialStoreFile {
 }
 ```
 
-The current runtime reads and writes the active account, initially `default`.
-Sibling named accounts are preserved so account selection can be added without
-another storage migration. Base64 only reduces accidental disclosure when a
-configuration file is inspected or pasted; it does not resist deliberate file
-access or decoding. On non-Windows platforms, credential and migration files
-are written with mode `0600`; Windows uses its native file ACL behavior.
+Legacy single-account mode reads and writes `activeAccount`, initially
+`default`. `auth --account <name>` creates or replaces a sibling without
+changing `activeAccount`; hostname-routing mode reads every account referenced
+by `accountRouting` and ignores `activeAccount` for request selection. Base64
+only reduces accidental disclosure when a configuration file is inspected or
+pasted; it does not resist deliberate file access or decoding. On non-Windows
+platforms, credential and migration files are written with mode `0600`; Windows
+uses its native file ACL behavior.
 
 Legacy migration uses
 `~/.local/share/ghc-proxy/config.json.github-token-migration.bak` as the commit
@@ -240,6 +282,23 @@ credential remains committed instead of rolling back to the legacy token.
 Replacement also accepts the legitimate split state where `config.json` was
 already cleaned but the backup had not yet been deleted, provided the backup and
 active stored legacy credential still match.
+
+Process-wide `start --github-token` and `start --ghe-domain` overrides are
+rejected when `accountRouting` is enabled because neither flag identifies one
+named account. A pending legacy credential migration is completed through the
+existing transactional path before routed account initialization begins.
+
+Dashboard account mutations use
+`~/.local/share/ghc-proxy/account-management-transaction.json` as a private
+write-ahead rollback journal for the exact prior config and credential files.
+New journals record the owner process and a process-local token. Startup restores
+an unfinished transaction before parsing `config.json` only after confirming its
+owner process has exited; a live or unverifiable owner leaves the journal and
+managed files unchanged. Only the process holding the matching token can commit
+or roll back its live transaction. Legacy version 1 journals remain recoverable.
+Successful legacy bootstrap, account additions, and default changes remove the
+journal last; a failed operation restores both files and the previous in-memory
+routing mode/map.
 
 ## CLI Arguments → Runtime Settings
 

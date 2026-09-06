@@ -28,6 +28,12 @@ Client Request (OpenAI / Anthropic format)
     |
     v
 +-------------------------------------------+
+|      Hostname Account Selection           |
+|  (exact configured DNS hostname mapping)  |
++-------------------------------------------+
+    |
+    v
++-------------------------------------------+
 |             Elysia Router                 |
 |  /chat/completions  /v1/messages  /v1/responses  /models  ...
 +-------------------------------------------+
@@ -84,6 +90,13 @@ Client Request (OpenAI / Anthropic format)
     v
 Client Response (OpenAI / Anthropic format)
 ```
+
+When `accountRouting` is configured, hostname selection runs before CORS and
+route execution. The configured base hostname uses the explicit default
+account, and `127.0.0.1` is a fixed alias for that same default. Every other
+accepted hostname maps to one named account. Unknown hostnames return `421`
+without reaching a handler or upstream. The selected account remains fixed for
+the full asynchronous request lifecycle.
 
 ## Exposed Endpoints
 

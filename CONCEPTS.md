@@ -61,6 +61,24 @@ The strategy that translates an Anthropic Messages request into an OpenAI Chat C
 
 ## Routing
 
+### Hostname account selection
+The optional process-entry decision that maps the request URL's normalized DNS
+hostname to exactly one named credential. The configured base hostname selects
+the explicit default account as an alias, and the exact loopback hostname
+`127.0.0.1` selects the same default; every routed account also owns exactly one
+stable dedicated hostname. Changing the default affects only these default aliases.
+Selection is fixed for the request lifetime and partitions authentication,
+token refresh, model cache, local Responses state, request throttling, and
+upstream cooldowns. It never means account fallback, rotation, or load
+balancing. Any other unknown hostname is rejected before dispatch, and forwarded-host
+headers do not change the selection. This is deterministic routing, not caller
+authorization.
+
+A legacy single-account process may prepare this routing mode for explicit
+Dashboard confirmation. Its active credential remains the default account and
+receives the editable dedicated-hostname suggestion `defaultaccount.localhost`;
+no Host behavior changes until the bootstrap transaction commits.
+
 ### Compact request
 A conversation-summarization request, identified by a recognizable system-prompt signature that Claude Code sends when condensing context. When small-model routing is enabled, a compact request may be rerouted to a cheaper model, provided that model preserves the original's endpoint support and required capabilities.
 

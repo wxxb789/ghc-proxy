@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises'
-import process from 'node:process'
 import consola from 'consola'
 import { z } from 'zod'
 
+import { accountRoutingSchema } from '~/lib/account-routing'
+import { writePrivateFileAtomically } from '~/lib/atomic-file'
 import { PATHS } from '~/lib/paths'
 
 const reasoningEffortSchema = z.enum([
@@ -56,6 +57,7 @@ const configFileSchema = z.object({
   upstreamQueueBaseDelaySeconds: z.number().int().nonnegative().optional(),
   upstreamQueueMaxDelaySeconds: z.number().int().positive().optional(),
   gheDomain: z.string().optional(),
+  accountRouting: accountRoutingSchema.optional(),
 }).passthrough()
 
 export type ConfigFile = z.infer<typeof configFileSchema>
@@ -63,6 +65,13 @@ export type ConfigFile = z.infer<typeof configFileSchema>
 const KNOWN_CONFIG_KEYS = new Set(Object.keys(configFileSchema.shape))
 
 let cachedConfig: ConfigFile = {}
+
+export class ConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ConfigValidationError'
+  }
+}
 
 export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'high'
 export const DEFAULT_USE_FUNCTION_APPLY_PATCH = true
@@ -74,8 +83,9 @@ export const DEFAULT_RESPONSES_OFFICIAL_EMULATOR = false
 export const DEFAULT_RESPONSES_OFFICIAL_EMULATOR_TTL_SECONDS = 14_400
 
 export async function readConfig(): Promise<ConfigFile> {
+  let content: string | undefined
   try {
-    const content = await fs.readFile(PATHS.CONFIG_PATH, 'utf8')
+    content = await fs.readFile(PATHS.CONFIG_PATH, 'utf8')
 
     if (!content.trim()) {
       cachedConfig = {}
@@ -95,6 +105,15 @@ export async function readConfig(): Promise<ConfigFile> {
     }
 
     const rawConfig = withoutLegacyGitHubToken(raw as Record<string, unknown>)
+    if ('accountRouting' in rawConfig) {
+      const accountRoutingResult = accountRoutingSchema.safeParse(rawConfig.accountRouting)
+      if (!accountRoutingResult.success) {
+        cachedConfig = {}
+        throw new ConfigValidationError(
+          `config.json accountRouting is invalid: ${accountRoutingResult.error.issues.map(issue => issue.message).join('; ')}`,
+        )
+      }
+    }
     const result = configFileSchema.safeParse(rawConfig)
     if (!result.success) {
       consola.warn(
@@ -128,6 +147,15 @@ export async function readConfig(): Promise<ConfigFile> {
     return cachedConfig
   }
   catch (error: unknown) {
+    if (error instanceof ConfigValidationError) {
+      throw error
+    }
+    if (content?.includes('"accountRouting"')) {
+      cachedConfig = {}
+      throw new ConfigValidationError(
+        `config.json accountRouting could not be parsed: ${(error as Error).message}`,
+      )
+    }
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       cachedConfig = {}
       return {}
@@ -181,20 +209,37 @@ export function getCachedConfig(): ConfigFile {
 
 type ConfigFieldShape = typeof configFileSchema.shape
 
+interface WriteConfigFieldOptions {
+  configPath?: string
+  failOnReadError?: boolean
+}
+
 export async function writeConfigField<K extends keyof ConfigFieldShape>(
   field: K,
   value: z.input<ConfigFieldShape[K]>,
+  options: WriteConfigFieldOptions = {},
 ): Promise<void> {
+  const configPath = options.configPath ?? PATHS.CONFIG_PATH
   try {
     let existing: Record<string, unknown> = {}
     try {
-      const content = await fs.readFile(PATHS.CONFIG_PATH, 'utf8')
+      const content = await fs.readFile(configPath, 'utf8')
       if (content.trim()) {
-        existing = JSON.parse(content) as Record<string, unknown>
+        const parsed = JSON.parse(content) as unknown
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          throw new Error('config.json is not a JSON object')
+        }
+        existing = parsed as Record<string, unknown>
       }
     }
     catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (options.failOnReadError) {
+          throw new Error(
+            `Could not read existing config.json: ${(error as Error).message}.`,
+            { cause: error },
+          )
+        }
         consola.warn(
           `Could not read existing config.json: ${
             (error as Error).message
@@ -205,12 +250,10 @@ export async function writeConfigField<K extends keyof ConfigFieldShape>(
 
     const merged = { ...existing, [field]: value }
 
-    await fs.writeFile(
-      PATHS.CONFIG_PATH,
+    await writePrivateFileAtomically(
+      configPath,
       JSON.stringify(merged, null, 2),
-      'utf8',
     )
-    await applyConfigFilePermissions(PATHS.CONFIG_PATH)
 
     cachedConfig = sanitizeConfig(
       withoutLegacyGitHubToken(merged) as ConfigFile,
@@ -228,19 +271,4 @@ function withoutLegacyGitHubToken(
   const sanitized = { ...config }
   delete sanitized.githubToken
   return sanitized
-}
-
-async function applyConfigFilePermissions(filePath: string): Promise<void> {
-  if (process.platform === 'win32') {
-    return
-  }
-
-  try {
-    await fs.chmod(filePath, 0o600)
-  }
-  catch (error) {
-    consola.warn(
-      `Could not set config.json permissions to 0600: ${(error as Error).message}`,
-    )
-  }
 }

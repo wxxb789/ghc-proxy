@@ -1,23 +1,29 @@
 # Dashboard Observability
 
-The built-in dashboard is a read-only projection of the current ghc-proxy
-process. It is intentionally not a request history, analytics, or admin
-system.
+The built-in dashboard is a safe projection of the current ghc-proxy process
+and, in named-account routing mode, the local management surface for adding an
+account and selecting the explicit default. It is intentionally not a request
+history or analytics system.
 
 ## Scope
 
-The dashboard exposes four views under `/dashboard`:
+The dashboard exposes five views under `/dashboard`:
 
 - Overview: process health, version, authentication state, quota, active
   requests, and upstream queue activity.
+- Accounts: each routed account's stable hostname, GitHub identity and tenant,
+  authentication/Copilot state, quota, and default marker; it also starts new
+  device authentication and changes the default account.
 - Models: cached upstream model metadata plus ghc-proxy's effective routing
   and compatibility decisions.
 - Behavior: current configuration, strategy order, and process-local effect
   counters.
 - Requests: active requests plus the most recent 256 terminal requests.
 
-It does not write files, use a database, retain token statistics, accept
-configuration changes, or expose request/response content.
+It does not use a database, retain token statistics, delete or rename accounts,
+or expose request/response content. Account management writes only the existing
+credential and routing configuration files through the transaction described
+below.
 
 ## Request Lifecycle Storage
 
@@ -69,6 +75,9 @@ Observability is emitted where behavior is actually selected or applied:
   completion.
 - `runPipeline()` records the shared model trace and the actual selected
   `StrategyEntry.name`.
+- Hostname-routed requests record the selected operator-defined account name;
+  legacy single-account requests omit the field. Tokens and credential-derived
+  identifiers are never stored.
 - Transform functions return small change indicators (boolean, count, or
   removed keys). Callers increment stable effect IDs only when the real
   transform changed the request.
@@ -111,11 +120,47 @@ Authentication projection is allowlist-only. It contains presence/status,
 login, expiry, and refresh/validation timestamps, never tokens or raw errors.
 
 Quota is fetched only from the dashboard path. A process-local cache keeps one
-safe projection for 60 seconds and coalesces concurrent refreshes. The
-projection includes plan, reset date, and the three quota pools; analytics IDs,
-organization data, and quota IDs are discarded before caching. A five-second
-dashboard-only timeout aborts a hung quota fetch so later polls can recover;
-the public `/usage` route keeps its existing behavior.
+safe projection per selected account for 60 seconds and coalesces concurrent
+refreshes within that account. The projection includes plan, reset date, and the
+three quota pools; analytics IDs, organization data, and quota IDs are discarded
+before caching. A five-second dashboard-only timeout aborts a hung quota fetch
+so later polls can recover; the public `/usage` route keeps its existing
+behavior.
+
+Dashboard device authentication exposes only the user code, verification URL,
+expiry, polling interval, and a random local session ID. The GitHub device code,
+GitHub token, Copilot token, and raw upstream error bodies never enter a
+Dashboard response or log. A new runtime is installed only after GitHub
+identity, Copilot token, and model discovery all succeed.
+
+## Account Mutation Transaction
+
+Every routed account has exactly one dedicated hostname. `baseHostname` is an
+additional alias for `defaultAccount`; changing the default updates only that
+alias and the fixed `127.0.0.1` loopback alias while leaving the dedicated
+hostname map unchanged.
+
+Account mutations are serialized. Adding an account validates the complete next
+routing table before persistence, then journals the exact previous
+`credentials.json` and `config.json`, atomically writes the credential first,
+atomically writes routing second, installs the prevalidated runtime, and removes
+the journal last. A returned failure rolls both files and the runtime map back.
+If the process stops during the operation, startup restores the journaled state
+before reading configuration. An owner PID and process-local token prevent a
+second process from restoring or deleting a journal while its owner is live;
+owner liveness that cannot be verified also fails closed. A malformed journal
+fails closed without changing either managed file. Default changes use the same
+transaction boundary, so a failed switch leaves the old default active and
+persistent.
+
+Legacy single-account startup prepares, but does not commit, a one-account
+routing table. The active legacy credential remains the default and receives the
+editable suggestion `defaultaccount.localhost`. The Dashboard bootstrap action
+validates the chosen hostname, writes `accountRouting` through the same journal,
+and installs the already-authenticated legacy runtime only after the write is
+ready to commit. Before confirmation, arbitrary legacy Host values continue to
+work. After success, the base and dedicated hostnames are exact and unknown
+hosts return `421`. A failed bootstrap restores routing-disabled legacy state.
 
 ## Serving and Security
 
@@ -132,6 +177,12 @@ browser requests with a cross-origin `Origin` header receive 403. The peer
 check means a remote client cannot bypass the boundary by spoofing one of those
 Host values. Runtime values are inserted with DOM `textContent`, not HTML
 parsing.
+
+The same guard covers all account-management methods. In ordinary legacy mode,
+account inspection and the explicit bootstrap action are available, while add
+and default-switch operations return `409` until routing is enabled. A process
+using a global GitHub-token or GHE-tenant override does not expose bootstrap and
+returns `409` for account management rather than persisting ambiguous state.
 
 `/dashboard` requests are excluded from both the request ring and access log so
 polling does not displace proxy traffic or create console noise.

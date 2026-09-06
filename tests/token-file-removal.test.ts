@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -10,6 +11,7 @@ const tempDir = await fs.mkdtemp(
 )
 
 const testPaths = {
+  ACCOUNT_MANAGEMENT_JOURNAL_PATH: path.join(tempDir, 'account-management-transaction.json'),
   APP_DIR: tempDir,
   CONFIG_PATH: path.join(tempDir, 'config.json'),
   CREDENTIALS_PATH: path.join(tempDir, 'credentials.json'),
@@ -25,6 +27,7 @@ const mockInfo = mock(() => {})
 const mockWarn = mock(() => {})
 const mockError = mock(() => {})
 const mockSuccess = mock(() => {})
+const mockBox = mock(() => {})
 await mock.module('consola', () => ({
   default: {
     level: 0,
@@ -33,17 +36,26 @@ await mock.module('consola', () => ({
     warn: mockWarn,
     error: mockError,
     success: mockSuccess,
+    box: mockBox,
   },
 }))
 
 const listenCalls: Array<number> = []
+const serverOptions: unknown[] = []
+let listenFailure: unknown
 await mock.module('../src/server', () => ({
-  createServer: () => ({
-    listen: (port: number) => {
-      listenCalls.push(port)
-    },
-    stop: async () => {},
-  }),
+  createServer: (options?: unknown) => {
+    serverOptions.push(options)
+    return {
+      listen: (port: number) => {
+        if (listenFailure) {
+          throw listenFailure
+        }
+        listenCalls.push(port)
+      },
+      stop: async () => {},
+    }
+  },
 }))
 
 await mock.module('../src/cli/startup-banner', () => ({
@@ -57,6 +69,8 @@ const copilotTokenFailuresByToken = new Map<string, unknown>()
 const githubUserTokens: Array<string | undefined> = []
 const githubUserApiBaseUrls: Array<string | undefined> = []
 const copilotTokenTokens: Array<string | undefined> = []
+const copilotUsageTokens: Array<string | undefined> = []
+const copilotUsageApiBaseUrls: Array<string | undefined> = []
 const mockPollAccessToken = mock(() => Promise.resolve('new-test-token'))
 const mockGetGitHubUser = mock(() => {
   if (githubUserFailure) {
@@ -122,13 +136,33 @@ await mock.module('../src/clients/github-client', () => ({
       return mockGetCopilotToken()
     }
 
-    getCopilotUsage = () =>
-      Promise.resolve({ seat_breakdown: {}, total_suggestions_count: 0 })
+    getCopilotUsage = () => {
+      copilotUsageTokens.push(this.auth.githubToken)
+      copilotUsageApiBaseUrls.push(this.config.githubApiBaseUrl)
+      const quota = {
+        entitlement: 0,
+        overage_permitted: false,
+        percent_remaining: 0,
+        remaining: 0,
+        unlimited: false,
+      }
+      return Promise.resolve({
+        copilot_plan: 'individual',
+        quota_reset_date: '2099-01-01',
+        quota_snapshots: {
+          chat: quota,
+          completions: quota,
+          premium_interactions: quota,
+        },
+      })
+    }
   },
 }))
 
 const { PATHS, ensurePaths } = await import('../src/lib/paths')
+const { beginAccountManagementTransaction } = await import('../src/lib/account-management-transaction')
 const { auth } = await import('../src/auth')
+const { checkUsage } = await import('../src/check-usage')
 const { start } = await import('../src/start')
 const { CopilotClient } = await import('../src/clients')
 const {
@@ -143,7 +177,13 @@ const {
   setupRuntimeOverrideTokens,
 } = await import('../src/lib/token')
 const { HTTPError } = await import('../src/lib/error')
-const { authStore, modelCache } = await import('../src/state')
+const {
+  authStore,
+  getCurrentAccountName,
+  modelCache,
+  resetAccountRuntimes,
+  resolveRequestAccountRuntime,
+} = await import('../src/state')
 const { getCachedConfig, readConfig } = await import('../src/lib/config')
 
 const originalGetModels = CopilotClient.prototype.getModels
@@ -152,10 +192,13 @@ const originalClearTimeout = globalThis.clearTimeout
 
 type AuthRunContext = Parameters<NonNullable<typeof auth.run>>[0]
 type AuthArgs = AuthRunContext['args']
+type CheckUsageRunContext = Parameters<NonNullable<typeof checkUsage.run>>[0]
+type CheckUsageArgs = CheckUsageRunContext['args']
 type StartRunContext = Parameters<NonNullable<typeof start.run>>[0]
 type StartArgs = StartRunContext['args']
 
 function resetStores() {
+  resetAccountRuntimes()
   authStore.githubToken = undefined
   authStore.copilotToken = undefined
   authStore.copilotApiBase = undefined
@@ -190,6 +233,7 @@ function makeAuthArgs(overrides: Partial<AuthArgs> = {}): AuthArgs {
     '_': [],
     'verbose': false,
     'v': false,
+    'account': undefined,
     'show-token': false,
     'ghe-domain': undefined,
     'ghe': undefined,
@@ -249,6 +293,14 @@ async function runAuthCommand(args: AuthArgs): Promise<void> {
   await auth.run!({ rawArgs: [], args, cmd: auth })
 }
 
+async function runCheckUsageCommand(): Promise<void> {
+  await checkUsage.run!({
+    rawArgs: [],
+    args: { _: [] } as unknown as CheckUsageArgs,
+    cmd: checkUsage,
+  })
+}
+
 async function runStartCommand(args: StartArgs): Promise<void> {
   const sigintListeners = process.listeners('SIGINT') as Array<(...args: Array<unknown>) => void>
   const sigtermListeners = process.listeners('SIGTERM') as Array<(...args: Array<unknown>) => void>
@@ -283,11 +335,16 @@ describe('GitHub credential migration', () => {
     githubUserTokens.length = 0
     githubUserApiBaseUrls.length = 0
     copilotTokenTokens.length = 0
+    copilotUsageTokens.length = 0
+    copilotUsageApiBaseUrls.length = 0
     mockInfo.mockClear()
     mockWarn.mockClear()
     mockError.mockClear()
     mockSuccess.mockClear()
+    mockBox.mockClear()
     listenCalls.length = 0
+    listenFailure = undefined
+    serverOptions.length = 0
   })
 
   afterEach(() => {
@@ -309,6 +366,291 @@ describe('GitHub credential migration', () => {
       .then(() => true)
       .catch(() => false)
     expect(appDirExists).toBe(true)
+  })
+
+  test('start rolls back an interrupted account-management transaction before loading config', async () => {
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({ smallModel: 'gpt-5-mini' }))
+    await writeGitHubCredential('default-token')
+    await beginAccountManagementTransaction(PATHS)
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'missing',
+        hostnames: {},
+      },
+    }))
+
+    await runStartCommand(makeStartArgs())
+
+    expect(await fs.readFile(PATHS.CONFIG_PATH, 'utf8')).toBe(JSON.stringify({ smallModel: 'gpt-5-mini' }))
+    await expect(fs.access(PATHS.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toThrow()
+    expect(listenCalls).toEqual([4141])
+  })
+
+  test('auth writes an explicitly named account without replacing the active account', async () => {
+    await writeGitHubCredential('default-token')
+
+    await runAuthCommand(makeAuthArgs({
+      'account': 'account1',
+      'ghe-domain': 'corp.ghe.com',
+    }))
+
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'default',
+      githubToken: 'default-token',
+    })
+    expect(await readGitHubCredential(PATHS, 'account1')).toMatchObject({
+      accountName: 'account1',
+      githubToken: 'new-test-token',
+      gheDomain: 'corp.ghe.com',
+    })
+    expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
+  })
+
+  test('auth without --account preserves the active named account GHE tenant', async () => {
+    await writeGitHubCredential('primary-token', 'corp.ghe.com', PATHS, 'primary')
+
+    await runAuthCommand(makeAuthArgs())
+
+    expect(mockPollAccessToken).toHaveBeenCalledTimes(1)
+    expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'primary',
+      githubToken: 'new-test-token',
+      gheDomain: 'corp.ghe.com',
+    })
+    expect(JSON.parse(await fs.readFile(PATHS.CONFIG_PATH, 'utf8'))).toEqual({
+      gheDomain: 'corp.ghe.com',
+    })
+  })
+
+  test('check-usage preserves the active named account GHE tenant', async () => {
+    await writeGitHubCredential('primary-token', 'corp.ghe.com', PATHS, 'primary')
+
+    await runCheckUsageCommand()
+
+    expect(mockPollAccessToken).not.toHaveBeenCalled()
+    expect(githubUserTokens).toEqual(['primary-token'])
+    expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    expect(copilotUsageTokens).toEqual(['primary-token'])
+    expect(copilotUsageApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'primary',
+      githubToken: 'primary-token',
+      gheDomain: 'corp.ghe.com',
+    })
+    await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
+  })
+
+  test('start exposes the legacy account for explicit Dashboard routing bootstrap', async () => {
+    await writeGitHubCredential('primary-token', 'corp.ghe.com', PATHS, 'primary')
+
+    await runStartCommand(makeStartArgs())
+
+    expect(mockPollAccessToken).not.toHaveBeenCalled()
+    expect(githubUserTokens).toEqual(['primary-token'])
+    expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    expect(copilotTokenTokens).toEqual(['primary-token'])
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'primary',
+      githubToken: 'primary-token',
+      gheDomain: 'corp.ghe.com',
+    })
+
+    const firstManager = (serverOptions[0] as {
+      accountManager: {
+        bootstrapAccountRouting: (hostname: string) => Promise<void>
+        getRoutingSummary: () => unknown
+        stop: () => Promise<void>
+      }
+    }).accountManager
+    expect(firstManager.getRoutingSummary()).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'primary',
+      routingEnabled: false,
+    })
+    await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
+
+    await firstManager.bootstrapAccountRouting('personal.localhost')
+
+    expect(resolveRequestAccountRuntime(new Request('http://localhost/token'))?.name)
+      .toBe('primary')
+    expect(resolveRequestAccountRuntime(new Request('http://personal.localhost/token'))?.name)
+      .toBe('primary')
+    expect(JSON.parse(await fs.readFile(PATHS.CONFIG_PATH, 'utf8'))).toMatchObject({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'primary',
+        hostnames: { 'personal.localhost': 'primary' },
+      },
+    })
+
+    await firstManager.stop()
+    resetStores()
+    serverOptions.length = 0
+    listenCalls.length = 0
+    await runStartCommand(makeStartArgs())
+
+    expect(getCurrentAccountName()).toBe('primary')
+    expect((serverOptions[0] as {
+      accountManager: { getRoutingSummary: () => unknown }
+    }).accountManager.getRoutingSummary()).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'primary',
+      routingEnabled: true,
+    })
+  })
+
+  test('keeps legacy mode when the active account name cannot be routed safely', async () => {
+    await fs.writeFile(PATHS.CREDENTIALS_PATH, JSON.stringify({
+      version: 1,
+      activeAccount: 'legacy account',
+      accounts: {
+        'legacy account': {
+          githubToken: Buffer.from('legacy-token').toString('base64'),
+        },
+      },
+    }))
+
+    await runStartCommand(makeStartArgs())
+
+    expect(serverOptions[0]).toMatchObject({ accountManager: undefined })
+    expect(authStore.githubToken).toBe('legacy-token')
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
+      'active legacy account name is not routing-compatible',
+    ))
+  })
+
+  test('start initializes every routed account and keeps the explicit default active outside requests', async () => {
+    await writeGitHubCredential('primary-token', undefined, PATHS, 'primary')
+    await writeGitHubCredential('account1-token', 'corp.ghe.com', PATHS, 'account1')
+    const credentialStore = JSON.parse(
+      await fs.readFile(PATHS.CREDENTIALS_PATH, 'utf8'),
+    ) as { activeAccount: string }
+    credentialStore.activeAccount = 'account1'
+    await fs.writeFile(PATHS.CREDENTIALS_PATH, JSON.stringify(credentialStore))
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'primary',
+        hostnames: {
+          'primary.localhost': 'primary',
+          'account1.localhost': 'account1',
+        },
+      },
+    }))
+
+    await runStartCommand(makeStartArgs())
+
+    expect(githubUserTokens).toEqual(['primary-token', 'account1-token'])
+    expect(githubUserApiBaseUrls).toEqual([
+      'https://api.github.com',
+      'https://api.corp.ghe.com',
+    ])
+    expect(copilotTokenTokens).toEqual(['primary-token', 'account1-token'])
+    expect(getCurrentAccountName()).toBe('primary')
+    expect(authStore.githubToken).toBe('primary-token')
+    expect(listenCalls).toEqual([4141])
+    expect(serverOptions[0]).toMatchObject({
+      accountManager: expect.any(Object),
+    })
+  })
+
+  test('start cleans up routed account resources when the listener cannot start', async () => {
+    await writeGitHubCredential('default-token')
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: { 'default.localhost': 'default' },
+      },
+    }))
+    listenFailure = new Error('address already in use')
+
+    await expect(runStartCommand(makeStartArgs())).rejects.toThrow(
+      'address already in use',
+    )
+
+    const options = serverOptions[0] as {
+      accountManager: { beginAddAccount: (input: unknown) => Promise<unknown> }
+    }
+    await expect(options.accountManager.beginAddAccount({
+      accountName: 'account1',
+      hostname: 'account1.localhost',
+    })).rejects.toThrow('shutting down')
+    expect(getCurrentAccountName()).toBe('default')
+  })
+
+  test('restart preserves the configured default instead of the credential-store active account', async () => {
+    await fs.writeFile(PATHS.CREDENTIALS_PATH, JSON.stringify({
+      version: 1,
+      activeAccount: 'account1',
+      accounts: {
+        default: { githubToken: Buffer.from('default-token').toString('base64') },
+        account1: { githubToken: Buffer.from('account1-token').toString('base64') },
+      },
+    }))
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: {
+          'default.localhost': 'default',
+          'account1.localhost': 'account1',
+        },
+      },
+    }))
+
+    await runStartCommand(makeStartArgs())
+    resetStores()
+    githubUserTokens.length = 0
+    copilotTokenTokens.length = 0
+    listenCalls.length = 0
+
+    await runStartCommand(makeStartArgs())
+
+    expect(githubUserTokens).toEqual(['default-token', 'account1-token'])
+    expect(copilotTokenTokens).toEqual(['default-token', 'account1-token'])
+    expect(getCurrentAccountName()).toBe('default')
+    expect(authStore.githubToken).toBe('default-token')
+    expect(listenCalls).toEqual([4141])
+  })
+
+  test('start rejects account routing that names a missing credential', async () => {
+    await writeGitHubCredential('default-token')
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: {
+          'missing.localhost': 'missing',
+        },
+      },
+    }))
+
+    await expect(runStartCommand(makeStartArgs())).rejects.toThrow(
+      'selects missing account "missing"',
+    )
+    expect(githubUserTokens).toEqual([])
+    expect(copilotTokenTokens).toEqual([])
+    expect(listenCalls).toEqual([])
+  })
+
+  test('start rejects an ambiguous global token override in account-routing mode', async () => {
+    await writeGitHubCredential('default-token')
+    await fs.writeFile(PATHS.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: { 'default.localhost': 'default' },
+      },
+    }))
+
+    await expect(
+      runStartCommand(makeStartArgs({ 'github-token': 'runtime-override-token' })),
+    ).rejects.toThrow('--github-token cannot be used with accountRouting')
+    expect(listenCalls).toEqual([])
   })
 
   test('valid legacy credential migrates after GitHub and Copilot validation', async () => {
@@ -558,6 +900,7 @@ describe('GitHub credential migration', () => {
     await runStartCommand(makeStartArgs({ 'ghe-domain': 'requested.ghe.com' }))
 
     expect(listenCalls).toEqual([4141])
+    expect(serverOptions[0]).toMatchObject({ accountManager: undefined })
     expect(mockPollAccessToken).toHaveBeenCalledTimes(1)
     expect(githubUserTokens).toEqual(['replacement-token', 'new-test-token'])
     expect(githubUserApiBaseUrls).toEqual([
@@ -750,6 +1093,7 @@ describe('GitHub credential migration', () => {
     expect(configContent).not.toContain('runtime-override-token')
     expect(credentialsContent).not.toContain('runtime-override-token')
     expect(JSON.parse(configContent)).toEqual({ smallModel: 'gpt-5-mini' })
+    expect(serverOptions[0]).toMatchObject({ accountManager: undefined })
     await expect(fs.access(PATHS.CONFIG_MIGRATION_BACKUP_PATH)).rejects.toThrow()
   })
 

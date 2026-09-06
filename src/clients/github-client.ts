@@ -77,17 +77,22 @@ export class GitHubClient {
     )
   }
 
-  async pollAccessToken(deviceCode: DeviceCodeResponse): Promise<string> {
+  async pollAccessToken(
+    deviceCode: DeviceCodeResponse,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<string> {
     const MAX_POLL_ATTEMPTS = 60 // ~5 minutes at 5s intervals
     const sleepDuration = (deviceCode.interval + 1) * 1000
     consola.debug(`Polling access token with interval of ${sleepDuration}ms`)
 
     for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+      options.signal?.throwIfAborted()
       const response = await this.fetchImpl(
         `${this.config.githubBaseUrl ?? GITHUB_BASE_URL}/login/oauth/access_token`,
         {
           method: 'POST',
           headers: standardHeaders(),
+          signal: options.signal,
           body: JSON.stringify({
             client_id: GITHUB_CLIENT_ID,
             device_code: deviceCode.device_code,
@@ -97,19 +102,20 @@ export class GitHubClient {
       )
 
       if (!response.ok) {
-        await sleep(sleepDuration)
-        consola.error('Failed to poll access token:', await response.text())
+        consola.error(`Failed to poll access token: HTTP ${response.status}`)
+        await sleep(sleepDuration, options.signal)
         continue
       }
 
       const json = (await response.json()) as AccessTokenResponse
-      consola.debug('Polling access token response:', json)
 
       if (json.access_token) {
+        consola.debug('GitHub device authorization completed')
         return json.access_token
       }
 
-      await sleep(sleepDuration)
+      consola.debug(`GitHub device authorization pending: ${json.error ?? 'pending'}`)
+      await sleep(sleepDuration, options.signal)
     }
 
     throw new Error('Device code authorization timed out')
@@ -130,7 +136,8 @@ export class GitHubClient {
 }
 
 interface AccessTokenResponse {
-  access_token: string
-  token_type: string
-  scope: string
+  access_token?: string
+  error?: string
+  token_type?: string
+  scope?: string
 }

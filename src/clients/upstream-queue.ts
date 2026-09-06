@@ -59,6 +59,7 @@ export interface RecoveryQueueMetrics {
 
 export interface UpstreamRecoveryRecord {
   requestId: string
+  accountName?: string
   callerRequestId?: string
   callerSignal?: AbortSignal
   retryCount: number
@@ -912,7 +913,7 @@ export class UpstreamRequestQueue {
   private emit(
     event: RecoveryEvent['event'],
     context: UpstreamRequestContext & { recovery: UpstreamRecoveryRecord },
-    fields: Omit<RecoveryEvent, 'requestId' | 'event' | 'effectiveModel' | 'activeSlots' | 'maxSlots' | 'pendingDepth' | 'maxPendingDepth'>,
+    fields: Omit<RecoveryEvent, 'requestId' | 'accountName' | 'event' | 'effectiveModel' | 'activeSlots' | 'maxSlots' | 'pendingDepth' | 'maxPendingDepth'>,
   ): void {
     const recovery = context.recovery
     recovery.queueMetrics = {
@@ -923,6 +924,7 @@ export class UpstreamRequestQueue {
     }
     const eventFields: RecoveryEvent = {
       requestId: recovery.requestId,
+      accountName: recovery.accountName,
       callerRequestId: recovery.callerRequestId,
       event,
       effectiveModel: context.effectiveModel,
@@ -985,8 +987,13 @@ function recordRecoveryEffect(event: RecoveryEvent): void {
   }
 }
 
-export function createDefaultUpstreamRequestQueue(): UpstreamRequestQueue {
-  return new UpstreamRequestQueue(DEFAULT_UPSTREAM_QUEUE_OPTIONS)
+export function createDefaultUpstreamRequestQueue(
+  options: Partial<UpstreamRequestQueueOptions> = {},
+): UpstreamRequestQueue {
+  return new UpstreamRequestQueue({
+    ...DEFAULT_UPSTREAM_QUEUE_OPTIONS,
+    ...options,
+  })
 }
 
 export function parseRetryAfterMs(headers: Headers, now = Date.now()): number | undefined {
