@@ -92,12 +92,19 @@ describe('request account routing', () => {
       }
     })
 
-    const [defaultResponse, account1Response] = await Promise.all([
+    const [defaultResponse, loopbackResponse, account1Response] = await Promise.all([
       app.handle(new Request('http://localhost/__account-context?delay=20')),
+      app.handle(new Request('http://127.0.0.1/__account-context')),
       app.handle(new Request('http://account1.localhost/__account-context')),
     ])
 
     expect(await defaultResponse.json()).toEqual({
+      accountName: 'default',
+      githubToken: 'github-default',
+      copilotToken: 'copilot-default',
+      modelIds: ['default-model'],
+    })
+    expect(await loopbackResponse.json()).toEqual({
       accountName: 'default',
       githubToken: 'github-default',
       copilotToken: 'copilot-default',

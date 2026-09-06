@@ -26,6 +26,8 @@ describe('account routing contract', () => {
       ]),
     })
     expect(resolveAccountName(routing, 'localhost')).toBe('default')
+    expect(resolveAccountName(routing, '127.0.0.1')).toBe('default')
+    expect(resolveAccountName(routing, '127.0.0.2')).toBeUndefined()
     expect(resolveAccountName(routing, 'ACCOUNT1.LOCALHOST.')).toBe('account1')
     expect(resolveAccountName(routing, 'unknown.localhost')).toBeUndefined()
   })

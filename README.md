@@ -259,14 +259,14 @@ You can also configure hostname routing directly in `config.json`:
 }
 ```
 
-With that configuration, `http://localhost:4141` and the stable dedicated
-hostname `http://default.localhost:4141` use `default`, while
+With that configuration, `http://localhost:4141`, `http://127.0.0.1:4141`, and
+the stable dedicated hostname `http://default.localhost:4141` use `default`, while
 `http://account1.localhost:4141` uses `account1`. Every routed account must have
 exactly one dedicated hostname. The base hostname is an additional alias for
-the currently selected default, so switching the default never changes any
-dedicated hostname. DNS hostname matching is case-insensitive, ignores the
-request port, and accepts a trailing root dot.
-Any other hostname is rejected with HTTP `421` before a route handler or
+the currently selected default; `127.0.0.1` is a fixed loopback alias for that
+same default. Switching the default never changes any dedicated hostname. DNS
+hostname matching is case-insensitive, ignores the request port, and accepts a
+trailing root dot. Any other hostname is rejected with HTTP `421` before a route handler or
 upstream request runs. `Forwarded` and `X-Forwarded-Host` are not trusted for
 account selection.
 
@@ -293,7 +293,8 @@ For Docker deployments, leave `GH_TOKEN` unset in routing mode and mount the
 populated credential/config directory. The image healthcheck reads
 `accountRouting.baseHostname`, applies the same DNS ASCII/case/root-dot
 normalization, and sends it as `Host` while connecting over loopback, so health
-checks do not require an IP-hostname exception.
+checks continue to exercise the configured base hostname rather than the
+`127.0.0.1` default alias.
 
 All fields are optional. The full schema:
 

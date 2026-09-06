@@ -137,7 +137,8 @@ identity, Copilot token, and model discovery all succeed.
 
 Every routed account has exactly one dedicated hostname. `baseHostname` is an
 additional alias for `defaultAccount`; changing the default updates only that
-alias and leaves the dedicated hostname map unchanged.
+alias and the fixed `127.0.0.1` loopback alias while leaving the dedicated
+hostname map unchanged.
 
 Account mutations are serialized. Adding an account validates the complete next
 routing table before persistence, then journals the exact previous

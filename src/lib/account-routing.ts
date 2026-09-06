@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 const DNS_LABEL_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/
 const ACCOUNT_NAME_RE = /^[a-z0-9][\w.-]{0,63}$/i
+const LOOPBACK_DEFAULT_HOSTNAME = '127.0.0.1'
 
 export interface AccountRoutingConfig {
   baseHostname: string
@@ -142,6 +143,9 @@ export function resolveAccountName(
   routing: CompiledAccountRouting,
   requestHostname: string,
 ): string | undefined {
+  if (requestHostname === LOOPBACK_DEFAULT_HOSTNAME)
+    return routing.defaultAccount
+
   let hostname: string
   try {
     hostname = normalizeDnsHostname(requestHostname)

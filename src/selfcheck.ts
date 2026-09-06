@@ -625,6 +625,7 @@ async function probeAccountHostnameRouting(): Promise<void> {
     assertProbe(Number.isInteger(port) && port > 0, 'account-routing listener has no bound port')
 
     const defaultResponse = await requestAccountRoute(port, 'localhost')
+    const loopbackResponse = await requestAccountRoute(port, '127.0.0.1')
     const account1Response = await requestAccountRoute(port, 'account1.localhost')
     const unknownResponse = await requestAccountRoute(port, 'unknown.localhost')
     const unknownRootResponse = await requestAccountRoute(port, 'unknown.localhost', '/')
@@ -633,6 +634,11 @@ async function probeAccountHostnameRouting(): Promise<void> {
     assertProbe(
       JSON.parse(defaultResponse.body).token === 'selfcheck-default-token',
       'default hostname selected the wrong account',
+    )
+    assertProbe(loopbackResponse.status === 200, `loopback hostname returned ${loopbackResponse.status}`)
+    assertProbe(
+      JSON.parse(loopbackResponse.body).token === 'selfcheck-default-token',
+      'loopback hostname selected the wrong account',
     )
     assertProbe(account1Response.status === 200, `named hostname returned ${account1Response.status}`)
     assertProbe(
