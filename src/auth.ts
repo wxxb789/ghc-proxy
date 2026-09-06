@@ -36,15 +36,16 @@ async function runAuth(options: RunAuthOptions): Promise<void> {
   const accountName = options.account === undefined
     ? undefined
     : normalizeAccountName(options.account)
+  const storedCredentials = await readGitHubCredentials()
   const storedAccount = accountName
-    ? (await readGitHubCredentials())?.accounts[accountName]
-    : undefined
+    ? storedCredentials?.accounts[accountName]
+    : storedCredentials?.accounts[storedCredentials.activeAccount]
 
   // Load persisted GHE domain from config, then override with CLI arg if provided.
   // Pass --ghe-domain "" (empty string) to explicitly clear a persisted domain.
   applyGheDomain(
     authStore,
-    accountName ? storedAccount?.gheDomain : getCachedConfig().gheDomain,
+    storedCredentials ? storedAccount?.gheDomain : getCachedConfig().gheDomain,
     options.gheDomain,
   )
 

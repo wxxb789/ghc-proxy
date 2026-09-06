@@ -8,6 +8,7 @@ import { GitHubClient } from '~/clients'
 import { cacheVSCodeVersion, getClientConfig } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
 import { getCachedConfig, readConfig } from '~/lib/config'
+import { readGitHubCredential } from '~/lib/credentials'
 import { ensurePaths } from '~/lib/paths'
 import {
   finalizePendingGitHubCredentialMigration,
@@ -23,7 +24,11 @@ export const checkUsage = defineCommand({
   async run() {
     await ensurePaths()
     await readConfig()
-    applyGheDomain(authStore, getCachedConfig().gheDomain)
+    const storedCredential = await readGitHubCredential()
+    applyGheDomain(
+      authStore,
+      storedCredential ? storedCredential.gheDomain : getCachedConfig().gheDomain,
+    )
     await cacheVSCodeVersion()
     const githubSetup = await setupGitHubToken()
     await finalizePendingGitHubCredentialMigration(githubSetup)

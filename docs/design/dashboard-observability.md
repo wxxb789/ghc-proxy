@@ -146,9 +146,12 @@ routing table before persistence, then journals the exact previous
 atomically writes routing second, installs the prevalidated runtime, and removes
 the journal last. A returned failure rolls both files and the runtime map back.
 If the process stops during the operation, startup restores the journaled state
-before reading configuration. A malformed journal fails closed without changing
-either managed file. Default changes use the same transaction boundary, so a
-failed switch leaves the old default active and persistent.
+before reading configuration. An owner PID and process-local token prevent a
+second process from restoring or deleting a journal while its owner is live;
+owner liveness that cannot be verified also fails closed. A malformed journal
+fails closed without changing either managed file. Default changes use the same
+transaction boundary, so a failed switch leaves the old default active and
+persistent.
 
 Legacy single-account startup prepares, but does not commit, a one-account
 routing table. The active legacy credential remains the default and receives the

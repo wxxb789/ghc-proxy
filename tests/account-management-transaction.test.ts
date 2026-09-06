@@ -57,6 +57,86 @@ describe('account management storage transaction', () => {
     expect(await recoverAccountManagementTransaction(paths)).toBe(false)
   })
 
+  test('startup recovery rejects a journal owned by a live process', async () => {
+    const owner = Bun.spawn([
+      process.execPath,
+      '--eval',
+      'setInterval(() => {}, 1000)',
+    ], {
+      stderr: 'ignore',
+      stdout: 'ignore',
+    })
+    try {
+      await fs.writeFile(paths.CONFIG_PATH, '{"current":true}')
+      await fs.writeFile(paths.CREDENTIALS_PATH, '{"current":true}')
+      await fs.writeFile(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH, JSON.stringify({
+        version: 2,
+        owner: {
+          pid: owner.pid,
+          token: 'different-process-owner',
+        },
+        config: { exists: true, content: '{"previous":true}' },
+        credentials: { exists: true, content: '{"previous":true}' },
+      }))
+
+      await expect(recoverAccountManagementTransaction(paths)).rejects.toThrow(
+        'owned by live process',
+      )
+      await expect(commitAccountManagementTransaction(paths)).rejects.toThrow(
+        'not owned by this process',
+      )
+      expect(await fs.readFile(paths.CONFIG_PATH, 'utf8')).toBe('{"current":true}')
+      expect(await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')).toBe('{"current":true}')
+      expect(await fs.readFile(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH, 'utf8')).toContain(
+        'different-process-owner',
+      )
+    }
+    finally {
+      owner.kill()
+      await owner.exited
+    }
+  })
+
+  test('startup recovery rolls back a journal whose owner exited', async () => {
+    const owner = Bun.spawn([process.execPath, '--eval', ''], {
+      stderr: 'ignore',
+      stdout: 'ignore',
+    })
+    await owner.exited
+
+    await fs.writeFile(paths.CONFIG_PATH, '{"current":true}')
+    await fs.writeFile(paths.CREDENTIALS_PATH, '{"current":true}')
+    await fs.writeFile(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH, JSON.stringify({
+      version: 2,
+      owner: {
+        pid: owner.pid,
+        token: 'abandoned-owner',
+      },
+      config: { exists: true, content: '{"previous":true}' },
+      credentials: { exists: true, content: '{"previous":true}' },
+    }))
+
+    expect(await recoverAccountManagementTransaction(paths)).toBe(true)
+    expect(await fs.readFile(paths.CONFIG_PATH, 'utf8')).toBe('{"previous":true}')
+    expect(await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')).toBe('{"previous":true}')
+    await expect(fs.access(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toThrow()
+  })
+
+  test('startup recovery preserves support for a legacy journal', async () => {
+    await fs.writeFile(paths.CONFIG_PATH, '{"current":true}')
+    await fs.writeFile(paths.CREDENTIALS_PATH, '{"current":true}')
+    await fs.writeFile(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH, JSON.stringify({
+      version: 1,
+      config: { exists: true, content: '{"previous":true}' },
+      credentials: { exists: true, content: '{"previous":true}' },
+    }))
+
+    expect(await recoverAccountManagementTransaction(paths)).toBe(true)
+    expect(await fs.readFile(paths.CONFIG_PATH, 'utf8')).toBe('{"previous":true}')
+    expect(await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')).toBe('{"previous":true}')
+    await expect(fs.access(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toThrow()
+  })
+
   test('commit keeps both new files and removes the journal', async () => {
     await fs.writeFile(paths.CONFIG_PATH, '{"default":"account1"}')
     await fs.writeFile(paths.CREDENTIALS_PATH, '{"accounts":["account1"]}')

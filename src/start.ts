@@ -281,6 +281,9 @@ async function setupLegacyAccountManager(
   cleanup: () => void | Promise<void>
 }> {
   const storedCredentials = await readGitHubCredentials()
+  const activeGheDomain = storedCredentials
+    ? storedCredentials.accounts[storedCredentials.activeAccount]!.gheDomain
+    : persistedGheDomain
   let accountName: string
   try {
     accountName = normalizeAccountName(
@@ -293,7 +296,7 @@ async function setupLegacyAccountManager(
     )
     return {
       accountManager: undefined,
-      cleanup: await setupLegacyAccount(options, accountType, persistedGheDomain),
+      cleanup: await setupLegacyAccount(options, accountType, activeGheDomain),
     }
   }
   const runtime = aliasLegacyAccountRuntime(accountName)
@@ -301,7 +304,7 @@ async function setupLegacyAccountManager(
   try {
     cleanup = await runWithAccountRuntime(
       runtime,
-      () => setupLegacyAccount(options, accountType, persistedGheDomain),
+      () => setupLegacyAccount(options, accountType, activeGheDomain),
     )
     const credentials = await readGitHubCredentials()
     if (!credentials) {

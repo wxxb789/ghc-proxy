@@ -27,6 +27,7 @@ const mockInfo = mock(() => {})
 const mockWarn = mock(() => {})
 const mockError = mock(() => {})
 const mockSuccess = mock(() => {})
+const mockBox = mock(() => {})
 await mock.module('consola', () => ({
   default: {
     level: 0,
@@ -35,6 +36,7 @@ await mock.module('consola', () => ({
     warn: mockWarn,
     error: mockError,
     success: mockSuccess,
+    box: mockBox,
   },
 }))
 
@@ -67,6 +69,8 @@ const copilotTokenFailuresByToken = new Map<string, unknown>()
 const githubUserTokens: Array<string | undefined> = []
 const githubUserApiBaseUrls: Array<string | undefined> = []
 const copilotTokenTokens: Array<string | undefined> = []
+const copilotUsageTokens: Array<string | undefined> = []
+const copilotUsageApiBaseUrls: Array<string | undefined> = []
 const mockPollAccessToken = mock(() => Promise.resolve('new-test-token'))
 const mockGetGitHubUser = mock(() => {
   if (githubUserFailure) {
@@ -132,14 +136,33 @@ await mock.module('../src/clients/github-client', () => ({
       return mockGetCopilotToken()
     }
 
-    getCopilotUsage = () =>
-      Promise.resolve({ seat_breakdown: {}, total_suggestions_count: 0 })
+    getCopilotUsage = () => {
+      copilotUsageTokens.push(this.auth.githubToken)
+      copilotUsageApiBaseUrls.push(this.config.githubApiBaseUrl)
+      const quota = {
+        entitlement: 0,
+        overage_permitted: false,
+        percent_remaining: 0,
+        remaining: 0,
+        unlimited: false,
+      }
+      return Promise.resolve({
+        copilot_plan: 'individual',
+        quota_reset_date: '2099-01-01',
+        quota_snapshots: {
+          chat: quota,
+          completions: quota,
+          premium_interactions: quota,
+        },
+      })
+    }
   },
 }))
 
 const { PATHS, ensurePaths } = await import('../src/lib/paths')
 const { beginAccountManagementTransaction } = await import('../src/lib/account-management-transaction')
 const { auth } = await import('../src/auth')
+const { checkUsage } = await import('../src/check-usage')
 const { start } = await import('../src/start')
 const { CopilotClient } = await import('../src/clients')
 const {
@@ -169,6 +192,8 @@ const originalClearTimeout = globalThis.clearTimeout
 
 type AuthRunContext = Parameters<NonNullable<typeof auth.run>>[0]
 type AuthArgs = AuthRunContext['args']
+type CheckUsageRunContext = Parameters<NonNullable<typeof checkUsage.run>>[0]
+type CheckUsageArgs = CheckUsageRunContext['args']
 type StartRunContext = Parameters<NonNullable<typeof start.run>>[0]
 type StartArgs = StartRunContext['args']
 
@@ -268,6 +293,14 @@ async function runAuthCommand(args: AuthArgs): Promise<void> {
   await auth.run!({ rawArgs: [], args, cmd: auth })
 }
 
+async function runCheckUsageCommand(): Promise<void> {
+  await checkUsage.run!({
+    rawArgs: [],
+    args: { _: [] } as unknown as CheckUsageArgs,
+    cmd: checkUsage,
+  })
+}
+
 async function runStartCommand(args: StartArgs): Promise<void> {
   const sigintListeners = process.listeners('SIGINT') as Array<(...args: Array<unknown>) => void>
   const sigtermListeners = process.listeners('SIGTERM') as Array<(...args: Array<unknown>) => void>
@@ -302,10 +335,13 @@ describe('GitHub credential migration', () => {
     githubUserTokens.length = 0
     githubUserApiBaseUrls.length = 0
     copilotTokenTokens.length = 0
+    copilotUsageTokens.length = 0
+    copilotUsageApiBaseUrls.length = 0
     mockInfo.mockClear()
     mockWarn.mockClear()
     mockError.mockClear()
     mockSuccess.mockClear()
+    mockBox.mockClear()
     listenCalls.length = 0
     listenFailure = undefined
     serverOptions.length = 0
@@ -372,10 +408,55 @@ describe('GitHub credential migration', () => {
     await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
   })
 
+  test('auth without --account preserves the active named account GHE tenant', async () => {
+    await writeGitHubCredential('primary-token', 'corp.ghe.com', PATHS, 'primary')
+
+    await runAuthCommand(makeAuthArgs())
+
+    expect(mockPollAccessToken).toHaveBeenCalledTimes(1)
+    expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'primary',
+      githubToken: 'new-test-token',
+      gheDomain: 'corp.ghe.com',
+    })
+    expect(JSON.parse(await fs.readFile(PATHS.CONFIG_PATH, 'utf8'))).toEqual({
+      gheDomain: 'corp.ghe.com',
+    })
+  })
+
+  test('check-usage preserves the active named account GHE tenant', async () => {
+    await writeGitHubCredential('primary-token', 'corp.ghe.com', PATHS, 'primary')
+
+    await runCheckUsageCommand()
+
+    expect(mockPollAccessToken).not.toHaveBeenCalled()
+    expect(githubUserTokens).toEqual(['primary-token'])
+    expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    expect(copilotUsageTokens).toEqual(['primary-token'])
+    expect(copilotUsageApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'primary',
+      githubToken: 'primary-token',
+      gheDomain: 'corp.ghe.com',
+    })
+    await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
+  })
+
   test('start exposes the legacy account for explicit Dashboard routing bootstrap', async () => {
-    await writeGitHubCredential('primary-token', undefined, PATHS, 'primary')
+    await writeGitHubCredential('primary-token', 'corp.ghe.com', PATHS, 'primary')
 
     await runStartCommand(makeStartArgs())
+
+    expect(mockPollAccessToken).not.toHaveBeenCalled()
+    expect(githubUserTokens).toEqual(['primary-token'])
+    expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
+    expect(copilotTokenTokens).toEqual(['primary-token'])
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'primary',
+      githubToken: 'primary-token',
+      gheDomain: 'corp.ghe.com',
+    })
 
     const firstManager = (serverOptions[0] as {
       accountManager: {

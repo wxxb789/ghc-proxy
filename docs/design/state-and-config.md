@@ -291,7 +291,11 @@ existing transactional path before routed account initialization begins.
 Dashboard account mutations use
 `~/.local/share/ghc-proxy/account-management-transaction.json` as a private
 write-ahead rollback journal for the exact prior config and credential files.
-Startup restores an unfinished transaction before parsing `config.json`.
+New journals record the owner process and a process-local token. Startup restores
+an unfinished transaction before parsing `config.json` only after confirming its
+owner process has exited; a live or unverifiable owner leaves the journal and
+managed files unchanged. Only the process holding the matching token can commit
+or roll back its live transaction. Legacy version 1 journals remain recoverable.
 Successful legacy bootstrap, account additions, and default changes remove the
 journal last; a failed operation restores both files and the previous in-memory
 routing mode/map.
