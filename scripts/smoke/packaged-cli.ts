@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
-import { decodeOutput, extractTrailingJson, runCommand, tryParseJsonOrUndefined } from '../lib/cli-exec'
+import { decodeOutput, extractTrailingJson, includesTextIgnoringLineEndings, runCommand, tryParseJsonOrUndefined } from '../lib/cli-exec'
 
 interface NpmPackResult {
   filename: string
@@ -105,7 +105,7 @@ async function main() {
       fs.readFile(path.join(packagedRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8'),
       fs.readFile(path.join(repoRoot, 'node_modules', 'gpt-tokenizer', 'LICENSE'), 'utf8'),
     ])
-    if (!packagedNotices.includes(tokenizerLicense.trim()))
+    if (!includesTextIgnoringLineEndings(packagedNotices, tokenizerLicense))
       throw new Error('The packaged CLI does not preserve the bundled gpt-tokenizer license notice.')
     // The encodings are bundled; installing their development package again
     // would add the full vocabulary/source tree to every consumer install.
