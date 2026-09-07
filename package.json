@@ -19,6 +19,7 @@
     "ghc-proxy": "./dist/main.mjs"
   },
   "files": [
+    "THIRD_PARTY_NOTICES.md",
     "dist/**/*.mjs"
   ],
   "engines": {
@@ -52,7 +53,6 @@
     "consola": "^3.4.2",
     "elysia": "^1.4.29",
     "fetch-event-stream": "^0.1.6",
-    "gpt-tokenizer": "^3.4.0",
     "proxy-from-env": "^2.0.0",
     "undici": "^7.29.0",
     "zod": "^4.4.3"
@@ -63,6 +63,7 @@
     "@types/proxy-from-env": "^1.0.4",
     "bumpp": "^11.1.0",
     "eslint": "^10.9.1",
+    "gpt-tokenizer": "^3.4.0",
     "knip": "^5.88.1",
     "lint-staged": "^17.3.0",
     "simple-git-hooks": "^2.13.1",

@@ -213,7 +213,7 @@ direct and do not pass through this model.
 | `retry.ts`                  | Retry logic with exponential backoff                 |
 | `request-timeout.ts`        | Request timeout helpers                              |
 | `sse-adapter.ts`            | SSE stream adapter helpers                            |
-| `tokenizer.ts`              | Local token estimation for Messages `count_tokens`, Chat diagnostics, emulator `responses/input_tokens`, and packaged selfcheck probes; never used to manufacture generation response usage |
+| `tokenizer.ts`              | Local token estimation for Messages `count_tokens`, emulator `responses/input_tokens`, and packaged selfcheck probes; bundled from a dev dependency and never loaded by Chat generation or used to manufacture response usage |
 | `request-logger.ts`         | Structured request/response logging                  |
 | `paths.ts`                  | Config/token file paths                              |
 | `token.ts`                  | GitHub and Copilot token management                  |

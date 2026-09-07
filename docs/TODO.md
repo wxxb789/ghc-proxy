@@ -57,17 +57,11 @@ Tracked items for future work. Items are roughly ordered by priority.
 
 ## Research
 
-- [ ] **Evaluate `ai-tokenizer` as a replacement for `gpt-tokenizer`**
-  - Project: https://github.com/coder/ai-tokenizer
-  - Current tokenizer: `gpt-tokenizer` (v3.4.0) — used by `src/lib/tokenizer.ts` for Anthropic `count_tokens`, Chat Completions request logging, Responses official-emulator `input_tokens`, and packaged selfcheck tokenizer probes
-  - Current usage: lazy-loaded encoders (`o200k_base`, `cl100k_base`, `p50k_base`, `p50k_edit`, `r50k_base`) cached per encoding type, with model-specific constants for tool/message token calculation
-  - Questions to answer:
-    - Does `ai-tokenizer` support the same encoding types?
-    - How does bundle size compare? (`gpt-tokenizer` contributes the tokenizer chunks shipped beside `dist/main.mjs`)
-    - Performance: encoding speed, memory footprint
-    - Does it support Bun natively?
-    - Does it handle Claude/Anthropic tokenization or is it OpenAI-only like `gpt-tokenizer`?
-    - Accuracy: does it produce the same token counts for the same inputs?
+- [ ] **Remove `gpt-tokenizer` after a compatible counting replacement is proven**
+  - First milestone complete: Chat Completions no longer tokenizes requests for diagnostic logging, and `gpt-tokenizer` is a dev dependency rather than a separately installed runtime dependency.
+  - Current retained usage: `src/lib/tokenizer.ts` supplies Anthropic `count_tokens`, Responses official-emulator `input_tokens`, and packaged selfcheck probes.
+  - The published bundle still includes lazy-loaded `o200k_base`, `cl100k_base`, `p50k_base`, `p50k_edit`, and `r50k_base` encodings, plus model-specific constants for tool/message token calculation.
+  - The September 6, 2026 raw capability gate failed: the default account returned `404` for `gpt-5.5` `/responses/input_tokens`, and `claude-sonnet-5` was absent from its model inventory. Retain the local estimators until every required model and count surface has a verified replacement.
 
 - [ ] **Evaluate a discriminated `AnthropicDocumentSource` union for `AnthropicDocumentBlock.source`**
   - Surfaced by a simplify-pass review; anchored at `src/translator/anthropic/types.ts` (`AnthropicDocumentBlock`)

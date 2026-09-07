@@ -109,7 +109,7 @@ Root OpenAI-compatible routes are mirrored under `/v1`. Anthropic Messages is
 | `POST /v1/messages` | Anthropic | Messages API with native, Responses-translation, or Chat fallback execution |
 | `POST /v1/messages/count_tokens` | Anthropic | Local pre-flight input-token estimate |
 | `POST /responses`, `POST /v1/responses` | OpenAI | Responses create operation |
-| `POST /responses/input_tokens`, `POST /v1/responses/input_tokens` | OpenAI | Upstream token count by default; local estimate in emulator mode |
+| `POST /responses/input_tokens`, `POST /v1/responses/input_tokens` | OpenAI | Upstream count passthrough by default; local estimate in emulator mode |
 | `GET /responses/:responseId`, `GET /v1/responses/:responseId` | OpenAI | Retrieve a response; supports the Responses `stream` query option |
 | `GET /responses/:responseId/input_items`, `GET /v1/responses/:responseId/input_items` | OpenAI | List stored/upstream response input items |
 | `DELETE /responses/:responseId`, `DELETE /v1/responses/:responseId` | OpenAI | Delete a stored/upstream response |
@@ -183,12 +183,15 @@ zeros are schema completion, not local token estimates.
 | Responses route | Responses `usage` is passed through (plus optional emulator response decoration) | Upstream Responses events are forwarded |
 
 `gpt-tokenizer` is used for local estimation by
-`POST /v1/messages/count_tokens`, for best-effort Chat Completions diagnostic
-logging, and by `POST /responses/input_tokens` only when the Responses emulator
-is enabled. In the default mode, the Responses input-token route calls Copilot
-upstream. Packaged `selfcheck` also loads every tokenizer chunk as a runtime
-compatibility probe. See [Copilot Token Usage](../research/copilot-token-usage.md)
-for details.
+`POST /v1/messages/count_tokens` and by `POST /responses/input_tokens` only when
+the Responses emulator is enabled. Chat Completions generation does not load or
+await the tokenizer. In the default mode, the Responses input-token route
+forwards to Copilot upstream, whose support must not be assumed for every
+account and model. Packaged `selfcheck` still loads every tokenizer chunk as a
+runtime compatibility probe. The dependency is declared for development/build
+use and remains bundled into the published runtime; it is not installed as a
+second runtime dependency. See
+[Copilot Token Usage](../research/copilot-token-usage.md) for details.
 
 ## Operational Features
 

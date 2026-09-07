@@ -3,7 +3,6 @@ import type { PipelineResult } from '~/pipeline/runner'
 import type { ChatCompletionsPayload } from '~/types'
 
 import consola from 'consola'
-import { getTokenCount } from '~/lib/tokenizer'
 import { runPipeline } from '~/pipeline/runner'
 import { runtimeStore } from '~/state'
 import { applyChatCompletionsTokenParam } from '~/transform/parameter-filter'
@@ -34,20 +33,7 @@ export async function handleCompletionCore(
         // runner requires a returned payload; this is the no-substitution case).
         return payload
       },
-      async afterTransform({ payload, selectedModel }) {
-        try {
-          if (selectedModel) {
-            const tokenCount = await getTokenCount(payload, selectedModel)
-            consola.info('Current token count:', tokenCount)
-          }
-          else {
-            consola.warn('No model selected, skipping token count calculation')
-          }
-        }
-        catch (error) {
-          consola.warn('Failed to calculate token count:', error)
-        }
-
+      afterTransform({ payload, selectedModel }) {
         if (payload.max_tokens == null) {
           payload.max_tokens = selectedModel?.capabilities.limits.max_output_tokens
           consola.debug('Set max_tokens to:', JSON.stringify(payload.max_tokens))
