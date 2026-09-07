@@ -672,6 +672,9 @@ volumes:
 ## Running from Source
 
 Repository development uses Bun >= 1.4 even if you run the published package with Node.js.
+Install dev dependencies when building from source: `gpt-tokenizer` is a
+build-time dependency whose five encodings are still bundled into the published
+runtime for the local count endpoints and packaged `selfcheck`.
 
 ```bash
 git clone https://github.com/wxxb789/ghc-proxy.git
@@ -685,7 +688,7 @@ bun run start
 ## Development
 
 ```bash
-bun install              # Install dependencies
+bun install              # Install dependencies, including build-time tokenizer sources
 bun run dev              # Start with --watch
 bun run start            # Start without --watch
 bun run build            # Build with tsdown

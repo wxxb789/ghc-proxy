@@ -16,6 +16,14 @@ export function decodeOutput(output: Uint8Array): string {
 }
 
 /**
+ * Check embedded text without treating checkout-specific line endings as content.
+ */
+export function includesTextIgnoringLineEndings(text: string, expected: string): boolean {
+  const normalize = (value: string) => value.replaceAll('\r\n', '\n')
+  return normalize(text).includes(normalize(expected).trim())
+}
+
+/**
  * Run a command synchronously, throwing a descriptive error on non-zero exit.
  * Returns the raw {@link Bun.spawnSync} result so callers can read stdout/stderr.
  */

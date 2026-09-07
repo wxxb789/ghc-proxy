@@ -2,21 +2,24 @@
 
 Research into whether GitHub Copilot's backend returns token usage information, and how ghc-proxy handles it.
 
-**Upstream observation recorded:** 2026-03-30. **Implementation alignment
-checked:** 2026-08-25. The implementation notes below were updated without
-re-probing Copilot, so the upstream examples remain a dated observation rather
-than a claim about future provider behavior.
+**Generation-usage observation recorded:** 2026-03-30. **Implementation
+alignment checked:** 2026-09-06. The generation examples remain a dated
+observation rather than a claim about future provider behavior. A separate,
+bounded input-count capability probe was run on 2026-09-06 and is identified
+explicitly below; it did not generate completions.
 
 ## Summary
 
 Copilot returned token usage data across all three API paths in the recorded
 observation. Response usage translation uses those upstream values; it does not
-substitute local estimates. `gpt-tokenizer` is also used for local request
-diagnostics, Anthropic `count_tokens`, Responses emulator input-token
-estimation, and packaged selfcheck probes. The public
+substitute local estimates. `gpt-tokenizer` is retained for Anthropic
+`count_tokens`, Responses emulator input-token estimation, and packaged
+selfcheck probes. Chat Completions no longer runs local tokenization for
+diagnostic logging. The public
 `POST /v1/responses/input_tokens` route is an upstream passthrough by default;
 it uses the local estimator only when the official Responses emulator is
-enabled.
+enabled. Passthrough is a transport behavior, not proof that every Copilot
+account and model implements the upstream resource.
 
 ## Upstream Usage by Endpoint
 
@@ -110,16 +113,23 @@ the completed count when upstream supplies it.
 
 ## Local Tokenization (`gpt-tokenizer`)
 
-Local tokenization is not involved in response usage reporting. It has four
-current call sites:
+Local tokenization is not involved in response usage reporting. It has three
+current consumers:
 
 1. `POST /v1/messages/count_tokens` estimates an Anthropic request locally.
-2. The Chat Completions handler logs a local `{ input, output }` estimate after
-   model selection; that diagnostic does not replace upstream response usage.
-3. Responses emulator mode estimates `POST /v1/responses/input_tokens`
+2. Responses emulator mode estimates `POST /v1/responses/input_tokens`
    locally from the effective input-item JSON. The default, non-emulator route
-   calls Copilot's upstream Responses input-token API instead.
-4. `selfcheck` exercises tokenizer loading in packaged Bun and Node builds.
+   forwards the request to Copilot's upstream Responses input-token API instead.
+3. `selfcheck` exercises tokenizer loading in packaged Bun and Node builds.
+
+The Chat Completions handler now performs only output-token defaulting and the
+model-specific `max_tokens` rename after model selection. It does not import,
+load, or await `gpt-tokenizer`, including on overload fallback preparation.
+
+`gpt-tokenizer` is declared as a dev dependency so source development and builds
+can resolve it without installing a redundant copy with the published package.
+The build still bundles all five tokenizer encodings because the retained local
+counting and selfcheck paths need them.
 
 ### How `count_tokens` Works
 
@@ -145,8 +155,24 @@ browser includes all optional members.
 
 Anthropic `count_tokens` remains local because the proxy does not route that
 Anthropic-shaped preflight request to an upstream Messages token-counting API.
-That is distinct from the Responses API: Copilot does expose the upstream
-`/responses/input_tokens` resource used by the default Responses route.
+The default Responses route still attempts Copilot's upstream
+`/responses/input_tokens` resource, but availability is account- and
+model-dependent and is not established by the presence of the proxy client
+method.
+
+### September 6, 2026 Count Capability Gate
+
+An approved bounded probe used the default account, made five HTTP requests in
+total, and made zero generation requests. Its model inventory did not contain
+`claude-sonnet-5`. For the advertised `gpt-5.5` model, raw Copilot
+`/responses/input_tokens` returned `404`.
+
+This fails the replacement gate: neither a usable Responses count operation for
+the tested model nor coverage for the requested Messages model was established.
+The local count endpoints, tokenizer implementation, five bundled encodings,
+and packaged selfcheck probes therefore remain in place. This result concerns
+preflight counting capability; it does not revise the dated generation-usage
+observations above.
 
 `estimateSerializedTokens()` is intentionally simpler than the Anthropic
 counter: in emulator mode it encodes `JSON.stringify(effectiveInputItems)` and
@@ -160,5 +186,5 @@ does not apply the family factors or fixed tool overhead above.
 | Responses API | Yes (Responses format) | `mapResponsesUsage()` | Preliminary usage may appear in `response.created`; final usage comes from `response.completed` / `response.incomplete` and is emitted in the terminal Anthropic `message_delta` |
 | Native Messages | Yes (Anthropic format) | None (passthrough) | Included natively |
 | Anthropic `count_tokens` | N/A (local estimation) | `getTokenCount()` + family overhead/factor | N/A |
-| Responses `input_tokens` (default) | Yes, dedicated upstream resource | None (passthrough) | N/A |
+| Responses `input_tokens` (default) | Passthrough attempted; bounded 2026-09-06 `gpt-5.5` probe returned `404` | None (passthrough) | N/A |
 | Responses `input_tokens` (emulator) | N/A (local estimation) | `estimateSerializedTokens()` | N/A |

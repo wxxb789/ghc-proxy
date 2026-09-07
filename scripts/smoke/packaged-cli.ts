@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
-import { decodeOutput, extractTrailingJson, runCommand, tryParseJsonOrUndefined } from '../lib/cli-exec'
+import { decodeOutput, extractTrailingJson, includesTextIgnoringLineEndings, runCommand, tryParseJsonOrUndefined } from '../lib/cli-exec'
 
 interface NpmPackResult {
   filename: string
@@ -82,6 +82,7 @@ async function main() {
       name?: string
       version?: string
       bin?: string | Record<string, string>
+      dependencies?: Record<string, string>
     }
 
     const packagedVersion = packagedPackageJson.version
@@ -98,6 +99,24 @@ async function main() {
     }
 
     const packagedBinPath = path.join(packagedRoot, packagedBin)
+    if (packagedPackageJson.dependencies?.['gpt-tokenizer'])
+      throw new Error('The packaged manifest declares the already-bundled gpt-tokenizer as a runtime dependency.')
+    const [packagedNotices, tokenizerLicense] = await Promise.all([
+      fs.readFile(path.join(packagedRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8'),
+      fs.readFile(path.join(repoRoot, 'node_modules', 'gpt-tokenizer', 'LICENSE'), 'utf8'),
+    ])
+    if (!includesTextIgnoringLineEndings(packagedNotices, tokenizerLicense))
+      throw new Error('The packaged CLI does not preserve the bundled gpt-tokenizer license notice.')
+    // The encodings are bundled; installing their development package again
+    // would add the full vocabulary/source tree to every consumer install.
+    const installedTokenizer = await fs.stat(path.join(installRoot, 'node_modules', 'gpt-tokenizer'))
+      .then(() => true, (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT')
+          throw error
+        return false
+      })
+    if (installedTokenizer)
+      throw new Error('The packaged CLI installed the already-bundled gpt-tokenizer dependency.')
     const packagedBinSource = await fs.readFile(packagedBinPath, 'utf8')
     if (!packagedBinSource.startsWith('#!/usr/bin/env node\n')) {
       throw new Error('Packaged CLI bin must use a Node.js shebang so npx works without Bun installed.')
