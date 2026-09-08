@@ -77,10 +77,13 @@ export function createRequestRecoveryRecord(request: Request): UpstreamRecoveryR
   }
 }
 
-export async function cacheModels(client?: CopilotClient): Promise<void> {
+export async function cacheModels(
+  client?: CopilotClient,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
   const { models } = getCurrentAccountRuntime()
   const copilotClient = client ?? createCopilotClient()
-  const response = await copilotClient.getModels()
+  const response = await copilotClient.getModels(options)
   models.cacheModels(response)
 }
 

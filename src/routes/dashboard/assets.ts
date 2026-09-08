@@ -530,8 +530,17 @@ function renderOverview(data) {
   clearNode(authBody);
   const github = data.auth.github || {};
   const copilot = data.auth.copilot || {};
+  const accounts = data.auth.accounts || {};
   appendAuthRow(authBody, 'GitHub', github.status, github.login || github.accountType, github.lastValidatedAt);
   appendAuthRow(authBody, 'Copilot', copilot.status, copilot.modelsLoaded ? 'models loaded' : 'models unavailable', copilot.lastRefreshAt);
+  if (Number.isFinite(accounts.totalAccounts)) {
+    appendAuthRow(
+      authBody,
+      'Accounts',
+      'ok',
+      formatNumber(accounts.totalAccounts) + ' total / default ' + (accounts.defaultAccount || '-') + ' / current ' + (accounts.currentAccount || '-'),
+    );
+  }
 
   const quota = data.quota || { status: 'unavailable' };
   byId('quota-status').textContent = quota.status + (quota.resetDate ? ' / resets ' + formatDate(quota.resetDate) : '');
@@ -1051,7 +1060,8 @@ async function settleLoads(loads) {
 }
 
 function queuePendingRefresh(kind) {
-  if (kind === 'all' || dashboardState.pendingRefresh !== 'all') {
+  const priority = { selected: 1, all: 2, metadata: 3 };
+  if (!dashboardState.pendingRefresh || priority[kind] >= priority[dashboardState.pendingRefresh]) {
     dashboardState.pendingRefresh = kind;
   }
 }
@@ -1059,28 +1069,53 @@ function queuePendingRefresh(kind) {
 function replayPendingRefresh() {
   const pending = dashboardState.pendingRefresh;
   dashboardState.pendingRefresh = null;
-  if (pending === 'all') refreshAll();
+  if (pending === 'metadata') refreshDashboardMetadata();
+  if (pending === 'all') loadAllViews();
   if (pending === 'selected') refreshSelectedView(dashboardState.activeView);
 }
 
-async function refreshAll() {
+function allViewLoads() {
+  return [
+    { scope: 'overview', load: loadOverview },
+    { scope: 'accounts', load: loadAccounts },
+    { scope: 'models', load: loadModels },
+    { scope: 'behavior', load: loadBehavior },
+    { scope: 'requests', load: loadRequests },
+  ];
+}
+
+async function loadAllViews() {
   if (dashboardState.refreshing) {
     queuePendingRefresh('all');
     return;
   }
   dashboardState.refreshing = true;
+  try {
+    await settleLoads(allViewLoads());
+  } finally {
+    dashboardState.refreshing = false;
+    replayPendingRefresh();
+  }
+}
+
+async function refreshDashboardMetadata() {
+  if (dashboardState.refreshing) {
+    queuePendingRefresh('metadata');
+    return;
+  }
+  dashboardState.refreshing = true;
   byId('refresh-button').disabled = true;
   try {
-    await settleLoads([
-      { scope: 'overview', load: loadOverview },
-      { scope: 'accounts', load: loadAccounts },
-      { scope: 'models', load: loadModels },
-      { scope: 'behavior', load: loadBehavior },
-      { scope: 'requests', load: loadRequests },
-    ]);
+    const refresh = await fetchJson('/dashboard/api/refresh', { method: 'POST' });
+    if (refresh.status === 'ok') dashboardState.errors.delete('metadata');
+    else dashboardState.errors.set('metadata', new Error('Some account metadata could not be refreshed'));
+    await settleLoads(allViewLoads());
+  } catch (error) {
+    dashboardState.errors.set('metadata', error);
   } finally {
     dashboardState.refreshing = false;
     byId('refresh-button').disabled = false;
+    renderErrors();
     replayPendingRefresh();
   }
 }
@@ -1135,7 +1170,7 @@ document.querySelectorAll('.tab').forEach(function (button) {
   });
 });
 
-byId('refresh-button').addEventListener('click', refreshAll);
+byId('refresh-button').addEventListener('click', refreshDashboardMetadata);
 byId('theme-toggle').addEventListener('change', function (event) {
   storeTheme(event.currentTarget.checked ? 'dark' : 'light');
 });
@@ -1153,5 +1188,5 @@ darkThemeQuery.addEventListener('change', function () {
 });
 
 applyTheme(readStoredTheme());
-refreshAll();
+loadAllViews();
 setInterval(refreshLiveViews, 2000);`

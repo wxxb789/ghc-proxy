@@ -121,7 +121,7 @@ export class GitHubClient {
     throw new Error('Device code authorization timed out')
   }
 
-  async getGitHubUser(): Promise<GithubUserResponse> {
+  async getGitHubUser(signal?: AbortSignal): Promise<GithubUserResponse> {
     return this.requestJson<GithubUserResponse>(
       `${this.config.githubApiBaseUrl ?? GITHUB_API_BASE_URL}/user`,
       {
@@ -129,6 +129,7 @@ export class GitHubClient {
           authorization: `token ${this.auth.githubToken}`,
           ...standardHeaders(),
         },
+        signal,
       },
       'Failed to get GitHub user',
     )

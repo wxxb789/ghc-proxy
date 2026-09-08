@@ -252,11 +252,11 @@ export class CopilotClient {
     )
   }
 
-  async getModels(): Promise<ModelsResponse> {
+  async getModels(options: { signal?: AbortSignal } = {}): Promise<ModelsResponse> {
     return this.requestJson<ModelsResponse>(
       '/models',
       'Failed to get models',
-      { retryable: true },
+      { retryable: true, signal: options.signal },
     )
   }
 

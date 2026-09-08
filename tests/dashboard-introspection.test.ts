@@ -17,6 +17,7 @@ import {
   createAccountRuntime,
   modelCache,
   runtimeStore,
+  runWithAccountRuntime,
 } from '~/state'
 
 import {
@@ -183,6 +184,10 @@ describe('dashboard account projection', () => {
         ? 'personal-plan'
         : 'work-plan',
     }))
+    await Promise.all([
+      runWithAccountRuntime(personal, () => cache.refresh()),
+      runWithAccountRuntime(work, () => cache.refresh()),
+    ])
 
     const [personalView, workView] = await Promise.all([
       getDashboardAccount({
@@ -290,6 +295,27 @@ describe('DashboardQuotaCache', () => {
     expect(calls).toBe(1)
   })
 
+  test('reads a safe cache snapshot without loading quota from upstream', async () => {
+    let calls = 0
+    let now = 1_000
+    const cache = new DashboardQuotaCache(
+      async () => {
+        calls++
+        return quotaUsageFixture()
+      },
+      () => now,
+      60_000,
+    )
+
+    expect(cache.peek()).toEqual({ status: 'unavailable' })
+    expect(calls).toBe(0)
+    await cache.refresh()
+    now += 60_001
+
+    expect(cache.peek()).toMatchObject({ status: 'stale', plan: 'individual' })
+    expect(calls).toBe(1)
+  })
+
   test('retains the last safe quota projection when a refresh fails', async () => {
     let calls = 0
     let now = 1_000
@@ -310,6 +336,27 @@ describe('DashboardQuotaCache', () => {
     const stale = await cache.get()
 
     expect(current.status).toBe('ok')
+    expect(stale).toEqual({ ...current, status: 'stale' })
+    expect(JSON.stringify(stale)).not.toContain('raw secret failure')
+  })
+
+  test('force refresh bypasses the TTL and retains the last safe projection on failure', async () => {
+    let calls = 0
+    const cache = new DashboardQuotaCache(
+      () => {
+        calls++
+        return calls === 1
+          ? Promise.resolve(quotaUsageFixture())
+          : Promise.reject(new Error('raw secret failure'))
+      },
+      () => 1_000,
+      60_000,
+    )
+
+    const current = await cache.get()
+    const stale = await cache.refresh()
+
+    expect(calls).toBe(2)
     expect(stale).toEqual({ ...current, status: 'stale' })
     expect(JSON.stringify(stale)).not.toContain('raw secret failure')
   })

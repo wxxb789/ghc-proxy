@@ -247,7 +247,7 @@ export async function setupGitHubToken(
         consola.info('GitHub token:', githubToken)
       }
       try {
-        await logUser()
+        await refreshGitHubIdentity()
         return { migrationPending }
       }
       catch (error) {
@@ -287,7 +287,7 @@ export async function setupGitHubToken(
       if (authStore.showToken) {
         consola.info('GitHub token:', token)
       }
-      await logUser()
+      await refreshGitHubIdentity()
       if (options?.validateBeforePersist) {
         await fetchCopilotToken()
       }
@@ -352,9 +352,9 @@ function isTransientHttpError(error: HTTPError): boolean {
   return isTransientUpstreamStatus(error.status)
 }
 
-async function logUser() {
+export async function refreshGitHubIdentity(signal?: AbortSignal): Promise<void> {
   const githubClient = createGitHubClient()
-  const user = await githubClient.getGitHubUser()
+  const user = await githubClient.getGitHubUser(signal)
   authStore.githubLogin = user.login
   authStore.githubValidatedAt = Date.now()
   consola.debug(`Logged in as ${user.login}`)
