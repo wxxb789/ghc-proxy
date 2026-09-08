@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import consola from 'consola'
 
 import {
   parseAnthropicCountTokensPayload,
@@ -638,6 +639,82 @@ describe('Responses payload validation', () => {
       input: 'Hello!',
       top_k: 40,
     }), 'OpenAI Responses API')
+  })
+
+  test('accepts function call outputs without a call ID', () => {
+    const payload = parseResponsesPayload({
+      model: 'gpt-5.6-luna',
+      input: [
+        {
+          type: 'function_call_output',
+          id: 'fco_codex_app_1',
+          name: 'send_message_to_thread',
+          namespace: 'codex_app',
+          output: 'sent',
+        },
+        {
+          type: 'function_call_output',
+          call_id: null,
+          output: [{ type: 'input_text', text: 'complete' }],
+          status: null,
+        },
+      ],
+    })
+
+    expect(payload.input).toEqual([
+      {
+        type: 'function_call_output',
+        id: 'fco_codex_app_1',
+        name: 'send_message_to_thread',
+        namespace: 'codex_app',
+        output: 'sent',
+      },
+      {
+        type: 'function_call_output',
+        call_id: null,
+        output: [{ type: 'input_text', text: 'complete' }],
+        status: null,
+      },
+    ])
+  })
+
+  test('preserves explicit schema failures in the response and validation log', () => {
+    const originalWarn = consola.warn
+    const warnings: Array<Array<unknown>> = []
+    consola.warn = Object.assign(
+      (...args: Array<unknown>) => warnings.push(args),
+      { raw: () => {} },
+    ) as unknown as typeof consola.warn
+
+    try {
+      expect(() => parseResponsesPayload({
+        model: 'gpt-5.6-luna',
+        input: [{
+          type: 'function_call_output',
+          call_id: 17,
+          output: 'result',
+        }],
+      })).toThrow('Invalid request payload')
+    }
+    finally {
+      consola.warn = originalWarn
+    }
+
+    const warning = warnings[0]
+    expect(warning?.[0]).toBe('Invalid request payload')
+    expect(warning?.[1]).toMatchObject({
+      context: 'openai.responses',
+      issues: [expect.objectContaining({
+        path: 'input[0].call_id',
+        code: 'invalid_type',
+        expected: 'string',
+      })],
+      rawIssues: [expect.objectContaining({
+        path: ['input', 0, 'call_id'],
+        code: 'invalid_type',
+        expected: 'string',
+      })],
+    })
   })
 
   test('accepts function tool references declared by tool_choice', () => {

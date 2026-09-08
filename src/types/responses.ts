@@ -187,9 +187,9 @@ export interface ResponseFunctionToolCallItem {
 
 export interface ResponseFunctionCallOutputItem {
   type: 'function_call_output'
-  call_id: string
+  call_id?: string | null
   output: string | Array<ResponseInputContent>
-  status?: 'in_progress' | 'completed' | 'incomplete'
+  status?: 'in_progress' | 'completed' | 'incomplete' | null
 }
 
 export interface ResponseInputReasoning {
