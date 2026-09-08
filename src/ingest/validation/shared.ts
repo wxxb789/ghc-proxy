@@ -40,6 +40,28 @@ interface ZodIssueLike {
 }
 
 const MAX_VALIDATION_DETAILS = 200
+const RAW_VALIDATION_ISSUE_FIELDS = [
+  'code',
+  'path',
+  'message',
+  'expected',
+  'origin',
+  'minimum',
+  'maximum',
+  'inclusive',
+  'exact',
+  'format',
+  'pattern',
+  'divisor',
+  'keys',
+  'discriminator',
+  'options',
+  'values',
+  'algorithm',
+  'prefix',
+  'suffix',
+  'includes',
+] as const
 
 function isIssueArray(value: unknown): value is Array<ZodIssueLike> {
   return Array.isArray(value)
@@ -140,11 +162,42 @@ function formatValidationIssuesForLog(
   }))
 }
 
+/**
+ * Preserve Zod's original diagnostics for server-side debugging without
+ * logging the rejected request values or Zod's schema instances.
+ */
+function formatRawValidationIssuesForLog(
+  issues: Array<z.core.$ZodIssue>,
+): Array<Record<string, unknown>> {
+  const rawIssues: Array<Record<string, unknown>> = []
+
+  for (const issue of issues.slice(0, MAX_VALIDATION_DETAILS)) {
+    const source = issue as unknown as Record<string, unknown>
+    const rawIssue: Record<string, unknown> = {}
+    for (const field of RAW_VALIDATION_ISSUE_FIELDS) {
+      if (source[field] !== undefined) {
+        rawIssue[field] = source[field]
+      }
+    }
+    rawIssues.push(rawIssue)
+  }
+
+  if (issues.length > MAX_VALIDATION_DETAILS) {
+    rawIssues.push({
+      code: 'too_many_issues',
+      message: `Raw validation issues truncated at ${MAX_VALIDATION_DETAILS} entries.`,
+    })
+  }
+
+  return rawIssues
+}
+
 function throwInvalidPayload(context: string, issues: Array<z.core.$ZodIssue>): never {
   const details = formatValidationIssues(issues)
   consola.warn('Invalid request payload', {
     context,
     issues: formatValidationIssuesForLog(details),
+    rawIssues: formatRawValidationIssuesForLog(issues),
   })
   throw new HTTPError(400, {
     error: {

@@ -79,16 +79,43 @@ const responsesInputFileSchema = z.object({
   }
 })
 
-const responsesUnknownContentSchema = z.object({
-  type: z.string().min(1),
-}).catchall(z.unknown()).superRefine((item, ctx) => {
-  if (['input_text', 'output_text', 'input_image', 'input_file'].includes(item.type)) {
-    ctx.addIssue({
-      code: 'custom',
-      message: `content item type ${item.type} must match the explicit schema`,
-    })
+function forwardExplicitSchemaIssues(
+  value: unknown,
+  schema: z.ZodType,
+  ctx: z.core.$RefinementCtx,
+): void {
+  const result = schema.safeParse(value)
+  if (result.success) {
+    return
   }
-})
+
+  for (const issue of result.error.issues) {
+    ctx.addIssue({ ...issue })
+  }
+}
+
+function createUnknownContentSchema(inputImageSchema: z.ZodType) {
+  const explicitSchemas = new Map<string, z.ZodType>([
+    ['input_text', responsesInputTextSchema],
+    ['output_text', responsesInputTextSchema],
+    ['input_image', inputImageSchema],
+    ['input_file', responsesInputFileSchema],
+  ])
+
+  return z.object({
+    type: z.string().min(1),
+  }).catchall(z.unknown()).superRefine((item, ctx) => {
+    const schema = explicitSchemas.get(item.type)
+    if (schema) {
+      forwardExplicitSchemaIssues(item, schema, ctx)
+    }
+  })
+}
+
+const responsesUnknownContentSchema = createUnknownContentSchema(responsesInputImageSchema)
+const responsesUnknownFunctionCallOutputContentSchema = createUnknownContentSchema(
+  responsesFunctionCallOutputImageSchema,
+)
 
 const responsesInputContentSchema = z.union([
   responsesInputTextSchema,
@@ -101,7 +128,7 @@ const responsesFunctionCallOutputContentSchema = z.union([
   responsesInputTextSchema,
   responsesFunctionCallOutputImageSchema,
   responsesInputFileSchema,
-  responsesUnknownContentSchema,
+  responsesUnknownFunctionCallOutputContentSchema,
 ])
 
 // ── Input Item Schemas ──
@@ -127,12 +154,12 @@ const responsesFunctionCallSchema = z.object({
 
 const responsesFunctionCallOutputSchema = z.object({
   type: z.literal('function_call_output'),
-  call_id: z.string().min(1),
+  call_id: z.string().min(1).nullable().optional(),
   output: z.union([
     z.string(),
     z.array(responsesFunctionCallOutputContentSchema),
   ]),
-  status: z.enum(['in_progress', 'completed', 'incomplete']).optional(),
+  status: z.enum(['in_progress', 'completed', 'incomplete']).nullable().optional(),
 }).loose()
 
 const responsesReasoningSummarySchema = z.object({
@@ -159,14 +186,21 @@ const responsesItemReferenceInputSchema = z.object({
   id: z.string().min(1),
 }).loose()
 
+const explicitInputItemSchemas = new Map<string, z.ZodType>([
+  ['message', responsesMessageSchema],
+  ['function_call', responsesFunctionCallSchema],
+  ['function_call_output', responsesFunctionCallOutputSchema],
+  ['reasoning', responsesReasoningInputSchema],
+  ['compaction', responsesCompactionInputSchema],
+  ['item_reference', responsesItemReferenceInputSchema],
+])
+
 const responsesUnknownInputItemSchema = z.object({
   type: z.string().min(1),
 }).catchall(z.unknown()).superRefine((item, ctx) => {
-  if (['message', 'function_call', 'function_call_output', 'reasoning', 'compaction', 'item_reference'].includes(item.type)) {
-    ctx.addIssue({
-      code: 'custom',
-      message: `input item type ${item.type} must match the explicit schema`,
-    })
+  const schema = explicitInputItemSchemas.get(item.type)
+  if (schema) {
+    forwardExplicitSchemaIssues(item, schema, ctx)
   }
 })
 
@@ -198,10 +232,7 @@ const responsesUnknownToolSchema = z.object({
   type: z.string().min(1),
 }).catchall(z.unknown()).superRefine((tool, ctx) => {
   if (tool.type === 'function') {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'tool type function must match the explicit schema',
-    })
+    forwardExplicitSchemaIssues(tool, responsesFunctionToolSchema, ctx)
   }
 })
 

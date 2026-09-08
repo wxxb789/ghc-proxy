@@ -1030,6 +1030,49 @@ describe('responses and routing', () => {
     ])
   })
 
+  test('/v1/responses forwards function_call_output items without a call_id', async () => {
+    const app = createApp()
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-4.1', { supported_endpoints: ['/responses'] })))
+
+    CopilotClient.prototype.createResponses = mockResponses(buildResponsesResult({
+      id: 'resp_missing_call_id',
+      model: 'gpt-4.1',
+      status: 'completed',
+      usage: null,
+    }), calls)
+
+    const response = await app.handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4.1',
+        input: [
+          { type: 'message', role: 'user', content: 'hello' },
+          {
+            type: 'function_call_output',
+            id: 'fco_codex_app_1',
+            name: 'send_message_to_thread',
+            namespace: 'codex_app',
+            output: 'sent',
+          },
+        ],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.input).toEqual([
+      { type: 'message', role: 'user', content: 'hello' },
+      {
+        type: 'function_call_output',
+        id: 'fco_codex_app_1',
+        name: 'send_message_to_thread',
+        namespace: 'codex_app',
+        output: 'sent',
+      },
+    ])
+  })
+
   test('/v1/responses strips both item_reference and orphaned function_call_output together', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []
