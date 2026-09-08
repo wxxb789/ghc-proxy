@@ -344,6 +344,22 @@ describe('dashboard account management API', () => {
     expect(await bootstrapResponse.json()).toMatchObject({ routingEnabled: true })
   })
 
+  test('does not refresh metadata before legacy routing is enabled', async () => {
+    const manager = accountManagerFixture({ routingEnabled: false })
+    const refresher: DashboardMetadataRefreshService = {
+      refresh: mock(async () => ({ status: 'ok' as const, accounts: [] })),
+    }
+    const app = createDashboardRoutes({ accountManager: manager, metadataRefresher: refresher })
+
+    const response = await app.handle(new Request(
+      'http://localhost/dashboard/api/refresh',
+      { method: 'POST', headers: { origin: 'http://localhost' } },
+    ))
+
+    expect(response.status).toBe(409)
+    expect(refresher.refresh).not.toHaveBeenCalled()
+  })
+
   test('serves account data and authentication state without exposing credentials', async () => {
     const manager = accountManagerFixture()
     const app = createDashboardRoutes({ accountManager: manager })

@@ -176,7 +176,7 @@ describe('AccountManager', () => {
       .toEqual({ token: 'copilot-default' })
   })
 
-  test('lists active account descriptors and stable dedicated hostnames', () => {
+  test('lists routed account descriptors and stable dedicated hostnames', () => {
     const state = initialState()
     const manager = new AccountManager(state, dependencies())
 

@@ -77,14 +77,9 @@ export class DashboardMetadataRefresher implements DashboardMetadataRefreshServi
       return this.pending.promise
     }
     if (this.inFlight) {
-      let resolve!: (value: DashboardMetadataRefresh) => void
-      let reject!: (reason?: unknown) => void
-      const promise = new Promise<DashboardMetadataRefresh>((nextResolve, nextReject) => {
-        resolve = nextResolve
-        reject = nextReject
-      })
-      this.pending = { accounts, fingerprint, quotaCache, promise, reject, resolve }
-      return promise
+      const pending = Promise.withResolvers<DashboardMetadataRefresh>()
+      this.pending = { accounts, fingerprint, quotaCache, ...pending }
+      return pending.promise
     }
 
     return this.startRefresh(accounts, quotaCache, fingerprint)

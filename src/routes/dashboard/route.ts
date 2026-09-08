@@ -15,7 +15,7 @@ import { DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS } from './assets'
 
 import {
   dashboardQuotaCache,
-  getDashboardAccounts,
+  getDashboardAccount,
   getDashboardBehavior,
   getDashboardModels,
   getDashboardOverview,
@@ -125,13 +125,17 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
       const snapshot = accountManager.getAccountSnapshot()
       return apiResponse({
         ...snapshot.routing,
-        accounts: await getDashboardAccounts(snapshot.accounts, quotaCache),
+        accounts: await Promise.all(
+          snapshot.accounts.map(account => getDashboardAccount(account, quotaCache)),
+        ),
       })
     })
     .post('/dashboard/api/refresh', async () => {
       if (!accountManager)
         return accountManagementUnavailable()
       const snapshot = accountManager.getAccountSnapshot()
+      if (!snapshot.routing.routingEnabled)
+        return accountManagementUnavailable()
       return apiResponse(await metadataRefresher.refresh(snapshot.accounts, quotaCache))
     })
     .post('/dashboard/api/accounts', async ({ body }) => {

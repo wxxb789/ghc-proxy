@@ -35,22 +35,7 @@ describe('DashboardMetadataRefresher', () => {
         modelCache.cacheModels({ object: 'list', data: [] })
       },
     })
-    const quotaCache = new DashboardQuotaCache(async () => ({
-      access_type_sku: 'sku',
-      analytics_tracking_id: 'analytics',
-      assigned_date: '2026-09-01',
-      can_signup_for_limited: false,
-      chat_enabled: true,
-      copilot_plan: 'individual',
-      organization_login_list: [],
-      organization_list: [],
-      quota_reset_date: '2026-10-01',
-      quota_snapshots: {
-        chat: quota(),
-        completions: quota(),
-        premium_interactions: quota(),
-      },
-    }))
+    const quotaCache = new DashboardQuotaCache(async () => usage())
 
     const result = await refresher.refresh(accounts, quotaCache)
 

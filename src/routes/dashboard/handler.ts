@@ -146,13 +146,6 @@ export async function getDashboardAccount(
   })
 }
 
-export function getDashboardAccounts(
-  accounts: RoutedAccountDescriptor[],
-  quotaCache: DashboardQuotaCache = dashboardQuotaCache,
-) {
-  return Promise.all(accounts.map(account => getDashboardAccount(account, quotaCache)))
-}
-
 export function getDashboardModels() {
   return (modelCache.getModels()?.data ?? []).map(projectModel)
 }
