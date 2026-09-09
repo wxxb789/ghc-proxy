@@ -1,13 +1,26 @@
+import type { DashboardMetadataRefreshService } from '~/routes/dashboard/metadata-refresh'
+
 import type { DashboardAccountManagement } from '~/routes/dashboard/route'
-
 import type { CopilotUsageResponse } from '~/types'
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { Elysia } from 'elysia'
+import { AccountManager } from '~/accounts/manager'
+import { compileAccountRouting } from '~/lib/account-routing'
 import { DashboardQuotaCache, dashboardQuotaCache } from '~/routes/dashboard/handler'
+import {
+  DashboardMetadataRefresher,
+
+} from '~/routes/dashboard/metadata-refresh'
 import { createDashboardRoutes, isLoopbackAddress } from '~/routes/dashboard/route'
 import { createServer } from '~/server'
-import { authStore, runtimeStore } from '~/state'
+import {
+  authStore,
+  configureAccountRuntimes,
+  createAccountRuntime,
+  resetAccountRuntimes,
+  runtimeStore,
+} from '~/state'
 
 import {
   restoreStateSnapshot,
@@ -28,6 +41,7 @@ beforeEach(() => {
 afterEach(() => {
   runtimeStore.requests.reset()
   dashboardQuotaCache.reset()
+  resetAccountRuntimes()
   restoreStateSnapshot(snapshot)
 })
 
@@ -155,6 +169,148 @@ describe('dashboard API security projection', () => {
 })
 
 describe('dashboard account management API', () => {
+  test('uses the metadata refresh POST as the only quota upstream refresh path', async () => {
+    const manager = accountManagerFixture()
+    let quotaLoads = 0
+    const quotaCache = new DashboardQuotaCache(async () => {
+      quotaLoads++
+      return usageFixture()
+    })
+    const app = createDashboardRoutes({
+      accountManager: manager,
+      metadataRefresher: new DashboardMetadataRefresher({
+        refreshGitHubIdentity: async () => {},
+        refreshModels: async () => {},
+      }),
+      quotaCache,
+    })
+
+    await app.handle(new Request('http://localhost/dashboard/api/overview'))
+    await app.handle(new Request('http://localhost/dashboard/api/accounts'))
+    expect(quotaLoads).toBe(0)
+
+    const refresh = await app.handle(new Request(
+      'http://localhost/dashboard/api/refresh',
+      { method: 'POST', headers: { origin: 'http://localhost' } },
+    ))
+    await refresh.text()
+    expect(quotaLoads).toBe(1)
+
+    await app.handle(new Request('http://localhost/dashboard/api/overview'))
+    await app.handle(new Request('http://localhost/dashboard/api/accounts'))
+    expect(quotaLoads).toBe(1)
+  })
+
+  test('reports current, default, and active account count in Overview', async () => {
+    const defaultRuntime = createAccountRuntime('default')
+    const workRuntime = createAccountRuntime('work')
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: {
+        'default.localhost': 'default',
+        'work.localhost': 'work',
+      },
+    }, ['default', 'work'])
+    configureAccountRuntimes(routing, [defaultRuntime, workRuntime])
+    const app = createServer({
+      accountManager: new AccountManager({ routing, runtimes: [defaultRuntime, workRuntime] }),
+    })
+
+    const response = await app.handle(new Request('http://work.localhost/dashboard/api/overview'))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      auth: {
+        accounts: {
+          currentAccount: 'work',
+          defaultAccount: 'default',
+          totalAccounts: 2,
+        },
+      },
+    })
+  })
+
+  test('refreshes account metadata through the existing management guard', async () => {
+    const manager = accountManagerFixture()
+    const refreshes: unknown[][] = []
+    const refresher: DashboardMetadataRefreshService = {
+      refresh: async (accounts) => {
+        refreshes.push(accounts)
+        return { status: 'ok', accounts: [] }
+      },
+    }
+    const app = createDashboardRoutes({ accountManager: manager, metadataRefresher: refresher })
+
+    const allowed = await app.handle(new Request(
+      'http://localhost/dashboard/api/refresh',
+      { method: 'POST', headers: { origin: 'http://localhost' } },
+    ))
+    const denied = await app.handle(new Request(
+      'http://localhost/dashboard/api/refresh',
+      { method: 'POST', headers: { origin: 'https://attacker.example' } },
+    ))
+
+    expect(allowed.status).toBe(200)
+    expect(await allowed.json()).toMatchObject({ status: 'ok', accounts: [] })
+    expect(refreshes).toHaveLength(1)
+    expect(denied.status).toBe(403)
+  })
+
+  test('refreshes and projects real routed accounts without mixing quota caches', async () => {
+    const defaultRuntime = createAccountRuntime('default', {
+      githubLogin: 'alice',
+      githubToken: 'github-default',
+      copilotToken: 'copilot-default',
+    })
+    const workRuntime = createAccountRuntime('work', {
+      githubLogin: 'bob',
+      githubToken: 'github-work',
+      copilotToken: 'copilot-work',
+    })
+    defaultRuntime.models.cacheModels({ object: 'list', data: [] })
+    workRuntime.models.cacheModels({ object: 'list', data: [] })
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: {
+        'default.localhost': 'default',
+        'work.localhost': 'work',
+      },
+    }, ['default', 'work'])
+    configureAccountRuntimes(routing, [defaultRuntime, workRuntime])
+    const quotaCache = new DashboardQuotaCache(async () => ({
+      ...usageFixture(),
+      copilot_plan: authStore.githubToken ?? 'missing-token',
+    }))
+    const app = createDashboardRoutes({
+      accountManager: new AccountManager({ routing, runtimes: [defaultRuntime, workRuntime] }),
+      metadataRefresher: new DashboardMetadataRefresher({
+        refreshGitHubIdentity: async () => {
+          authStore.githubValidatedAt = Date.now()
+        },
+        refreshModels: async () => {},
+      }),
+      quotaCache,
+    })
+
+    const refreshResponse = await app.handle(new Request(
+      'http://localhost/dashboard/api/refresh',
+      { method: 'POST', headers: { origin: 'http://localhost' } },
+    ))
+    const response = await app.handle(new Request('http://localhost/dashboard/api/accounts'))
+
+    expect(refreshResponse.status).toBe(200)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      defaultAccount: 'default',
+      accounts: [
+        { name: 'default', isDefault: true, quota: { plan: 'github-default', status: 'ok' } },
+        { name: 'work', isDefault: false, quota: { plan: 'github-work', status: 'ok' } },
+      ],
+    })
+  })
+
   test('bootstraps legacy routing with an editable dedicated hostname', async () => {
     const manager = accountManagerFixture({ routingEnabled: false })
     const app = createDashboardRoutes({ accountManager: manager })
@@ -186,6 +342,22 @@ describe('dashboard account management API', () => {
     expect(bootstrapResponse.status).toBe(200)
     expect(manager.bootstrapAccountRouting).toHaveBeenCalledWith('personal.localhost')
     expect(await bootstrapResponse.json()).toMatchObject({ routingEnabled: true })
+  })
+
+  test('does not refresh metadata before legacy routing is enabled', async () => {
+    const manager = accountManagerFixture({ routingEnabled: false })
+    const refresher: DashboardMetadataRefreshService = {
+      refresh: mock(async () => ({ status: 'ok' as const, accounts: [] })),
+    }
+    const app = createDashboardRoutes({ accountManager: manager, metadataRefresher: refresher })
+
+    const response = await app.handle(new Request(
+      'http://localhost/dashboard/api/refresh',
+      { method: 'POST', headers: { origin: 'http://localhost' } },
+    ))
+
+    expect(response.status).toBe(409)
+    expect(refresher.refresh).not.toHaveBeenCalled()
   })
 
   test('serves account data and authentication state without exposing credentials', async () => {
@@ -384,18 +556,21 @@ function accountManagerFixture(
 } {
   let defaultAccount = 'default'
   let routingEnabled = options.routingEnabled ?? true
+  const runtime = createAccountRuntime('default')
   return {
-    listAccounts: async () => [{
-      name: 'default',
-      hostname: routingEnabled ? 'default.localhost' : 'defaultaccount.localhost',
-      isDefault: true,
-      tenant: 'github.com',
-      github: { status: 'ok', login: 'octocat' },
-      copilot: { status: 'ok', modelsLoaded: true },
-      quota: { status: 'unavailable' },
-      githubToken: undefined,
-      copilotToken: undefined,
-    }],
+    getAccountSnapshot: () => ({
+      routing: {
+        baseHostname: 'localhost',
+        defaultAccount,
+        routingEnabled,
+      },
+      accounts: [{
+        name: 'default',
+        hostname: routingEnabled ? 'default.localhost' : 'defaultaccount.localhost',
+        isDefault: true,
+        runtime,
+      }],
+    }),
     beginAddAccount: mock(async () => ({
       id: 'session-1',
       state: 'pending' as const,
@@ -422,11 +597,6 @@ function accountManagerFixture(
           },
         }
       : undefined,
-    getRoutingSummary: () => ({
-      baseHostname: 'localhost',
-      defaultAccount,
-      routingEnabled,
-    }),
     bootstrapAccountRouting: mock(async () => {
       routingEnabled = true
     }),

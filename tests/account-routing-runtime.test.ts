@@ -236,6 +236,9 @@ describe('request account routing', () => {
       })
     }) as typeof fetch
 
+    await runWithAccountRuntime(account1Runtime, () => dashboardQuotaCache.refresh())
+    await runWithAccountRuntime(defaultRuntime, () => dashboardQuotaCache.refresh())
+
     const app = createServer()
     const account1Response = await app.handle(
       new Request('http://account1.localhost/dashboard/api/overview'),

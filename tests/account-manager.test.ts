@@ -86,26 +86,6 @@ function dependencies(overrides: Partial<AccountManagerDependencies> = {}) {
     },
     createSessionId: () => 'session-1',
     persistence,
-    projectAccount: async descriptor => ({
-      name: descriptor.name,
-      hostname: descriptor.hostname,
-      isDefault: descriptor.isDefault,
-      tenant: descriptor.runtime.auth.gheDomain ?? 'github.com',
-      github: {
-        status: 'ok' as const,
-        login: descriptor.runtime.auth.githubLogin,
-        lastValidatedAt: '1970-01-01T00:00:01.000Z',
-        accountType: descriptor.runtime.auth.accountType,
-      },
-      copilot: {
-        status: 'ok' as const,
-        modelsLoaded: true,
-        expiresAt: '2099-01-01T00:00:00.000Z',
-        lastRefreshAt: '1970-01-01T00:00:02.000Z',
-        lastRefreshSucceeded: true,
-      },
-      quota: { status: 'unavailable' as const },
-    }),
     ...overrides,
   } satisfies AccountManagerDependencies
 }
@@ -122,7 +102,7 @@ describe('AccountManager', () => {
       defaultAccount: 'default',
       routingEnabled: false,
     })
-    expect(await manager.listAccounts()).toEqual([
+    expect(manager.getAccountSnapshot().accounts).toEqual([
       expect.objectContaining({
         name: 'default',
         hostname: 'defaultaccount.localhost',
@@ -196,23 +176,26 @@ describe('AccountManager', () => {
       .toEqual({ token: 'copilot-default' })
   })
 
-  test('lists safe account identity and stable dedicated hostnames', async () => {
+  test('lists routed account descriptors and stable dedicated hostnames', () => {
     const state = initialState()
     const manager = new AccountManager(state, dependencies())
 
-    const accounts = await manager.listAccounts()
+    const { accounts, routing } = manager.getAccountSnapshot()
 
     expect(accounts.map(account => ({
       name: account.name,
       hostname: account.hostname,
       isDefault: account.isDefault,
-      login: account.github.login,
+      login: account.runtime.auth.githubLogin,
     }))).toEqual([
       { name: 'account1', hostname: 'account1.localhost', isDefault: false, login: 'bob' },
       { name: 'default', hostname: 'default.localhost', isDefault: true, login: 'alice' },
     ])
-    expect(JSON.stringify(accounts)).not.toContain('github-default')
-    expect(JSON.stringify(accounts)).not.toContain('copilot-default')
+    expect(routing).toEqual({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      routingEnabled: true,
+    })
   })
 
   test('adds an authenticated account only after persistence and installs its exact route', async () => {

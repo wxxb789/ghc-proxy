@@ -1,4 +1,5 @@
-import type { AccountRuntime } from '~/state'
+import type { RoutedAccountDescriptor } from '~/accounts/descriptor'
+import type { AccountManagementSnapshot } from '~/accounts/manager'
 import type { CopilotUsageResponse, Model, QuotaDetail } from '~/types'
 
 import { getUpstreamRequestQueueSnapshot } from '~/clients/factory'
@@ -56,10 +57,27 @@ export class DashboardQuotaCache {
   }
 
   get(): Promise<DashboardQuota> {
+    return this.loadQuota(false)
+  }
+
+  refresh(): Promise<DashboardQuota> {
+    return this.loadQuota(true)
+  }
+
+  peek(): DashboardQuota {
+    const cached = this.cached.get(getCurrentAccountName())
+    if (!cached)
+      return { status: 'unavailable' }
+    return this.now() < cached.expiresAt
+      ? cached.value
+      : { ...cached.value, status: 'stale' }
+  }
+
+  private loadQuota(force: boolean): Promise<DashboardQuota> {
     const accountName = getCurrentAccountName()
     const now = this.now()
     const cached = this.cached.get(accountName)
-    if (cached && now < cached.expiresAt)
+    if (!force && cached && now < cached.expiresAt)
       return Promise.resolve(cached.value)
     const inFlight = this.inFlight.get(accountName)
     if (inFlight)
@@ -110,15 +128,8 @@ export class DashboardQuotaCache {
 
 export const dashboardQuotaCache = new DashboardQuotaCache()
 
-export interface DashboardAccountDescriptor {
-  name: string
-  hostname: string
-  isDefault: boolean
-  runtime: AccountRuntime
-}
-
 export async function getDashboardAccount(
-  account: DashboardAccountDescriptor,
+  account: RoutedAccountDescriptor,
   quotaCache: DashboardQuotaCache = dashboardQuotaCache,
 ) {
   return runWithAccountRuntime(account.runtime, async () => {
@@ -190,6 +201,7 @@ export function getDashboardBehavior() {
 
 export async function getDashboardOverview(
   quotaCache: DashboardQuotaCache = dashboardQuotaCache,
+  accountSnapshot?: AccountManagementSnapshot,
 ) {
   const requests = runtimeStore.requests.summary()
   const account = await getDashboardAccountHealth(quotaCache)
@@ -202,6 +214,11 @@ export async function getDashboardOverview(
     auth: {
       github: account.github,
       copilot: account.copilot,
+      accounts: {
+        currentAccount: getCurrentAccountName(),
+        defaultAccount: accountSnapshot?.routing.defaultAccount ?? getCurrentAccountName(),
+        totalAccounts: accountSnapshot?.accounts.length ?? 1,
+      },
     },
     quota: account.quota,
     activity: {
@@ -226,7 +243,7 @@ async function getDashboardAccountHealth(
     && !copilotExpired
     && authStore.copilotTokenLastRefreshSucceeded !== false
   const quota = githubConfigured
-    ? await quotaCache.get()
+    ? quotaCache.peek()
     : { status: 'unavailable' as const }
 
   return {

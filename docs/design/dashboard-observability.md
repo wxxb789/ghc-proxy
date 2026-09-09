@@ -10,7 +10,9 @@ history or analytics system.
 The dashboard exposes five views under `/dashboard`:
 
 - Overview: process health, version, authentication state, quota, active
-  requests, and upstream queue activity.
+  requests, and upstream queue activity. Authentication identifies the current
+  request account, the configured default account, and the count of active
+  routed accounts.
 - Accounts: each routed account's stable hostname, GitHub identity and tenant,
   authentication/Copilot state, quota, and default marker; it also starts new
   device authentication and changes the default account.
@@ -118,14 +120,29 @@ effective projection so upstream capability provenance is not lost.
 
 Authentication projection is allowlist-only. It contains presence/status,
 login, expiry, and refresh/validation timestamps, never tokens or raw errors.
+The account-domain manager exposes active runtime descriptors and routing state.
+Dashboard owns the safe account projection, so account management does not
+depend on Dashboard handlers or caches.
 
-Quota is fetched only from the dashboard path. A process-local cache keeps one
-safe projection per selected account for 60 seconds and coalesces concurrent
-refreshes within that account. The projection includes plan, reset date, and the
-three quota pools; analytics IDs, organization data, and quota IDs are discarded
+Quota is fetched only by the Dashboard metadata refresh path. A process-local
+cache keeps one safe projection per selected account for 60 seconds and
+coalesces concurrent refreshes within that account. Dashboard GET routes read
+only the cached safe projection and show `unavailable` or `stale` when no fresh
+value is available. The projection includes plan, reset date, and the three
+quota pools; analytics IDs, organization data, and quota IDs are discarded
 before caching. A five-second dashboard-only timeout aborts a hung quota fetch
 so later polls can recover; the public `/usage` route keeps its existing
 behavior.
+
+`POST /dashboard/api/refresh` is the only Dashboard operation that refreshes
+remote metadata. It reads every active routed account and, in that account's
+runtime context, refreshes GitHub identity, forces a quota cache refresh, and
+refreshes the model cache. Each account and metadata source can succeed or fail
+independently. The response exposes only safe `ok`, `stale`, or `unavailable`
+states; a failure retains prior safe quota and model values where available.
+The operation does not write credentials, change routing, start device auth, or
+change token-refresh schedules. Initial page load, tab changes, and Live polling
+use read-only GET endpoints and never invoke this POST.
 
 Dashboard device authentication exposes only the user code, verification URL,
 expiry, polling interval, and a random local session ID. The GitHub device code,

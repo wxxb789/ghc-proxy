@@ -1,3 +1,4 @@
+import type { RoutedAccountDescriptor } from './descriptor'
 import type {
   AccountDeviceAuthorization,
   AuthenticatedAccount,
@@ -8,12 +9,11 @@ import type {
   CompiledAccountRouting,
 } from '~/lib/account-routing'
 import type { CredentialPaths } from '~/lib/credentials'
-import type { DashboardAccountDescriptor } from '~/routes/dashboard/handler'
 import type { AccountRuntime } from '~/state'
+
 import type { AuthStore } from '~/state/auth'
 
 import { randomUUID } from 'node:crypto'
-
 import { normalizeGheDomain } from '~/clients/ghe-domain'
 import {
   beginAccountManagementTransaction,
@@ -28,7 +28,6 @@ import {
 import { readConfig, writeConfigField } from '~/lib/config'
 import { writeNewGitHubCredential } from '~/lib/credentials'
 import { PATHS } from '~/lib/paths'
-import { getDashboardAccount } from '~/routes/dashboard/handler'
 import { configureAccountRuntimes, disableAccountRouting } from '~/state'
 import {
   beginAccountDeviceAuthentication,
@@ -76,9 +75,6 @@ export interface AccountManagerDependencies {
   beginAuthentication: typeof beginAccountDeviceAuthentication
   createSessionId: () => string
   persistence: AccountManagerPersistence
-  projectAccount: (
-    descriptor: DashboardAccountDescriptor,
-  ) => ReturnType<typeof getDashboardAccount>
 }
 
 export interface AccountManagerState {
@@ -97,6 +93,11 @@ export interface AccountAuthenticationSession {
   id: string
   message?: string
   state: 'pending' | 'succeeded' | 'failed'
+}
+
+export interface AccountManagementSnapshot {
+  accounts: RoutedAccountDescriptor[]
+  routing: AccountRoutingSummary
 }
 
 interface InternalAuthenticationSession extends AccountAuthenticationSession {
@@ -142,7 +143,6 @@ const defaultDependencies: AccountManagerDependencies = {
   beginAuthentication: beginAccountDeviceAuthentication,
   createSessionId: randomUUID,
   persistence: createAccountManagerPersistence(),
-  projectAccount: getDashboardAccount,
 }
 
 const MAX_AUTHENTICATION_SESSIONS = 32
@@ -183,7 +183,7 @@ export class AccountManager {
     this.assertManagedRoutingInvariant()
   }
 
-  async listAccounts() {
+  getAccountSnapshot(): AccountManagementSnapshot {
     const hostnames = dedicatedHostnamesByAccount(this.routing)
     const descriptors = Array.from(this.runtimes.values(), runtime => ({
       name: runtime.name,
@@ -191,7 +191,10 @@ export class AccountManager {
       isDefault: runtime.name === this.routing.defaultAccount,
       runtime,
     })).sort((left, right) => left.name.localeCompare(right.name))
-    return Promise.all(descriptors.map(this.dependencies.projectAccount))
+    return {
+      accounts: descriptors,
+      routing: this.getRoutingSummary(),
+    }
   }
 
   getRoutingSummary(): AccountRoutingSummary {

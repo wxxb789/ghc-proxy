@@ -1,7 +1,8 @@
 import type { DashboardQuotaCache } from './handler'
+import type { DashboardMetadataRefreshService } from './metadata-refresh'
 import type {
   AccountAuthenticationSession,
-  AccountRoutingSummary,
+  AccountManagementSnapshot,
   AddAccountInput,
 } from '~/accounts/manager'
 
@@ -14,11 +15,13 @@ import { DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS } from './assets'
 
 import {
   dashboardQuotaCache,
+  getDashboardAccount,
   getDashboardBehavior,
   getDashboardModels,
   getDashboardOverview,
   getDashboardRequests,
 } from './handler'
+import { dashboardMetadataRefresher } from './metadata-refresh'
 
 const DASHBOARD_CSP = [
   'default-src \'none\'',
@@ -60,13 +63,13 @@ export interface DashboardAccountManagement {
   beginAddAccount: (input: AddAccountInput) => Promise<AccountAuthenticationSession>
   bootstrapAccountRouting: (hostname: string) => Promise<void>
   getAuthenticationSession: (id: string) => AccountAuthenticationSession | undefined
-  getRoutingSummary: () => AccountRoutingSummary
-  listAccounts: () => Promise<unknown[]>
+  getAccountSnapshot: () => AccountManagementSnapshot
   setDefaultAccount: (accountName: string) => Promise<void>
 }
 
 interface DashboardRouteOptions {
   accountManager?: DashboardAccountManagement
+  metadataRefresher?: DashboardMetadataRefreshService
   quotaCache?: DashboardQuotaCache
 }
 
@@ -84,6 +87,7 @@ interface SrvxNodeRequest extends Request {
 
 export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
   const accountManager = options.accountManager
+  const metadataRefresher = options.metadataRefresher ?? dashboardMetadataRefresher
   const quotaCache = options.quotaCache ?? dashboardQuotaCache
 
   return new Elysia({ name: 'dashboard' })
@@ -105,7 +109,10 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
       'text/javascript; charset=utf-8',
     ))
     .get('/dashboard/api/overview', async () =>
-      apiResponse(await getDashboardOverview(quotaCache)))
+      apiResponse(await getDashboardOverview(
+        quotaCache,
+        accountManager?.getAccountSnapshot(),
+      )))
     .get('/dashboard/api/models', () =>
       apiResponse({ models: getDashboardModels() }))
     .get('/dashboard/api/behavior', () =>
@@ -115,10 +122,21 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
     .get('/dashboard/api/accounts', async () => {
       if (!accountManager)
         return accountManagementUnavailable()
+      const snapshot = accountManager.getAccountSnapshot()
       return apiResponse({
-        ...accountManager.getRoutingSummary(),
-        accounts: await accountManager.listAccounts(),
+        ...snapshot.routing,
+        accounts: await Promise.all(
+          snapshot.accounts.map(account => getDashboardAccount(account, quotaCache)),
+        ),
       })
+    })
+    .post('/dashboard/api/refresh', async () => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const snapshot = accountManager.getAccountSnapshot()
+      if (!snapshot.routing.routingEnabled)
+        return accountManagementUnavailable()
+      return apiResponse(await metadataRefresher.refresh(snapshot.accounts, quotaCache))
     })
     .post('/dashboard/api/accounts', async ({ body }) => {
       if (!accountManager)
@@ -145,7 +163,7 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         return apiError('Invalid account routing bootstrap request.', 400)
       try {
         await accountManager.bootstrapAccountRouting(parsed.data.hostname)
-        return apiResponse(accountManager.getRoutingSummary())
+        return apiResponse(accountManager.getAccountSnapshot().routing)
       }
       catch (error) {
         return accountManagementError(error)
@@ -167,7 +185,7 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         return apiError('Invalid default account request.', 400)
       try {
         await accountManager.setDefaultAccount(parsed.data.accountName)
-        return apiResponse(accountManager.getRoutingSummary())
+        return apiResponse(accountManager.getAccountSnapshot().routing)
       }
       catch (error) {
         return accountManagementError(error)

@@ -8,6 +8,7 @@ class FakeElement {
   className = ''
   dataset: Record<string, string> = {}
   disabled = false
+  checked = false
   hidden = false
   href = ''
   tabIndex = -1
@@ -35,6 +36,9 @@ interface DashboardRuntime {
   renderAccounts: (data: unknown) => void
   renderOverview: (data: unknown) => void
   renderRequests: (data: { active: RequestFixture[], recent: RequestFixture[] }) => void
+  loadAllViews: () => Promise<void>
+  refreshDashboardMetadata: () => Promise<void>
+  refreshLiveViews: () => Promise<void>
   settleLoads: (loads: Array<{ scope: string, load: () => Promise<void> }>) => Promise<void>
   startAccountBootstrap: (event: { preventDefault: () => void }) => Promise<void>
 }
@@ -83,7 +87,7 @@ function createRuntime(options: {
     },
   })
 
-  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads, startAccountBootstrap };`).runInContext(context)
+  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, loadAllViews, refreshDashboardMetadata, refreshLiveViews, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads, startAccountBootstrap };`).runInContext(context)
 
   return {
     elements,
@@ -98,6 +102,18 @@ function request(requestId: string): RequestFixture {
     endpoint: '/v1/messages',
     startedAt: 1_777_000_000_000,
   }
+}
+
+function overviewResponse(): Response {
+  return Response.json({
+    status: 'ok',
+    version: 'test',
+    uptimeMs: 0,
+    startedAt: '2026-09-08T00:00:00.000Z',
+    activity: { activeRequests: 0, recentRequests: 0, completed: 0, failed: 0, aborted: 0, upstreamQueue: {} },
+    auth: { github: {}, copilot: {} },
+    quota: { status: 'unavailable' },
+  })
 }
 
 describe('dashboard embedded state', () => {
@@ -129,12 +145,149 @@ describe('dashboard embedded state', () => {
         aborted: 1,
         upstreamQueue: {},
       },
-      auth: { github: {}, copilot: {} },
+      auth: {
+        github: {},
+        copilot: {},
+        accounts: {
+          currentAccount: 'work',
+          defaultAccount: 'personal',
+          totalAccounts: 2,
+        },
+      },
       quota: { status: 'unavailable' },
     })
 
     expect(DASHBOARD_HTML).toContain('id="metric-aborted"')
     expect(elements.get('metric-aborted')?.textContent).toBe('1')
+    expect(JSON.stringify(elements.get('auth-body'))).toContain('2 total / default personal / current work')
+  })
+
+  test('uses a protected metadata refresh only for the manual Refresh action', async () => {
+    const requests: Array<{ method: string, path: string }> = []
+    const { elements, runtime } = createRuntime({
+      fetch: async (input, init) => {
+        const path = String(input)
+        const method = init?.method ?? 'GET'
+        requests.push({ method, path })
+        if (path === '/dashboard/api/refresh') {
+          return Response.json({
+            status: 'partial',
+            accounts: [{
+              name: 'work',
+              github: { status: 'ok' },
+              models: { status: 'stale' },
+              quota: { status: 'ok' },
+            }],
+          })
+        }
+        if (path === '/dashboard/api/overview') {
+          return Response.json({
+            status: 'ok',
+            version: 'test',
+            uptimeMs: 0,
+            startedAt: '2026-09-08T00:00:00.000Z',
+            activity: { activeRequests: 0, recentRequests: 0, completed: 0, failed: 0, aborted: 0, upstreamQueue: {} },
+            auth: { github: {}, copilot: {}, accounts: { currentAccount: 'work', defaultAccount: 'default', totalAccounts: 2 } },
+            quota: { status: 'unavailable' },
+          })
+        }
+        if (path === '/dashboard/api/accounts') {
+          return Response.json({ baseHostname: 'localhost', defaultAccount: 'default', routingEnabled: true, accounts: [] })
+        }
+        if (path === '/dashboard/api/models')
+          return Response.json({ models: [] })
+        if (path === '/dashboard/api/behavior')
+          return Response.json({ modelRouting: {}, strategies: {}, parameterHandling: {}, contextManagement: {}, toolCompatibility: {}, effects: [] })
+        return Response.json({ active: [], recent: [] })
+      },
+    })
+
+    await runtime.refreshDashboardMetadata()
+
+    expect(requests).toEqual([
+      { method: 'POST', path: '/dashboard/api/refresh' },
+      { method: 'GET', path: '/dashboard/api/overview' },
+      { method: 'GET', path: '/dashboard/api/accounts' },
+      { method: 'GET', path: '/dashboard/api/models' },
+      { method: 'GET', path: '/dashboard/api/behavior' },
+      { method: 'GET', path: '/dashboard/api/requests' },
+    ])
+    expect(elements.get('error-banner')).toMatchObject({
+      hidden: false,
+      textContent: 'Some account metadata could not be refreshed',
+    })
+  })
+
+  test('keeps initial and Live refreshes on read-only Dashboard routes', async () => {
+    const requests: Array<{ method: string, path: string }> = []
+    const { elements, runtime } = createRuntime({
+      fetch: async (input, init) => {
+        requests.push({ method: init?.method ?? 'GET', path: String(input) })
+        if (input === '/dashboard/api/overview') {
+          return Response.json({
+            status: 'ok',
+            version: 'test',
+            uptimeMs: 0,
+            startedAt: '2026-09-08T00:00:00.000Z',
+            activity: { activeRequests: 0, recentRequests: 0, completed: 0, failed: 0, aborted: 0, upstreamQueue: {} },
+            auth: { github: {}, copilot: {} },
+            quota: { status: 'unavailable' },
+          })
+        }
+        if (input === '/dashboard/api/accounts')
+          return Response.json({ routingEnabled: true, accounts: [] })
+        if (input === '/dashboard/api/models')
+          return Response.json({ models: [] })
+        if (input === '/dashboard/api/behavior')
+          return Response.json({ modelRouting: {}, strategies: {}, parameterHandling: {}, contextManagement: {}, toolCompatibility: {}, effects: [] })
+        return Response.json({ active: [], recent: [] })
+      },
+    })
+    const liveRefresh = new FakeElement()
+    liveRefresh.checked = true
+    elements.set('live-refresh', liveRefresh)
+
+    await runtime.loadAllViews()
+    await runtime.refreshLiveViews()
+
+    expect(requests).not.toContainEqual({ method: 'POST', path: '/dashboard/api/refresh' })
+    expect(requests.filter(request => request.method === 'GET')).toHaveLength(6)
+  })
+
+  test('queues a manual metadata refresh requested while a view load is active', async () => {
+    let releaseOverview: (() => void) | undefined
+    const requests: Array<{ method: string, path: string }> = []
+    const { runtime } = createRuntime({
+      fetch: async (input, init) => {
+        const path = String(input)
+        requests.push({ method: init?.method ?? 'GET', path })
+        if (path === '/dashboard/api/overview' && !releaseOverview) {
+          return new Promise<Response>((resolve) => {
+            releaseOverview = () => resolve(overviewResponse())
+          })
+        }
+        if (path === '/dashboard/api/overview')
+          return overviewResponse()
+        if (path === '/dashboard/api/refresh')
+          return Response.json({ status: 'ok', accounts: [] })
+        if (path === '/dashboard/api/accounts')
+          return Response.json({ routingEnabled: true, accounts: [] })
+        if (path === '/dashboard/api/models')
+          return Response.json({ models: [] })
+        if (path === '/dashboard/api/behavior')
+          return Response.json({ modelRouting: {}, strategies: {}, parameterHandling: {}, contextManagement: {}, toolCompatibility: {}, effects: [] })
+        return Response.json({ active: [], recent: [] })
+      },
+    })
+
+    const loading = runtime.loadAllViews()
+    await Promise.resolve()
+    await runtime.refreshDashboardMetadata()
+    releaseOverview!()
+    await loading
+    await Promise.resolve()
+
+    expect(requests).toContainEqual({ method: 'POST', path: '/dashboard/api/refresh' })
   })
 
   test('clears request selection when no requests remain', () => {
