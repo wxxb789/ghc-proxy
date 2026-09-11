@@ -37,6 +37,8 @@ const DASHBOARD_CSP = [
 const ADDRESS_BRACKET_RE = /^\[|\]$/g
 const LOOPBACK_IPV4_RE = /^127(?:\.\d{1,3}){3}$/
 
+export const DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY = 4
+
 const BASE_HEADERS = {
   'cache-control': 'no-store',
   'cross-origin-resource-policy': 'same-origin',
@@ -125,9 +127,7 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
       const snapshot = accountManager.getAccountSnapshot()
       return apiResponse({
         ...snapshot.routing,
-        accounts: await Promise.all(
-          snapshot.accounts.map(account => getDashboardAccount(account, quotaCache)),
-        ),
+        accounts: await getDashboardAccounts(snapshot.accounts, quotaCache),
       })
     })
     .post('/dashboard/api/refresh', async () => {
@@ -191,6 +191,27 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         return accountManagementError(error)
       }
     })
+}
+
+async function getDashboardAccounts(
+  accounts: AccountManagementSnapshot['accounts'],
+  quotaCache: DashboardQuotaCache,
+) {
+  const results: Array<Awaited<ReturnType<typeof getDashboardAccount>>> = []
+  let nextIndex = 0
+  const workerCount = Math.min(DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY, accounts.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < accounts.length) {
+      const index = nextIndex++
+      const account = accounts[index]
+      if (!account)
+        return
+      results[index] = await getDashboardAccount(account, quotaCache)
+    }
+  }))
+
+  return results
 }
 
 function getDashboardPeer(

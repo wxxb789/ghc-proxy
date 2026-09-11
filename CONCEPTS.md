@@ -74,10 +74,13 @@ balancing. Any other unknown hostname is rejected before dispatch, and forwarded
 headers do not change the selection. This is deterministic routing, not caller
 authorization.
 
-A legacy single-account process may prepare this routing mode for explicit
-Dashboard confirmation. Its active credential remains the default account and
-receives the editable dedicated-hostname suggestion `defaultaccount.localhost`;
-no Host behavior changes until the bootstrap transaction commits.
+A legacy process is automatically migrated to this routing mode at startup only
+when its credential store contains exactly one account. A credential migrated
+from the former single-token configuration uses the `default` account name and
+the dedicated hostname `default-account.localhost`; the bootstrap transaction
+commits before the server accepts requests. A multi-account credential store
+without routing remains in legacy active-account mode until routing is
+configured explicitly, so no account is silently omitted.
 
 ### Compact request
 A conversation-summarization request, identified by a recognizable system-prompt signature that Claude Code sends when condensing context. When small-model routing is enabled, a compact request may be rerouted to a cheaper model, provided that model preserves the original's endpoint support and required capabilities.

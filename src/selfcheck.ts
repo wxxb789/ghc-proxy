@@ -2,6 +2,8 @@
 
 import type { Socket } from 'node:net'
 import type { Dispatcher } from 'undici'
+import type { AccountRoutingConfig } from '~/lib/account-routing'
+import type { CopilotUsageResponse } from '~/types'
 
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -14,6 +16,7 @@ import { defineCommand } from 'citty'
 import { Elysia } from 'elysia'
 import { Agent } from 'undici'
 
+import { AccountManager } from '~/accounts/manager'
 import { UpstreamRequestQueue } from '~/clients/upstream-queue'
 import { compileAccountRouting } from '~/lib/account-routing'
 import {
@@ -25,12 +28,15 @@ import {
 } from '~/lib/credentials'
 import { HTTPError, isRetryableConnectionEstablishmentError } from '~/lib/error'
 import { getTokenCount } from '~/lib/tokenizer'
+import { DashboardQuotaCache } from '~/routes/dashboard/handler'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
 import { createServer as createProxyServer } from '~/server'
+import { DEFAULT_ACCOUNT_HOSTNAME, prepareLegacySingleAccountRoutingMigration } from '~/start'
 import {
   configureAccountRuntimes,
   createAccountRuntime,
   resetAccountRuntimes,
+  resolveRequestAccountRuntime,
 } from '~/state'
 
 interface RunSelfCheckOptions {
@@ -586,6 +592,174 @@ async function probeDashboardNodeListenerBoundary(): Promise<void> {
   }
 }
 
+async function probeLegacySingleAccountRoutingMigration(): Promise<void> {
+  const runtime = createAccountRuntime('default')
+  runtime.auth.copilotToken = 'selfcheck-default-token'
+  const migration = prepareLegacySingleAccountRoutingMigration('default', ['default'])
+  const routingConfig: AccountRoutingConfig = {
+    baseHostname: 'localhost',
+    defaultAccount: 'default',
+    hostnames: { [DEFAULT_ACCOUNT_HOSTNAME]: 'default' },
+  }
+  let persistedRouting: AccountRoutingConfig | undefined
+  let listenerStarted = false
+  const manager = new AccountManager({
+    knownAccountNames: ['default'],
+    routing: migration.routing,
+    routingEnabled: false,
+    runtimes: [runtime],
+  }, {
+    persistence: {
+      addAccount: async () => {
+        throw new Error('legacy migration must not add an account')
+      },
+      persistRouting: async (routing, applyRuntime) => {
+        assertProbe(!listenerStarted, 'legacy migration persisted routing after the listener started')
+        persistedRouting = routing
+        applyRuntime()
+      },
+    },
+  })
+  const app = createProxyServer({ logRequests: false })
+  let nodeListener: NodeDashboardListener | undefined
+
+  try {
+    let multiAccountMigrationRejected = false
+    try {
+      prepareLegacySingleAccountRoutingMigration('default', ['default', 'secondary'])
+    }
+    catch {
+      multiAccountMigrationRejected = true
+    }
+    assertProbe(multiAccountMigrationRejected, 'legacy migration accepted multiple stored accounts')
+
+    assertProbe(migration.accountName === 'default', 'legacy migration did not preserve the default account name')
+    assertProbe(
+      migration.routing.hostnames.get(DEFAULT_ACCOUNT_HOSTNAME) === 'default',
+      'legacy migration did not configure default-account.localhost',
+    )
+    await manager.bootstrapAccountRouting(DEFAULT_ACCOUNT_HOSTNAME)
+
+    assertProbe(
+      JSON.stringify(persistedRouting) === JSON.stringify(routingConfig),
+      'legacy migration did not persist default routing at default-account.localhost',
+    )
+    assertProbe(
+      manager.getRoutingSummary().routingEnabled,
+      'legacy migration did not enable named-account routing',
+    )
+    assertProbe(
+      resolveRequestAccountRuntime(new Request(`http://${DEFAULT_ACCOUNT_HOSTNAME}/token`))?.name === 'default',
+      'migrated default-account.localhost did not select the default account',
+    )
+    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
+      listenerStarted = true
+      if (!process.versions.bun) {
+        nodeListener = server as unknown as NodeDashboardListener
+      }
+    })
+    const port = await probeListenerPort(app, nodeListener, 'legacy migration')
+    const response = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME)
+    assertProbe(response.status === 200, `migrated default hostname returned ${response.status}`)
+    assertProbe(
+      JSON.parse(response.body).token === 'selfcheck-default-token',
+      'migrated default hostname selected the wrong account after listener startup',
+    )
+  }
+  finally {
+    if (process.versions.bun) {
+      await app.stop()
+    }
+    else {
+      await nodeListener?.raw.close(true)
+    }
+    await manager.stop()
+    resetAccountRuntimes()
+  }
+}
+
+async function probeDashboardNodeQuotaProjection(): Promise<void> {
+  const runtime = createAccountRuntime('default')
+  runtime.auth.githubToken = 'selfcheck-dashboard-github-token'
+  const routing = compileAccountRouting({
+    baseHostname: 'localhost',
+    defaultAccount: 'default',
+    hostnames: { 'default-account.localhost': 'default' },
+  }, ['default'])
+  const manager = new AccountManager({ routing, runtimes: [runtime] })
+  let quotaLoads = 0
+  const quotaCache = new DashboardQuotaCache(async () => {
+    quotaLoads++
+    return selfcheckUsageFixture()
+  })
+  const app = process.versions.bun
+    ? createDashboardRoutes({ accountManager: manager, quotaCache })
+    : new Elysia({ adapter: node() }).use(createDashboardRoutes({
+        accountManager: manager,
+        quotaCache,
+      }))
+  let listener: NodeDashboardListener | undefined
+
+  configureAccountRuntimes(routing, [runtime])
+  try {
+    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
+      if (!process.versions.bun) {
+        listener = server as unknown as NodeDashboardListener
+      }
+    })
+    const port = await probeListenerPort(app, listener, 'dashboard quota')
+
+    const [overviewResponse, accountsResponse] = await Promise.all([
+      requestLocal('127.0.0.1', port, `localhost:${port}`, '/dashboard/api/overview'),
+      requestLocal('127.0.0.1', port, `localhost:${port}`, '/dashboard/api/accounts'),
+    ])
+    assertProbe(overviewResponse.status === 200, `Node dashboard overview returned ${overviewResponse.status}`)
+    assertProbe(accountsResponse.status === 200, `Node dashboard accounts returned ${accountsResponse.status}`)
+    assertProbe(quotaLoads === 1, `cold Dashboard quota projection loaded ${quotaLoads} time(s)`)
+
+    const overview = JSON.parse(overviewResponse.body) as {
+      quota?: { chat?: { remaining?: number }, status?: string }
+    }
+    const accounts = JSON.parse(accountsResponse.body) as {
+      accounts?: Array<{ quota?: { chat?: { remaining?: number }, status?: string } }>
+    }
+    assertProbe(overview.quota?.status === 'ok', 'Node dashboard overview did not project cold-cache quota')
+    assertProbe(overview.quota?.chat?.remaining === 80, 'Node dashboard overview projected the wrong quota')
+    assertProbe(accounts.accounts?.length === 1, 'Node dashboard accounts did not project the default account')
+    assertProbe(accounts.accounts[0]?.quota?.status === 'ok', 'Node dashboard accounts did not project cold-cache quota')
+    assertProbe(accounts.accounts[0]?.quota?.chat?.remaining === 80, 'Node dashboard accounts projected the wrong quota')
+  }
+  finally {
+    if (process.versions.bun) {
+      await app.stop()
+    }
+    else {
+      await listener?.raw.close(true)
+    }
+    await manager.stop()
+    resetAccountRuntimes()
+  }
+}
+
+async function probeListenerPort(
+  app: { server: unknown },
+  nodeListener: NodeDashboardListener | undefined,
+  name: string,
+): Promise<number> {
+  if (process.versions.bun) {
+    const port = (app.server as unknown as { port: number }).port
+    assertProbe(Number.isInteger(port) && port > 0, `${name} listener has no bound port`)
+    return port
+  }
+
+  assertProbe(nodeListener !== undefined, `Node ${name} listener was not created`)
+  await nodeListener.raw.ready()
+  assertProbe(nodeListener.raw.url !== undefined, `Node ${name} listener has no URL`)
+  const port = Number(new URL(nodeListener.raw.url).port)
+  assertProbe(Number.isInteger(port) && port > 0, `Node ${name} listener has no bound port`)
+  return port
+}
+
 async function probeAccountHostnameRouting(): Promise<void> {
   const defaultRuntime = createAccountRuntime('default')
   defaultRuntime.auth.copilotToken = 'selfcheck-default-token'
@@ -656,6 +830,35 @@ async function probeAccountHostnameRouting(): Promise<void> {
       await nodeListener?.raw.close(true)
     }
     resetAccountRuntimes()
+  }
+}
+
+function selfcheckUsageFixture(): CopilotUsageResponse {
+  const quota = {
+    entitlement: 100,
+    overage_count: 0,
+    overage_permitted: false,
+    percent_remaining: 80,
+    quota_id: 'selfcheck-quota-id',
+    quota_remaining: 80,
+    remaining: 80,
+    unlimited: false,
+  }
+  return {
+    access_type_sku: 'selfcheck-sku',
+    analytics_tracking_id: 'selfcheck-analytics-id',
+    assigned_date: '2026-01-01',
+    can_signup_for_limited: false,
+    chat_enabled: true,
+    copilot_plan: 'individual',
+    organization_login_list: [],
+    organization_list: [],
+    quota_reset_date: '2026-12-31',
+    quota_snapshots: {
+      chat: quota,
+      completions: quota,
+      premium_interactions: quota,
+    },
   }
 }
 
@@ -755,6 +958,8 @@ async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
   const runtimeProbes = [
     ...parallelRuntimeProbes,
     await runRuntimeProbe('account-hostname-routing', probeAccountHostnameRouting),
+    await runRuntimeProbe('legacy-single-account-routing-migration', probeLegacySingleAccountRoutingMigration),
+    await runRuntimeProbe('dashboard-node-quota-projection', probeDashboardNodeQuotaProjection),
   ]
   const failed = [...probes, ...runtimeProbes].filter(p => !p.ok)
 

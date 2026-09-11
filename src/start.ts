@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import type { CompiledAccountRouting } from '~/lib/account-routing'
 import type { AuthStore } from '~/state/auth'
 import process from 'node:process'
 
@@ -59,7 +60,31 @@ interface RunServerOptions {
 }
 
 const UNSIGNED_INTEGER_RE = /^\d+$/
-const LEGACY_BOOTSTRAP_HOSTNAME = 'defaultaccount.localhost'
+export const DEFAULT_ACCOUNT_HOSTNAME = 'default-account.localhost'
+
+export interface LegacySingleAccountRoutingMigration {
+  accountName: string
+  routing: CompiledAccountRouting
+}
+
+export function prepareLegacySingleAccountRoutingMigration(
+  activeAccount: string,
+  accountNames: readonly string[],
+): LegacySingleAccountRoutingMigration {
+  if (accountNames.length !== 1) {
+    throw new Error('Legacy Dashboard migration requires exactly one stored GitHub account.')
+  }
+
+  const accountName = normalizeAccountName(activeAccount)
+  return {
+    accountName,
+    routing: compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: accountName,
+      hostnames: { [DEFAULT_ACCOUNT_HOSTNAME]: accountName },
+    }, accountNames),
+  }
+}
 
 async function maybeCopyClaudeCodeCommand(serverUrl: string): Promise<void> {
   const models = modelCache.getModels()
@@ -284,21 +309,25 @@ async function setupLegacyAccountManager(
   const activeGheDomain = storedCredentials
     ? storedCredentials.accounts[storedCredentials.activeAccount]!.gheDomain
     : persistedGheDomain
-  let accountName: string
+  let initialMigration: LegacySingleAccountRoutingMigration
   try {
-    accountName = normalizeAccountName(
+    initialMigration = prepareLegacySingleAccountRoutingMigration(
       storedCredentials?.activeAccount ?? 'default',
+      storedCredentials ? Object.keys(storedCredentials.accounts) : ['default'],
     )
   }
   catch {
     consola.warn(
-      'Dashboard named-account migration is unavailable because the active legacy account name is not routing-compatible.',
+      storedCredentials && Object.keys(storedCredentials.accounts).length !== 1
+        ? 'Dashboard named-account migration is unavailable because credentials.json contains multiple accounts without accountRouting. Configure accountRouting explicitly before enabling hostname routing.'
+        : 'Dashboard named-account migration is unavailable because the active legacy account name is not routing-compatible.',
     )
     return {
       accountManager: undefined,
       cleanup: await setupLegacyAccount(options, accountType, activeGheDomain),
     }
   }
+  const { accountName } = initialMigration
   const runtime = aliasLegacyAccountRuntime(accountName)
   let cleanup: (() => void) | undefined
   try {
@@ -310,25 +339,25 @@ async function setupLegacyAccountManager(
     if (!credentials) {
       throw new Error('Legacy account migration requires a persisted GitHub credential.')
     }
-    if (credentials.activeAccount !== accountName) {
+    const migration = prepareLegacySingleAccountRoutingMigration(
+      credentials.activeAccount,
+      Object.keys(credentials.accounts),
+    )
+    if (migration.accountName !== accountName) {
       throw new Error('The active legacy account changed while Dashboard migration was being prepared.')
     }
 
-    const routing = compileAccountRouting({
-      baseHostname: 'localhost',
-      defaultAccount: accountName,
-      hostnames: { [LEGACY_BOOTSTRAP_HOSTNAME]: accountName },
-    }, Object.keys(credentials.accounts))
     const accountManager = new AccountManager({
       authDefaults: serverAuthDefaults(options, accountType),
       knownAccountNames: Object.keys(credentials.accounts),
       refreshCleanups: new Map([[accountName, cleanup]]),
-      routing,
+      routing: migration.routing,
       routingEnabled: false,
       runtimes: [runtime],
     })
+    await accountManager.bootstrapAccountRouting(DEFAULT_ACCOUNT_HOSTNAME)
     consola.info(
-      `The legacy account ${JSON.stringify(accountName)} remains the default. Enable named-account routing in the Dashboard; ${LEGACY_BOOTSTRAP_HOSTNAME} is the editable suggested hostname.`,
+      `Migrated legacy account ${JSON.stringify(accountName)} to named-account routing at ${DEFAULT_ACCOUNT_HOSTNAME}.`,
     )
     return {
       accountManager,

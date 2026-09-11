@@ -28,6 +28,8 @@ const EXPECTED_RUNTIME_PROBES = [
   'dashboard-bundle-contract',
   'dashboard-node-listener-boundary',
   'account-hostname-routing',
+  'legacy-single-account-routing-migration',
+  'dashboard-node-quota-projection',
 ]
 
 async function main() {

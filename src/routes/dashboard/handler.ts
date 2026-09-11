@@ -64,15 +64,6 @@ export class DashboardQuotaCache {
     return this.loadQuota(true)
   }
 
-  peek(): DashboardQuota {
-    const cached = this.cached.get(getCurrentAccountName())
-    if (!cached)
-      return { status: 'unavailable' }
-    return this.now() < cached.expiresAt
-      ? cached.value
-      : { ...cached.value, status: 'stale' }
-  }
-
   private loadQuota(force: boolean): Promise<DashboardQuota> {
     const accountName = getCurrentAccountName()
     const now = this.now()
@@ -243,7 +234,7 @@ async function getDashboardAccountHealth(
     && !copilotExpired
     && authStore.copilotTokenLastRefreshSucceeded !== false
   const quota = githubConfigured
-    ? quotaCache.peek()
+    ? await quotaCache.get()
     : { status: 'unavailable' as const }
 
   return {

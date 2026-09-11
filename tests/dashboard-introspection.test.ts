@@ -295,27 +295,6 @@ describe('DashboardQuotaCache', () => {
     expect(calls).toBe(1)
   })
 
-  test('reads a safe cache snapshot without loading quota from upstream', async () => {
-    let calls = 0
-    let now = 1_000
-    const cache = new DashboardQuotaCache(
-      async () => {
-        calls++
-        return quotaUsageFixture()
-      },
-      () => now,
-      60_000,
-    )
-
-    expect(cache.peek()).toEqual({ status: 'unavailable' })
-    expect(calls).toBe(0)
-    await cache.refresh()
-    now += 60_001
-
-    expect(cache.peek()).toMatchObject({ status: 'stale', plan: 'individual' })
-    expect(calls).toBe(1)
-  })
-
   test('retains the last safe quota projection when a refresh fails', async () => {
     let calls = 0
     let now = 1_000

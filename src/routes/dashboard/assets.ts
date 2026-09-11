@@ -74,7 +74,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           <label><span>Dedicated hostname</span><input id="account-bootstrap-hostname" name="hostname" required maxlength="253" autocomplete="off"></label>
           <button id="account-bootstrap-button" type="submit" class="command primary">Enable routing</button>
         </form>
-        <div class="muted account-help">The suggested hostname is defaultaccount.localhost. You can change this hostname before enabling.</div>
+        <div class="muted account-help">The suggested hostname is default-account.localhost. You can change this hostname before enabling.</div>
       </section>
 
       <section id="account-add-panel" class="panel full-width account-add-panel" hidden>
