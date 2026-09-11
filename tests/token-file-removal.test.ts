@@ -180,6 +180,7 @@ const { HTTPError } = await import('../src/lib/error')
 const {
   authStore,
   getCurrentAccountName,
+  getCurrentRoutedAccountName,
   modelCache,
   resetAccountRuntimes,
   resolveRequestAccountRuntime,
@@ -382,7 +383,14 @@ describe('GitHub credential migration', () => {
 
     await runStartCommand(makeStartArgs())
 
-    expect(await fs.readFile(PATHS.CONFIG_PATH, 'utf8')).toBe(JSON.stringify({ smallModel: 'gpt-5-mini' }))
+    expect(JSON.parse(await fs.readFile(PATHS.CONFIG_PATH, 'utf8'))).toEqual({
+      smallModel: 'gpt-5-mini',
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: { 'default-account.localhost': 'default' },
+      },
+    })
     await expect(fs.access(PATHS.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toThrow()
     expect(listenCalls).toEqual([4141])
   })
@@ -443,18 +451,18 @@ describe('GitHub credential migration', () => {
     await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
   })
 
-  test('start exposes the legacy account for explicit Dashboard routing bootstrap', async () => {
-    await writeGitHubCredential('primary-token', 'corp.ghe.com', PATHS, 'primary')
+  test('start automatically migrates the legacy default account to named routing', async () => {
+    await writeGitHubCredential('default-token', 'corp.ghe.com')
 
     await runStartCommand(makeStartArgs())
 
     expect(mockPollAccessToken).not.toHaveBeenCalled()
-    expect(githubUserTokens).toEqual(['primary-token'])
+    expect(githubUserTokens).toEqual(['default-token'])
     expect(githubUserApiBaseUrls).toEqual(['https://api.corp.ghe.com'])
-    expect(copilotTokenTokens).toEqual(['primary-token'])
+    expect(copilotTokenTokens).toEqual(['default-token'])
     expect(await readGitHubCredential()).toMatchObject({
-      accountName: 'primary',
-      githubToken: 'primary-token',
+      accountName: 'default',
+      githubToken: 'default-token',
       gheDomain: 'corp.ghe.com',
     })
 
@@ -467,22 +475,19 @@ describe('GitHub credential migration', () => {
     }).accountManager
     expect(firstManager.getRoutingSummary()).toEqual({
       baseHostname: 'localhost',
-      defaultAccount: 'primary',
-      routingEnabled: false,
+      defaultAccount: 'default',
+      routingEnabled: true,
     })
-    await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
-
-    await firstManager.bootstrapAccountRouting('personal.localhost')
 
     expect(resolveRequestAccountRuntime(new Request('http://localhost/token'))?.name)
-      .toBe('primary')
-    expect(resolveRequestAccountRuntime(new Request('http://personal.localhost/token'))?.name)
-      .toBe('primary')
+      .toBe('default')
+    expect(resolveRequestAccountRuntime(new Request('http://default-account.localhost/token'))?.name)
+      .toBe('default')
     expect(JSON.parse(await fs.readFile(PATHS.CONFIG_PATH, 'utf8'))).toMatchObject({
       accountRouting: {
         baseHostname: 'localhost',
-        defaultAccount: 'primary',
-        hostnames: { 'personal.localhost': 'primary' },
+        defaultAccount: 'default',
+        hostnames: { 'default-account.localhost': 'default' },
       },
     })
 
@@ -492,14 +497,75 @@ describe('GitHub credential migration', () => {
     listenCalls.length = 0
     await runStartCommand(makeStartArgs())
 
-    expect(getCurrentAccountName()).toBe('primary')
+    expect(getCurrentAccountName()).toBe('default')
     expect((serverOptions[0] as {
       accountManager: { getRoutingSummary: () => unknown }
     }).accountManager.getRoutingSummary()).toEqual({
       baseHostname: 'localhost',
-      defaultAccount: 'primary',
+      defaultAccount: 'default',
       routingEnabled: true,
     })
+  })
+
+  test('start preserves an existing named account during automatic routing migration', async () => {
+    await writeGitHubCredential('primary-token', 'corp.ghe.com', PATHS, 'primary')
+
+    await runStartCommand(makeStartArgs())
+
+    expect(await readGitHubCredential()).toMatchObject({
+      accountName: 'primary',
+      githubToken: 'primary-token',
+    })
+    expect(JSON.parse(await fs.readFile(PATHS.CONFIG_PATH, 'utf8'))).toMatchObject({
+      accountRouting: {
+        baseHostname: 'localhost',
+        defaultAccount: 'primary',
+        hostnames: { 'default-account.localhost': 'primary' },
+      },
+    })
+
+    await (serverOptions[0] as {
+      accountManager: { stop: () => Promise<void> }
+    }).accountManager.stop()
+  })
+
+  test('start keeps multi-account credentials in legacy mode until routing is configured explicitly', async () => {
+    await writeGitHubCredential('primary-token', undefined, PATHS, 'primary')
+    await writeGitHubCredential('account1-token', 'corp.ghe.com', PATHS, 'account1')
+
+    await runStartCommand(makeStartArgs())
+
+    expect(githubUserTokens).toEqual(['primary-token'])
+    expect(copilotTokenTokens).toEqual(['primary-token'])
+    expect(await readGitHubCredential(PATHS, 'primary')).toMatchObject({
+      githubToken: 'primary-token',
+    })
+    expect(await readGitHubCredential(PATHS, 'account1')).toMatchObject({
+      githubToken: 'account1-token',
+      gheDomain: 'corp.ghe.com',
+    })
+    await expect(fs.access(PATHS.CONFIG_PATH)).rejects.toThrow()
+    expect(serverOptions[0]).toMatchObject({ accountManager: undefined })
+    expect(listenCalls).toEqual([4141])
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
+      'multiple accounts without accountRouting',
+    ))
+  })
+
+  test('start does not listen when automatic routing migration cannot persist config', async () => {
+    const invalidConfig = '{ invalid config'
+    await fs.writeFile(PATHS.CONFIG_PATH, invalidConfig)
+    await writeGitHubCredential('default-token')
+
+    await expect(runStartCommand(makeStartArgs())).rejects.toThrow(
+      'Could not enable named-account routing',
+    )
+
+    expect(await fs.readFile(PATHS.CONFIG_PATH, 'utf8')).toBe(invalidConfig)
+    await expect(fs.access(PATHS.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toThrow()
+    expect(serverOptions).toEqual([])
+    expect(listenCalls).toEqual([])
+    expect(getCurrentRoutedAccountName()).toBeUndefined()
   })
 
   test('keeps legacy mode when the active account name cannot be routed safely', async () => {

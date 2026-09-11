@@ -352,7 +352,7 @@ describe('dashboard embedded state', () => {
     expect(JSON.stringify(row)).not.toContain('token')
   })
 
-  test('shows an editable defaultaccount hostname before legacy routing bootstrap', () => {
+  test('shows an editable default-account hostname before legacy routing bootstrap', () => {
     const { elements, runtime } = createRuntime()
 
     runtime.renderAccounts({
@@ -361,7 +361,7 @@ describe('dashboard embedded state', () => {
       routingEnabled: false,
       accounts: [{
         name: 'default',
-        hostname: 'defaultaccount.localhost',
+        hostname: 'default-account.localhost',
         isDefault: true,
         tenant: 'github.com',
         github: { status: 'ok', login: 'octocat' },
@@ -372,11 +372,12 @@ describe('dashboard embedded state', () => {
 
     expect(DASHBOARD_HTML).toContain('id="account-bootstrap-form"')
     expect(DASHBOARD_HTML).toContain('id="account-add-panel" class="panel full-width account-add-panel" hidden')
+    expect(DASHBOARD_HTML).toContain('default-account.localhost')
     expect(DASHBOARD_HTML).toContain('You can change this hostname before enabling')
     expect(elements.get('account-bootstrap-panel')?.hidden).toBe(false)
     expect(elements.get('account-add-panel')?.hidden).toBe(true)
     expect(elements.get('account-bootstrap-hostname')?.value)
-      .toBe('defaultaccount.localhost')
+      .toBe('default-account.localhost')
     expect(elements.get('accounts-summary')?.textContent)
       .toBe('Legacy default default / routing not enabled')
   })
@@ -384,7 +385,7 @@ describe('dashboard embedded state', () => {
   test.each([
     'http://127.0.0.1:4187/dashboard',
     'http://0.0.0.0:4187/dashboard',
-    'http://defaultaccount.localhost:4187/dashboard',
+    'http://default-account.localhost:4187/dashboard',
   ])('redirects %s to the base hostname after bootstrap', async (locationHref) => {
     const replacements: string[] = []
     let requestBody = ''

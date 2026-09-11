@@ -124,25 +124,31 @@ The account-domain manager exposes active runtime descriptors and routing state.
 Dashboard owns the safe account projection, so account management does not
 depend on Dashboard handlers or caches.
 
-Quota is fetched only by the Dashboard metadata refresh path. A process-local
-cache keeps one safe projection per selected account for 60 seconds and
-coalesces concurrent refreshes within that account. Dashboard GET routes read
-only the cached safe projection and show `unavailable` or `stale` when no fresh
-value is available. The projection includes plan, reset date, and the three
-quota pools; analytics IDs, organization data, and quota IDs are discarded
-before caching. A five-second dashboard-only timeout aborts a hung quota fetch
-so later polls can recover; the public `/usage` route keeps its existing
-behavior.
+Quota is loaded by Dashboard projections when an account's safe cache entry is
+missing or expired, and a process-local cache keeps one safe projection per
+selected account for 60 seconds. Concurrent Overview and Accounts reads for
+the same account coalesce into one load. A failed load exposes `unavailable`,
+and an expired prior safe value is exposed as `stale`. The projection includes
+plan, reset date, and the three quota pools; analytics IDs, organization data,
+and quota IDs are discarded before caching. A five-second dashboard-only
+timeout aborts a hung quota fetch so later polls can recover; the public
+`/usage` route keeps its existing behavior.
 
-`POST /dashboard/api/refresh` is the only Dashboard operation that refreshes
-remote metadata. It reads every active routed account and, in that account's
-runtime context, refreshes GitHub identity, forces a quota cache refresh, and
-refreshes the model cache. Each account and metadata source can succeed or fail
-independently. The response exposes only safe `ok`, `stale`, or `unavailable`
-states; a failure retains prior safe quota and model values where available.
-The operation does not write credentials, change routing, start device auth, or
-change token-refresh schedules. Initial page load, tab changes, and Live polling
-use read-only GET endpoints and never invoke this POST.
+The Accounts GET projection processes at most four accounts concurrently, so a
+cold or expired cache cannot fan out an unbounded number of quota reads. Its
+response preserves the routing snapshot order, and each projection remains in
+the selected account's runtime context.
+
+`POST /dashboard/api/refresh` is the only Dashboard operation that forces all
+remote metadata to refresh. It reads every active routed account and, in that
+account's runtime context, refreshes GitHub identity, forces a quota cache
+refresh, and refreshes the model cache. Each account and metadata source can
+succeed or fail independently. The response exposes only safe `ok`, `stale`,
+or `unavailable` states; a failure retains prior safe quota and model values
+where available. The operation does not write credentials, change routing,
+start device auth, or change token-refresh schedules. Initial page load, tab
+changes, and Live polling use read-only GET endpoints and never invoke this
+POST, though a GET can fill a missing or expired quota cache entry.
 
 Dashboard device authentication exposes only the user code, verification URL,
 expiry, polling interval, and a random local session ID. The GitHub device code,
@@ -170,14 +176,17 @@ fails closed without changing either managed file. Default changes use the same
 transaction boundary, so a failed switch leaves the old default active and
 persistent.
 
-Legacy single-account startup prepares, but does not commit, a one-account
-routing table. The active legacy credential remains the default and receives the
-editable suggestion `defaultaccount.localhost`. The Dashboard bootstrap action
-validates the chosen hostname, writes `accountRouting` through the same journal,
-and installs the already-authenticated legacy runtime only after the write is
-ready to commit. Before confirmation, arbitrary legacy Host values continue to
-work. After success, the base and dedicated hostnames are exact and unknown
-hosts return `421`. A failed bootstrap restores routing-disabled legacy state.
+Legacy startup atomically migrates to a one-account routing table only when the
+credential store contains exactly one account. A credential created from the
+former single-token configuration uses the `default` account name and receives
+the dedicated hostname `default-account.localhost`; an existing persisted
+account name remains its default rather than being renamed. A multi-account
+credential store without routing stays in legacy active-account mode until the
+routing configuration is supplied explicitly, rather than enabling a partial
+account manager. The base and dedicated hostnames are exact after startup and
+unknown hosts return `421`. The Dashboard bootstrap action remains available
+for an already-created legacy manager, validates the chosen hostname, and uses
+the same journal before installing routing.
 
 ## Serving and Security
 
@@ -195,11 +204,10 @@ check means a remote client cannot bypass the boundary by spoofing one of those
 Host values. Runtime values are inserted with DOM `textContent`, not HTML
 parsing.
 
-The same guard covers all account-management methods. In ordinary legacy mode,
-account inspection and the explicit bootstrap action are available, while add
-and default-switch operations return `409` until routing is enabled. A process
-using a global GitHub-token or GHE-tenant override does not expose bootstrap and
-returns `409` for account management rather than persisting ambiguous state.
+The same guard covers all account-management methods. Ordinary legacy startup
+completes its one-account routing migration before the Dashboard is available.
+A process using a global GitHub-token or GHE-tenant override does not expose
+account management and returns `409` rather than persisting ambiguous state.
 
 `/dashboard` requests are excluded from both the request ring and access log so
 polling does not displace proxy traffic or create console noise.

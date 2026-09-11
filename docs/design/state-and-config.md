@@ -204,15 +204,18 @@ interface ConfigFile {
 }
 ```
 
-`accountRouting` is an opt-in fail-closed boundary. A normal legacy process can
-prepare an explicit Dashboard bootstrap without changing routing: the active
-credential remains the default and `defaultaccount.localhost` is an editable
-suggestion. Confirmation persists the routing object and hot-enables exact host
-selection; failure restores legacy routing-disabled state. `baseHostname` always
-maps to `defaultAccount`, and request hostname `127.0.0.1` is a fixed alias for
-the same account; every routed account must also appear exactly once in
-`hostnames`, which supplies its stable dedicated DNS hostname. Hostnames are
-converted to ASCII, lower-cased, and
+`accountRouting` is a fail-closed boundary. Startup atomically migrates a
+legacy process to a one-account routing table only when its credential store
+contains exactly one account: a credential migrated from the former
+single-token configuration uses `default` as the account name and
+`default-account.localhost` as its dedicated hostname. A previously persisted
+named credential retains its active account name rather than being renamed. A
+multi-account credential store without `accountRouting` remains in legacy
+active-account mode until explicit routing is configured, rather than creating
+a partial routing table. `baseHostname` always maps to `defaultAccount`, and request hostname
+`127.0.0.1` is a fixed alias for the same account; every routed account must
+also appear exactly once in `hostnames`, which supplies its stable dedicated DNS
+hostname. Hostnames are converted to ASCII, lower-cased, and
 compared without a trailing root dot; ports are not part of the key. IP
 addresses remain invalid configuration values; authorities containing ports,
 duplicate normalized names, missing accounts, and incomplete routing objects

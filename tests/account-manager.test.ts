@@ -57,7 +57,7 @@ function bootstrapState(accountName = 'default') {
   const routing = compileAccountRouting({
     baseHostname: 'localhost',
     defaultAccount: accountName,
-    hostnames: { 'defaultaccount.localhost': accountName },
+    hostnames: { 'default-account.localhost': accountName },
   }, [accountName])
   return { routing, runtimes: [accountRuntime], routingEnabled: false }
 }
@@ -105,7 +105,7 @@ describe('AccountManager', () => {
     expect(manager.getAccountSnapshot().accounts).toEqual([
       expect.objectContaining({
         name: 'default',
-        hostname: 'defaultaccount.localhost',
+        hostname: 'default-account.localhost',
         isDefault: true,
       }),
     ])
@@ -125,7 +125,7 @@ describe('AccountManager', () => {
       .toBe('default')
     expect(resolveRequestAccountRuntime(new Request('http://personal.localhost/token'))?.name)
       .toBe('default')
-    expect(resolveRequestAccountRuntime(new Request('http://defaultaccount.localhost/token')))
+    expect(resolveRequestAccountRuntime(new Request('http://default-account.localhost/token')))
       .toBeUndefined()
   })
 

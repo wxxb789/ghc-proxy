@@ -12,7 +12,11 @@ import {
   DashboardMetadataRefresher,
 
 } from '~/routes/dashboard/metadata-refresh'
-import { createDashboardRoutes, isLoopbackAddress } from '~/routes/dashboard/route'
+import {
+  createDashboardRoutes,
+  DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY,
+  isLoopbackAddress,
+} from '~/routes/dashboard/route'
 import { createServer } from '~/server'
 import {
   authStore,
@@ -169,8 +173,10 @@ describe('dashboard API security projection', () => {
 })
 
 describe('dashboard account management API', () => {
-  test('uses the metadata refresh POST as the only quota upstream refresh path', async () => {
+  test('loads quota during initial Dashboard projections and refreshes it manually', async () => {
     const manager = accountManagerFixture()
+    authStore.githubToken = 'github-default'
+    manager.getAccountSnapshot().accounts[0]!.runtime.auth.githubToken = 'github-default'
     let quotaLoads = 0
     const quotaCache = new DashboardQuotaCache(async () => {
       quotaLoads++
@@ -185,20 +191,26 @@ describe('dashboard account management API', () => {
       quotaCache,
     })
 
-    await app.handle(new Request('http://localhost/dashboard/api/overview'))
-    await app.handle(new Request('http://localhost/dashboard/api/accounts'))
-    expect(quotaLoads).toBe(0)
+    const [overview, accounts] = await Promise.all([
+      app.handle(new Request('http://localhost/dashboard/api/overview')),
+      app.handle(new Request('http://localhost/dashboard/api/accounts')),
+    ])
+    expect(quotaLoads).toBe(1)
+    expect(await overview.json()).toMatchObject({ quota: { status: 'ok' } })
+    expect(await accounts.json()).toMatchObject({
+      accounts: [{ quota: { status: 'ok' } }],
+    })
 
     const refresh = await app.handle(new Request(
       'http://localhost/dashboard/api/refresh',
       { method: 'POST', headers: { origin: 'http://localhost' } },
     ))
     await refresh.text()
-    expect(quotaLoads).toBe(1)
+    expect(quotaLoads).toBe(2)
 
     await app.handle(new Request('http://localhost/dashboard/api/overview'))
     await app.handle(new Request('http://localhost/dashboard/api/accounts'))
-    expect(quotaLoads).toBe(1)
+    expect(quotaLoads).toBe(2)
   })
 
   test('reports current, default, and active account count in Overview', async () => {
@@ -257,7 +269,7 @@ describe('dashboard account management API', () => {
     expect(denied.status).toBe(403)
   })
 
-  test('refreshes and projects real routed accounts without mixing quota caches', async () => {
+  test('loads and projects real routed accounts from a cold quota cache', async () => {
     const defaultRuntime = createAccountRuntime('default', {
       githubLogin: 'alice',
       githubToken: 'github-default',
@@ -285,22 +297,11 @@ describe('dashboard account management API', () => {
     }))
     const app = createDashboardRoutes({
       accountManager: new AccountManager({ routing, runtimes: [defaultRuntime, workRuntime] }),
-      metadataRefresher: new DashboardMetadataRefresher({
-        refreshGitHubIdentity: async () => {
-          authStore.githubValidatedAt = Date.now()
-        },
-        refreshModels: async () => {},
-      }),
       quotaCache,
     })
 
-    const refreshResponse = await app.handle(new Request(
-      'http://localhost/dashboard/api/refresh',
-      { method: 'POST', headers: { origin: 'http://localhost' } },
-    ))
     const response = await app.handle(new Request('http://localhost/dashboard/api/accounts'))
 
-    expect(refreshResponse.status).toBe(200)
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
       defaultAccount: 'default',
@@ -309,6 +310,74 @@ describe('dashboard account management API', () => {
         { name: 'work', isDefault: false, quota: { plan: 'github-work', status: 'ok' } },
       ],
     })
+  })
+
+  test('bounds cold quota loads while preserving account order and runtime isolation', async () => {
+    const accountCount = DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY * 2 + 1
+    const runtimes = Array.from({ length: accountCount }, (_, index) => {
+      const name = `account-${index}`
+      const runtime = createAccountRuntime(name, {
+        githubToken: `github-${index}`,
+        copilotToken: `copilot-${index}`,
+      })
+      runtime.models.cacheModels({ object: 'list', data: [] })
+      return runtime
+    })
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: runtimes[0]!.name,
+      hostnames: Object.fromEntries(
+        runtimes.map(runtime => [`${runtime.name}.localhost`, runtime.name]),
+      ),
+    }, runtimes.map(runtime => runtime.name))
+    configureAccountRuntimes(routing, runtimes)
+
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let activeLoads = 0
+    let maxActiveLoads = 0
+    const quotaCache = new DashboardQuotaCache(async () => {
+      activeLoads++
+      maxActiveLoads = Math.max(maxActiveLoads, activeLoads)
+      if (activeLoads === DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY)
+        started.resolve()
+      try {
+        await release.promise
+        return {
+          ...usageFixture(),
+          copilot_plan: authStore.githubToken ?? 'missing-token',
+        }
+      }
+      finally {
+        activeLoads--
+      }
+    })
+    const app = createDashboardRoutes({
+      accountManager: new AccountManager({ routing, runtimes }),
+      quotaCache,
+    })
+
+    const pendingResponse = app.handle(new Request('http://localhost/dashboard/api/accounts'))
+    await started.promise
+    expect(maxActiveLoads).toBe(DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY)
+    release.resolve()
+
+    const response = await pendingResponse
+    const body = await response.json() as {
+      accounts: Array<{ name: string, quota: { plan?: string, status: string } }>
+    }
+    expect(response.status).toBe(200)
+    expect(maxActiveLoads).toBe(DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY)
+    expect(body.accounts.map(account => account.name)).toEqual(runtimes.map(runtime => runtime.name))
+    expect(body.accounts.map(account => ({
+      plan: account.quota.plan,
+      status: account.quota.status,
+    }))).toEqual(
+      Array.from({ length: accountCount }, (_, index) => ({
+        plan: `github-${index}`,
+        status: 'ok',
+      })),
+    )
   })
 
   test('bootstraps legacy routing with an editable dedicated hostname', async () => {
@@ -335,7 +404,7 @@ describe('dashboard account management API', () => {
       routingEnabled: false,
       accounts: [{
         name: 'default',
-        hostname: 'defaultaccount.localhost',
+        hostname: 'default-account.localhost',
         isDefault: true,
       }],
     })
@@ -566,7 +635,7 @@ function accountManagerFixture(
       },
       accounts: [{
         name: 'default',
-        hostname: routingEnabled ? 'default.localhost' : 'defaultaccount.localhost',
+        hostname: routingEnabled ? 'default.localhost' : 'default-account.localhost',
         isDefault: true,
         runtime,
       }],
