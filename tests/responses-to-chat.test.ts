@@ -335,7 +335,13 @@ describe('translateResponsesToChat', () => {
       text: { format: { type: 'json_object' }, verbosity: 'high' },
     }
 
-    const result = translateResponsesToChat(payload, model())
+    const target = model({
+      capabilities: {
+        ...model().capabilities,
+        supports: { ...model().capabilities.supports, reasoning_effort: ['minimal'] },
+      },
+    })
+    const result = translateResponsesToChat(payload, target)
     expect(result.plan.payload.max_tokens).toBe(12)
     expect(result.plan.payload.stream).toBe(true)
     expect(result.plan.payload.stream_options).toEqual({ include_usage: true })
@@ -352,6 +358,14 @@ describe('translateResponsesToChat', () => {
   })
 
   test('rejects bridge requests the selected Chat model cannot execute', () => {
+    for (const effort of ['none', 'minimal'] as const) {
+      expect(() => translateResponsesToChat({
+        model: 'caller-model',
+        input: 'hello',
+        reasoning: { effort },
+      }, model())).toThrow('not advertised')
+    }
+
     expect(() => translateResponsesToChat({
       model: 'caller-model',
       input: 'hello',

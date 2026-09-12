@@ -1321,7 +1321,7 @@ export function translateResponsesToChat(
   )
   const turns = buildTurns(payload.instructions, parsedItems, aliases, parsedTools.byKey)
   const effort = payload.reasoning?.effort ?? undefined
-  if (effort && effort !== 'none' && effort !== 'minimal') {
+  if (effort) {
     const advertised = model.capabilities.supports.reasoning_effort
     if (!advertised?.includes(effort)) {
       fail('unsupported_reasoning_effort', `reasoning.effort=${effort} is not advertised by model ${model.id}.`)

@@ -55,6 +55,13 @@ export async function handleResponsesCore(
       afterTransform({ payload, selectedModel, meta }) {
         chatRequest = undefined
         if (selectedModel && resolveResponsesStrategyName(selectedModel) === 'responses-chat-completions') {
+          if (!emulatorMode && originalPayload?.store !== false) {
+            throwInvalidRequestError(
+              'store defaults to true and requires the local Responses emulator; set store=false for stateless Chat translation.',
+              'store',
+              'unsupported_responses_state',
+            )
+          }
           if (clampResponsesReasoningEffort(payload, selectedModel))
             runtimeStore.requests.recordEffect(requestId, 'responses.reasoning_effort_lowered')
           chatRequest = withTranslationErrors(() => translateResponsesToChat(payload, selectedModel, {

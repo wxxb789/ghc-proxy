@@ -174,10 +174,13 @@ function post(
   body: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<Response> {
+  const requestBody = getCachedConfig().responsesOfficialEmulator
+    ? body
+    : { store: false, ...body }
   return app.handle(new Request(`http://localhost${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
     signal,
   }))
 }
@@ -882,7 +885,7 @@ describe('Responses Chat bridge streaming contract', () => {
     try {
       const port = app.server?.port
       expect(port).toBeNumber()
-      const body = JSON.stringify({ model: 'chat-only', stream: true, input: 'cancel me' })
+      const body = JSON.stringify({ model: 'chat-only', store: false, stream: true, input: 'cancel me' })
       let received = ''
       await new Promise<void>((resolve, reject) => {
         const socket = createConnection({ host: '127.0.0.1', port: port! }, () => {

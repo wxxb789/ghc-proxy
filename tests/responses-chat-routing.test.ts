@@ -65,6 +65,21 @@ describe('Responses via Chat Completions', () => {
     expect(calls).toHaveLength(0)
   })
 
+  test('requires explicit store=false when the local emulator is disabled', async () => {
+    getCachedConfig().responsesChatCompletionsFallback = true
+    const calls: Array<CapturedChatCall> = []
+    CopilotClient.prototype.createChatCompletions = mockNonStreamingResponse(chatResult, calls)
+
+    const response = await createApp('responses').handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gemini-test', input: 'hello' }),
+    }))
+
+    expect(response.status).toBe(400)
+    expect(calls).toHaveLength(0)
+  })
+
   test('preserves caller CAPI context on the translated path', async () => {
     getCachedConfig().responsesChatCompletionsFallback = true
     const calls: Array<CapturedChatCall> = []
