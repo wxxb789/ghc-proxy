@@ -285,7 +285,7 @@ export function numTokensForTools(tools: Array<Tool>, encoder: Encoder, constant
 /**
  * Calculate the token count of messages, supporting multiple GPT encoders
  */
-export async function getTokenCount(payload: ChatCompletionsPayload, model: Model): Promise<{ input: number, output: number }> {
+export async function getTokenCount<T extends Pick<ChatCompletionsPayload, 'messages' | 'tools'>>(payload: T, model: Model): Promise<{ input: number, output: number }> {
   // Get tokenizer string
   const tokenizer = getTokenizerFromModel(model)
 

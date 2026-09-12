@@ -13,6 +13,10 @@ import {
 } from '~/lib/config'
 
 export class ConfigStore {
+  isResponsesChatCompletionsFallbackEnabled(): boolean {
+    return getCachedConfig().responsesChatCompletionsFallback ?? false
+  }
+
   isEmulatorEnabled(): boolean {
     return getCachedConfig().responsesOfficialEmulator ?? DEFAULT_RESPONSES_OFFICIAL_EMULATOR
   }

@@ -169,25 +169,52 @@ export interface ResponseContextManagementCompactionItem {
 
 export type ResponseContextManagementItem = ResponseContextManagementCompactionItem
 
+export type ResponseMessagePhase = 'commentary' | 'final_answer'
+
 export interface ResponseInputMessage {
   type?: 'message'
   role: 'user' | 'assistant' | 'system' | 'developer'
   content?: string | Array<ResponseInputContent>
   status?: string
-  phase?: 'commentary' | 'final_answer'
+  phase?: ResponseMessagePhase
 }
 
 export interface ResponseFunctionToolCallItem {
+  id?: string
   type: 'function_call'
   call_id: string
   name: string
   arguments: string
+  namespace?: string
   status?: 'in_progress' | 'completed' | 'incomplete'
 }
 
+export interface ResponseCustomToolCallItem {
+  id?: string
+  type: 'custom_tool_call'
+  call_id: string
+  name: string
+  input: string
+  namespace?: string
+  status?: 'in_progress' | 'completed' | 'incomplete'
+}
+
+export interface ResponseCustomToolCallOutputItem {
+  id?: string
+  type: 'custom_tool_call_output'
+  call_id: string
+  name?: string
+  namespace?: string
+  output: string
+  status?: 'in_progress' | 'completed' | 'incomplete' | null
+}
+
 export interface ResponseFunctionCallOutputItem {
+  id?: string
   type: 'function_call_output'
   call_id?: string | null
+  name?: string
+  namespace?: string
   output: string | Array<ResponseInputContent>
   status?: 'in_progress' | 'completed' | 'incomplete' | null
 }
@@ -216,6 +243,8 @@ export interface ResponseInputItemReference {
 
 export type ResponseInputItem = ResponseInputMessage
   | ResponseFunctionToolCallItem
+  | ResponseCustomToolCallItem
+  | ResponseCustomToolCallOutputItem
   | ResponseFunctionCallOutputItem
   | ResponseInputReasoning
   | ResponseInputCompaction
@@ -279,6 +308,9 @@ export interface ResponseIncompleteDetails {
 
 export interface ResponseError {
   message: string
+  type?: string | null
+  code?: string | null
+  param?: string | null
 }
 
 export interface ResponseDeletionResult {
@@ -317,6 +349,7 @@ export interface ResponseInputTokensResult {
 export type ResponseOutputItem = ResponseOutputMessage
   | ResponseOutputReasoning
   | ResponseOutputFunctionCall
+  | ResponseOutputCustomToolCall
   | ResponseOutputCompaction
 
 export interface ResponseOutputMessage {
@@ -325,6 +358,7 @@ export interface ResponseOutputMessage {
   role: 'assistant'
   status: 'completed' | 'in_progress' | 'incomplete'
   content?: Array<ResponseOutputContentBlock>
+  phase?: ResponseMessagePhase
 }
 
 export interface ResponseOutputReasoning {
@@ -340,13 +374,12 @@ export interface ResponseReasoningBlock {
   text?: string
 }
 
-export interface ResponseOutputFunctionCall {
-  id?: string
+export interface ResponseOutputFunctionCall extends ResponseFunctionToolCallItem {
   type: 'function_call'
-  call_id: string
-  name: string
-  arguments: string
-  status?: 'in_progress' | 'completed' | 'incomplete'
+}
+
+export interface ResponseOutputCustomToolCall extends ResponseCustomToolCallItem {
+  type: 'custom_tool_call'
 }
 
 export interface ResponseOutputCompaction {
@@ -392,11 +425,14 @@ export interface ResponseUsage {
 export type ResponseStreamEvent = ResponseCompletedEvent
   | ResponseIncompleteEvent
   | ResponseCreatedEvent
+  | ResponseInProgressEvent
   | ResponseContentPartAddedEvent
   | ResponseContentPartDoneEvent
   | ResponseErrorEvent
   | ResponseFunctionCallArgumentsDeltaEvent
   | ResponseFunctionCallArgumentsDoneEvent
+  | ResponseCustomToolCallInputDeltaEvent
+  | ResponseCustomToolCallInputDoneEvent
   | ResponseFailedEvent
   | ResponseOutputItemAddedEvent
   | ResponseOutputItemDoneEvent
@@ -404,6 +440,8 @@ export type ResponseStreamEvent = ResponseCompletedEvent
   | ResponseReasoningSummaryPartDoneEvent
   | ResponseReasoningSummaryTextDeltaEvent
   | ResponseReasoningSummaryTextDoneEvent
+  | ResponseRefusalDeltaEvent
+  | ResponseRefusalDoneEvent
   | ResponseTextDeltaEvent
   | ResponseTextDoneEvent
 
@@ -421,6 +459,12 @@ export interface ResponseIncompleteEvent {
 
 export interface ResponseCreatedEvent {
   type: 'response.created'
+  sequence_number: number
+  response: ResponsesResult
+}
+
+export interface ResponseInProgressEvent {
+  type: 'response.in_progress'
   sequence_number: number
   response: ResponsesResult
 }
@@ -473,6 +517,22 @@ export interface ResponseFunctionCallArgumentsDoneEvent {
   arguments: string
 }
 
+export interface ResponseCustomToolCallInputDeltaEvent {
+  type: 'response.custom_tool_call_input.delta'
+  sequence_number: number
+  output_index: number
+  item_id: string
+  delta: string
+}
+
+export interface ResponseCustomToolCallInputDoneEvent {
+  type: 'response.custom_tool_call_input.done'
+  sequence_number: number
+  output_index: number
+  item_id: string
+  input: string
+}
+
 export interface ResponseFailedEvent {
   type: 'response.failed'
   sequence_number: number
@@ -521,6 +581,24 @@ export interface ResponseReasoningSummaryTextDoneEvent {
   item_id: string
   summary_index: number
   text: string
+}
+
+export interface ResponseRefusalDeltaEvent {
+  type: 'response.refusal.delta'
+  sequence_number: number
+  output_index: number
+  item_id: string
+  content_index: number
+  delta: string
+}
+
+export interface ResponseRefusalDoneEvent {
+  type: 'response.refusal.done'
+  sequence_number: number
+  output_index: number
+  item_id: string
+  content_index: number
+  refusal: string
 }
 
 export interface ResponseTextDeltaEvent {

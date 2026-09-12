@@ -7,6 +7,7 @@ import { getModelFallbackConfig } from '~/lib/model-resolver'
 import { PROXY_EFFECT_DEFINITIONS } from '~/observability/effects'
 import { chatCompletionsStrategyRegistry } from '~/routes/chat-completions/strategy-registry'
 import { defaultStrategyRegistry, resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
+import { resolveResponsesStrategyName } from '~/routes/responses/capabilities'
 import { responsesStrategyRegistry } from '~/routes/responses/strategy-registry'
 import { handleUsageCore } from '~/routes/usage/handler'
 import { authStore, configStore, getCurrentAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore, runWithAccountRuntime } from '~/state'
@@ -182,6 +183,7 @@ export function getDashboardBehavior() {
       defaultCompactThreshold: resolveResponsesCompactThreshold(),
     },
     toolCompatibility: {
+      responsesChatCompletionsFallback: configStore.isResponsesChatCompletionsFallbackEnabled(),
       functionApplyPatch: configStore.isFunctionApplyPatchEnabled(),
       remoteResponsesImageUrlsRejected: RESPONSES_INPUT_POLICY.rejectsRemoteImageUrls,
       unresolvableResponsesItemsFiltered: RESPONSES_INPUT_POLICY.filtersUnresolvableItems,
@@ -268,6 +270,8 @@ function projectModel(model: Model) {
   const nativeMessagesAvailable = modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
   const responsesAvailable = modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT)
   const nativeStructuredOutput = modelCache.supportsStructuredOutputs(model)
+  const defaultResponsesStrategy = resolveResponsesStrategyName(model) ?? null
+  const usesChatTranslation = defaultResponsesStrategy === 'responses-chat-completions'
 
   return {
     id: model.id,
@@ -288,6 +292,8 @@ function projectModel(model: Model) {
       defaultMessagesStrategy: resolveMessagesStrategyName(model),
       nativeMessagesAvailable,
       responsesAvailable,
+      nativeResponsesAvailable: responsesAvailable,
+      defaultResponsesStrategy,
       outputConfig: modelCache.supportsOutputConfig(model),
       nativeStructuredOutput,
       messagesStructuredOutput: nativeStructuredOutput || responsesAvailable,
@@ -297,8 +303,8 @@ function projectModel(model: Model) {
       reasoningEffort: model.capabilities?.supports?.reasoning_effort
         ? [...model.capabilities.supports.reasoning_effort]
         : [],
-      responsesParameterFilters: [...resolveStrippedResponsesParams(model)],
-      contextManagement: configStore.isContextManagementModel(model.id),
+      responsesParameterFilters: usesChatTranslation ? [] : [...resolveStrippedResponsesParams(model)],
+      contextManagement: !usesChatTranslation && configStore.isContextManagementModel(model.id),
       chatTokenParameter: getChatCompletionsTokenParameter(model.id),
     },
   }

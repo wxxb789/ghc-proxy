@@ -30,6 +30,7 @@ const EXPECTED_RUNTIME_PROBES = [
   'account-hostname-routing',
   'legacy-single-account-routing-migration',
   'dashboard-node-quota-projection',
+  'responses-chat-completions-bridge',
 ]
 
 async function main() {
@@ -103,12 +104,15 @@ async function main() {
     const packagedBinPath = path.join(packagedRoot, packagedBin)
     if (packagedPackageJson.dependencies?.['gpt-tokenizer'])
       throw new Error('The packaged manifest declares the already-bundled gpt-tokenizer as a runtime dependency.')
-    const [packagedNotices, tokenizerLicense] = await Promise.all([
+    const [packagedNotices, tokenizerLicense, sourceNotices] = await Promise.all([
       fs.readFile(path.join(packagedRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8'),
       fs.readFile(path.join(repoRoot, 'node_modules', 'gpt-tokenizer', 'LICENSE'), 'utf8'),
+      fs.readFile(path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8'),
     ])
     if (!includesTextIgnoringLineEndings(packagedNotices, tokenizerLicense))
       throw new Error('The packaged CLI does not preserve the bundled gpt-tokenizer license notice.')
+    if (!includesTextIgnoringLineEndings(packagedNotices, sourceNotices))
+      throw new Error('The packaged CLI does not preserve all bundled third-party notices.')
     // The encodings are bundled; installing their development package again
     // would add the full vocabulary/source tree to every consumer install.
     const installedTokenizer = await fs.stat(path.join(installRoot, 'node_modules', 'gpt-tokenizer'))
@@ -273,7 +277,12 @@ function runDebugCheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: st
 }
 
 function runBunxDebugCheck(tarballPath: string, cwd: string, expectedVersion: string): void {
-  const result = runCommand(['bunx', '--bun', '--package', tarballPath, 'ghc-proxy', 'debug', '--json'], cwd)
+  // npm has already installed this tarball in cwd. Offline runs must reuse it
+  // because bunx's tarball package selector starts a separate installation.
+  const packageOptions = process.env.npm_config_offline === 'true'
+    ? ['--no-install']
+    : ['--package', tarballPath]
+  const result = runCommand(['bunx', '--bun', ...packageOptions, 'ghc-proxy', 'debug', '--json'], cwd)
   const stdout = decodeOutput(result.stdout)
   const report = tryParseJsonOrUndefined<DebugReport>(stdout)
 

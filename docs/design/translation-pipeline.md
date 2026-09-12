@@ -9,6 +9,7 @@ ghc-proxy translates between three API formats:
 ```text
 Anthropic Messages  <-->  OpenAI Chat Completions
 Anthropic Messages  <-->  OpenAI Responses
+OpenAI Responses    <-->  OpenAI Chat Completions (opt-in create bridge)
 ```
 
 Each translation direction has its own pipeline with normalization, mapping, and streaming layers.
@@ -240,6 +241,91 @@ Error recovery guarantees:
 - Completed function calls are never reopened
 - Excessive whitespace-only argument streams → `error` event
 - Unfinished streams → terminal `error` event
+
+## Responses <-> Chat Completions Bridge
+
+The bridge is used only for the Responses create operation when
+`responsesChatCompletionsFallback` is enabled and the selected model advertises
+`/chat/completions` without advertising `/responses`. Native Responses remains
+the first choice. The bridge is a proxy boundary translation, not an upstream
+claim that the model implements the Responses API.
+
+### Request Direction
+
+```text
+Responses payload
+        |
+        v
+[responses-to-chat.ts]
+  validate intent and unsupported fields
+  normalize input items and tool history
+  build request-local aliases/tool map
+        |
+        v
+buildCapiExecutionPlan(ConversationRequest)
+        |
+        v
+patch explicit CAPI fields
+  parallel_tool_calls, strict, reasoning_effort,
+  response_format, user, model-specific token spelling
+        |
+        v
+Copilot Chat Completions
+```
+
+The translator preserves ordered system/developer/user/assistant text,
+instructions, supported HTTP/data-URL images, and ordinary function calls. A
+namespace that cannot be represented as a flat Chat function name uses a
+bounded request-local alias; the reverse map restores the original name,
+namespace, and tool type. Custom text calls use a reversible JSON wrapper with
+one string property, conventionally `{ "input": "..." }`. The existing
+`useFunctionApplyPatch` gate permits only the pinned `apply_patch` grammar
+shim; other custom grammars are rejected. The wrapper is marked lossy and is
+never executed by the bridge.
+
+### Field Policy
+
+| Responses intent | Chat/CAPI representation | Bridge policy |
+| --- | --- | --- |
+| `input`, `instructions`, message text | Ordered conversation turns | Exact for representable text and roles |
+| `input_image` HTTP(S) or `data:` URL | Chat image part with supported `detail` | Exact when model vision is advertised |
+| Function tools, function choice, call history | CAPI function tools/tool messages | Exact where the internal CAPI type can preserve the field |
+| Custom text tool | Aliased function with `{input:string}` | Reversible wrapper; lossy at the Chat wire boundary |
+| Namespaces | Bounded alias plus request-local map | Restored on output; unresolved collisions fail |
+| `parallel_tool_calls` | Internal CAPI boolean | Preserve explicit `false` as well as `true` |
+| `reasoning.effort` | CAPI `reasoning_effort` | Capability-gated; `none`/`minimal` are handled explicitly |
+| `text.format.json_object` | CAPI JSON mode | Accepted mapping, not a validity guarantee |
+| `text.format.json_schema` | CAPI schema/strict fields | Accepted only when model metadata and wire types preserve it |
+| `prompt_cache_key`, verbosity, summaries | No proven Chat field | Accepted only as bounded lossy issues; values are not logged |
+| `metadata` | Responses envelope/emulator metadata only | Never forward blindly to Chat or log values |
+| Hosted tools, files, prompt templates, cache options, `truncation:auto`, compaction, unsupported service tier | None | Stable `400`; never silently downgrade or relabel |
+| Reasoning/compaction input with `encrypted_content` | None | Reject; never synthesize, decrypt, or validate it |
+| `include: reasoning.encrypted_content` | None | Lossy advisory hint; no encrypted state is emitted |
+
+`conversation`, `previous_response_id`, and `store` are not sent to Chat. They
+must already have been expanded by the existing account-scoped Responses
+emulator; otherwise translation fails. This bridge does not add resource
+routes, remote compaction, WebSocket support, a second state store, or changes
+to the public Chat Completions contract.
+
+### Response Direction
+
+`chat-to-responses.ts` maps one Chat choice into a Responses result and uses the
+same state machine for JSON and SSE. It validates one choice, accumulates text
+and tool-call argument fragments, restores aliases/custom input, maps usage and
+finish reasons, and emits only representable output items. Plain provider
+reasoning is reported as lossy when no replayable state is present; opaque
+reasoning content is carried only when Chat actually supplies it.
+
+For streams, the translator emits `response.created` and
+`response.in_progress`, assigns monotonic `sequence_number` values, closes
+text/function/custom lanes only after validation, and emits exactly one
+`response.completed`, `response.incomplete`, or `response.failed`. Malformed
+chunks, invalid arguments, upstream error frames, and EOF before a finish
+reason produce a Responses `error` plus `response.failed`. Client
+cancellation remains a delivery outcome owned by `runStrategy()` and does not
+fabricate a terminal event. Bridge IDs are proxy-generated and stable within
+the translated response; they are not retrievable upstream resource IDs.
 
 ## Conversation Model
 

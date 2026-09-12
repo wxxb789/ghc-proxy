@@ -264,6 +264,7 @@ describe('config module', () => {
     expect(configStore.isAutoCompactResponsesInputEnabled()).toBe(false)
     expect(configStore.isContextManagementModel('gpt-5')).toBe(false)
     expect(configStore.isEmulatorEnabled()).toBe(false)
+    expect(configStore.isResponsesChatCompletionsFallbackEnabled()).toBe(false)
     expect(configStore.getEmulatorTtlSeconds()).toBe(14_400)
   })
 
@@ -273,6 +274,7 @@ describe('config module', () => {
       responsesApiAutoContextManagement: true,
       responsesApiContextManagementModels: ['gpt-5'],
       responsesOfficialEmulator: true,
+      responsesChatCompletionsFallback: true,
       responsesOfficialEmulatorTtlSeconds: 60,
     }))
 
@@ -282,6 +284,7 @@ describe('config module', () => {
     expect(configStore.isContextManagementModel('gpt-5')).toBe(true)
     expect(configStore.isContextManagementModel('gpt-4.1')).toBe(false)
     expect(configStore.isEmulatorEnabled()).toBe(true)
+    expect(configStore.isResponsesChatCompletionsFallbackEnabled()).toBe(true)
     expect(configStore.getEmulatorTtlSeconds()).toBe(60)
   })
 

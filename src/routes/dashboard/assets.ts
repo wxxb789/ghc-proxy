@@ -859,7 +859,11 @@ function formatModelCapabilities(model) {
 }
 
 function formatModelCompatibility(model) {
+  const responsesStrategy = model.effective.defaultResponsesStrategy;
+  const responsesRoute = responsesStrategy === 'responses-passthrough' ? 'native'
+    : responsesStrategy === 'responses-chat-completions' ? 'via Chat Completions' : 'unavailable';
   return [
+    'responses ' + responsesRoute,
     'structured ' + (model.effective.messagesStructuredOutput ? 'yes' : 'no'),
     'output_config ' + (model.effective.outputConfig ? 'yes' : 'no'),
     'chat tokens ' + model.effective.chatTokenParameter,
@@ -956,12 +960,13 @@ function renderBehavior(data) {
 
   const parameters = byId('behavior-parameters');
   clearNode(parameters);
-  appendKv(parameters, 'Responses filters', compactJson(data.parameterHandling.responsesFilters));
+  appendKv(parameters, 'Native Responses filters', compactJson(data.parameterHandling.responsesFilters));
   appendKv(parameters, 'Replace defaults', data.parameterHandling.responsesFiltersReplaceDefault ? 'yes' : 'no');
-  appendKv(parameters, 'Output token floor', data.parameterHandling.responsesOutputTokenFloor);
-  appendKv(parameters, 'Context management', compactJson(data.contextManagement));
+  appendKv(parameters, 'Native output token floor', data.parameterHandling.responsesOutputTokenFloor);
+  appendKv(parameters, 'Native context management', compactJson(data.contextManagement));
   appendKv(parameters, 'Function apply_patch', data.toolCompatibility.functionApplyPatch ? 'enabled' : 'disabled');
-  appendKv(parameters, 'Remote image URLs', data.toolCompatibility.remoteResponsesImageUrlsRejected ? 'rejected' : 'forwarded');
+  appendKv(parameters, 'Responses via Chat', data.toolCompatibility.responsesChatCompletionsFallback ? 'enabled' : 'disabled');
+  appendKv(parameters, 'Native remote image URLs', data.toolCompatibility.remoteResponsesImageUrlsRejected ? 'rejected' : 'forwarded');
 
   const effectsBody = byId('effects-body');
   clearNode(effectsBody);

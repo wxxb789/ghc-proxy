@@ -160,6 +160,33 @@ then Chat Completions. The last entry is a strategy fallback, not proof that
 the chosen model actually advertises `/chat/completions`; upstream can still
 reject an unsupported or unknown model.
 
+### Responses Strategy Selection
+
+`POST /responses` and `POST /v1/responses` use the centralized
+`resolveResponsesStrategyName()` decision in
+`src/routes/responses/capabilities.ts`:
+
+| Model metadata and config | Effective strategy |
+| --- | --- |
+| Advertises `/responses` | `responses-passthrough` |
+| Does not advertise `/responses`; `responsesChatCompletionsFallback` is `false` | Unsupported before a Chat upstream call |
+| Does not advertise `/responses`; fallback is enabled and advertises `/chat/completions` | `responses-chat-completions` |
+| Advertises neither endpoint | Unsupported before upstream dispatch |
+
+The resolver is native-first. Enabling the flag never moves a dual-endpoint
+model away from native Responses, and a Chat-only model is not relabeled as
+native Responses support. The Dashboard therefore keeps `responsesAvailable`,
+`nativeResponsesAvailable`, and `upstream.endpoints` as native/upstream facts;
+`defaultResponsesStrategy` is the effective proxy choice.
+
+The bridge decision is recomputed for an overload-fallback target. The target
+must also satisfy the request's tool, parallel-tool, streaming, vision,
+reasoning, and structured-output requirements. A Chat-only target can use the
+bridge only when the opt-in remains enabled; a failed Chat attempt is not
+retried through native Responses. This policy covers the create operation only.
+Responses `input_tokens`, retrieve, input-items, and delete routes retain their
+existing native/emulator behavior.
+
 ## Small-Model Routing
 
 An optional optimization that reroutes certain requests to a smaller (cheaper/faster) model.
@@ -197,6 +224,14 @@ in [Messages Routing and Translation](../messages-routing-and-translation.md):
 rejection, function-schema normalization, per-model parameter filtering, the
 16-token output floor, and reasoning-effort normalization.
 
+When `resolveResponsesStrategyName()` selects `responses-chat-completions`,
+the handler returns before those native-only input, remote-image,
+context-management, and parameter-filter mutations. The bridge owns its own
+validation and translation policy instead: HTTP/data-URL images may be
+representable, unsupported files/hosted tools/compaction are rejected, and
+lossy hints are recorded rather than silently removed. The existing
+`useFunctionApplyPatch` setting is passed to the bridge's pinned grammar shim.
+
 Two additional request-mutation policies are optional and disabled by default:
 
 | Key | Default | Effect |
@@ -208,10 +243,10 @@ These policies are both disabled by default. They only apply when explicitly ena
 
 ## CAPI Profile Selection
 
-The CAPI profile is used only while the Anthropic -> Chat Completions adapter
-builds a CAPI execution plan (including its token-count payload). Native
-Messages and Responses requests do not use these profiles. Selection happens
-after the adapter-local family fallback has resolved its effective model:
+The CAPI profile is used when the Anthropic -> Chat Completions adapter or the
+Responses -> Chat bridge builds a CAPI execution plan (including its token-count
+payload). Native Messages and Responses requests do not use these profiles.
+Selection happens after resolving the effective model:
 
 | Model Family | Profile ID | Plan behavior |
 |--------------|------------|---------------|

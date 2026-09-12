@@ -156,6 +156,36 @@ The passthrough strategy has no `onStreamError()` hook. An EOF without a
 terminal event is recorded by its callback, and stream exceptions are recorded
 by the shared observer.
 
+#### Responses via Chat Completions (`responses-chat-completions`)
+
+When `responsesChatCompletionsFallback` is enabled and the selected model
+advertises `/chat/completions` but not `/responses`, the Responses handler
+builds a `ResponsesChatRequest` before strategy dispatch. The request contains
+the CAPI execution plan, a request-local tool alias map, and any explicit
+translation issues. The registry then selects
+`responses-chat-completions`:
+
+- `execute()` calls `CopilotClient.createChatCompletions()` with the existing
+  request context, account routing, queue, timeout, and linked upstream signal;
+- `translateResult()` maps one Chat completion into a Responses JSON result;
+- `translateStreamChunk()` feeds each Chat chunk to the stateful
+  `ChatToResponsesStreamTranslator`, which owns output-item lanes, text/tool
+  accumulation, usage, and terminal selection;
+- `onStreamDone()` handles `[DONE]`/clean end-of-stream validation, while
+  `onStreamError()` emits the Responses protocol error sequence for a Chat
+  stream failure.
+
+The bridge is selected before native-only Responses transforms. It reuses
+emulator preparation and the existing terminal/decorate callbacks, but it does
+not create a second state store or retry a failed Chat request through native
+Responses. `runStrategy()` still owns linked-signal cleanup and client
+cancellation; cancellation does not synthesize a protocol terminal event.
+Malformed chunks, invalid tool arguments, upstream error frames, and EOF before
+a finish reason are translated as a Responses `error` plus one
+`response.failed` event. A bridge response ID is proxy-generated and stable
+within the translated response; it is not proof of a remotely retrievable
+Responses resource.
+
 ## Pipeline Runner: `runPipeline()`
 
 Route handlers used to orchestrate parsing, model transformation, strategy

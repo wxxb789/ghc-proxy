@@ -2,6 +2,7 @@ import type { CopilotClient } from '~/clients'
 import type { CapiRequestContext } from '~/core/capi'
 import type { StrategyEntry } from '~/dispatch'
 import type { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
+import type { ResponsesChatRequest } from '~/translator/responses/chat-bridge-types'
 import type { ResponsesPayload, ResponsesResult } from '~/types'
 
 import { resolveInitiator } from '~/core/capi/request-context'
@@ -9,12 +10,14 @@ import { StrategyRegistry } from '~/dispatch'
 import { runStrategy } from '~/lib/execution-strategy'
 import { runtimeStore } from '~/state'
 
+import { createResponsesViaChatCompletionsStrategy } from './chat-completions'
 import { createResponsesPassthroughStrategy } from './strategy'
 
 export interface ResponsesStrategyContext {
   requestId: string
   copilotClient: CopilotClient
   payload: ResponsesPayload
+  chatRequest?: ResponsesChatRequest
   upstreamSignal: ReturnType<typeof createUpstreamSignalFromConfig>
   requestContext: Partial<CapiRequestContext>
   vision: boolean
@@ -26,7 +29,7 @@ export interface ResponsesStrategyContext {
 
 const responsesPassthroughEntry: StrategyEntry<ResponsesStrategyContext> = {
   name: 'responses-passthrough',
-  canHandle: () => true,
+  canHandle: (_model, ctx) => !ctx?.chatRequest,
   async execute(ctx) {
     const strategy = createResponsesPassthroughStrategy(ctx.copilotClient, ctx.payload, {
       vision: ctx.vision,
@@ -45,3 +48,13 @@ const responsesPassthroughEntry: StrategyEntry<ResponsesStrategyContext> = {
 
 export const responsesStrategyRegistry = new StrategyRegistry<ResponsesStrategyContext>()
 responsesStrategyRegistry.register(responsesPassthroughEntry)
+responsesStrategyRegistry.register({
+  name: 'responses-chat-completions',
+  canHandle: (_model, ctx) => Boolean(ctx?.chatRequest),
+  async execute(ctx) {
+    const strategy = createResponsesViaChatCompletionsStrategy(ctx)
+    return runStrategy(strategy, ctx.upstreamSignal, {
+      onStreamError: error => runtimeStore.recordStreamError(ctx.requestId, error),
+    })
+  },
+})

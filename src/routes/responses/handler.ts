@@ -1,8 +1,9 @@
 import type { ResponsesStrategyContext } from './strategy-registry'
 import type { PipelineResult } from '~/pipeline/runner'
+import type { ResponsesChatRequest } from '~/translator/responses/chat-bridge-types'
 import type { ResponseFunctionTool, ResponseInputItem, ResponsesPayload, ResponsesResult, ResponseTool } from '~/types'
 import consola from 'consola'
-import { throwInvalidRequestError } from '~/lib/error'
+import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
 import { configStore, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 
@@ -10,6 +11,8 @@ import { applyContextManagement, compactInputByLatestCompaction, getResponsesReq
 import { applyResponsesParameterFilters, clampResponsesOutputTokens, clampResponsesReasoningEffort } from '~/transform/parameter-filter'
 import { RESPONSES_INPUT_POLICY, stripPhaseFromInputMessages } from '~/transform/responses-input'
 import { normalizeFunctionParametersSchemaForCopilotWithChangeMetadata } from '~/translator/responses/function-schema'
+import { translateResponsesToChat } from '~/translator/responses/responses-to-chat'
+import { resolveResponsesStrategyName } from './capabilities'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
 import { responsesStrategyRegistry } from './strategy-registry'
 
@@ -37,6 +40,7 @@ export async function handleResponsesCore(
   const emulatorMode = configStore.isEmulatorEnabled()
   let originalPayload: ResponsesPayload | undefined
   let emulatorPrepared: ReturnType<typeof prepareEmulatorRequest> | undefined
+  let chatRequest: ResponsesChatRequest | undefined
 
   const pipelineResult = await runPipeline<ResponsesPayload, ResponsesStrategyContext>(
     { body, signal, headers, requestId, callerRequestId },
@@ -48,7 +52,21 @@ export async function handleResponsesCore(
         emulatorPrepared = emulatorMode ? prepareEmulatorRequest(payload) : undefined
         return emulatorPrepared?.upstreamPayload ?? payload
       },
-      afterTransform({ payload, selectedModel }) {
+      afterTransform({ payload, selectedModel, meta }) {
+        chatRequest = undefined
+        if (selectedModel && resolveResponsesStrategyName(selectedModel) === 'responses-chat-completions') {
+          if (clampResponsesReasoningEffort(payload, selectedModel))
+            runtimeStore.requests.recordEffect(requestId, 'responses.reasoning_effort_lowered')
+          chatRequest = withTranslationErrors(() => translateResponsesToChat(payload, selectedModel, {
+            allowApplyPatchGrammar: configStore.isFunctionApplyPatchEnabled(),
+            requestContext: meta.requestContext,
+          }))
+          for (const issue of chatRequest.issues) {
+            runtimeStore.requests.recordEffect(requestId, 'responses.chat_translation_lossy')
+            consola.warn(`Responses Chat translation: ${issue.kind}`)
+          }
+          return
+        }
         const toolEffects = applyResponsesToolTransforms(payload)
         if (toolEffects.applyPatch > 0) {
           runtimeStore.requests.recordEffect(
@@ -143,6 +161,7 @@ export async function handleResponsesCore(
           requestId: strategyRequestId,
           copilotClient,
           payload,
+          chatRequest,
           upstreamSignal,
           requestContext: meta.requestContext ?? {},
           vision,
