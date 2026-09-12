@@ -23,6 +23,7 @@ import {
   createUpstreamSignalFromConfig,
 } from '~/lib/upstream-signal'
 import { effectForStrategy } from '~/observability/effects'
+import { resolveResponsesStrategyName } from '~/routes/responses/capabilities'
 import { configStore, getCurrentRoutedAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 import { resolveRequestModel } from '~/transform/resolve-model'
 
@@ -416,7 +417,8 @@ function validateFallback(
   const target = modelCache.findById(targetId)
   if (!target)
     return { ok: false, reason: 'unknown-target' }
-  if (protocol === 'responses' && !modelCache.supportsEndpoint(target, RESPONSES_ENDPOINT))
+  const responsesStrategy = protocol === 'responses' ? resolveResponsesStrategyName(target) : undefined
+  if (protocol === 'responses' && !responsesStrategy)
     return { ok: false, reason: 'unsupported-endpoint' }
   if (requestsTools(payload) && !modelCache.supportsToolCalls(target))
     return { ok: false, reason: 'unsupported-tools' }
@@ -439,7 +441,9 @@ function validateFallback(
   ) {
     return { ok: false, reason: 'unsupported-thinking' }
   }
-  if (requestsStructuredOutput(protocol, payload) && !supportsStructuredOutput(protocol, target))
+  const chatJsonMode = responsesStrategy === 'responses-chat-completions'
+    && asRecord(asRecord(asRecord(payload)?.text)?.format)?.type === 'json_object'
+  if (!chatJsonMode && requestsStructuredOutput(protocol, payload) && !supportsStructuredOutput(protocol, target))
     return { ok: false, reason: 'unsupported-structured-output' }
 
   return { ok: true, target }

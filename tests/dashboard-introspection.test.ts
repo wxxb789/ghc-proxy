@@ -44,6 +44,30 @@ afterEach(() => {
 })
 
 describe('dashboard model introspection', () => {
+  test('discloses translated Responses without claiming native upstream support', () => {
+    getCachedConfig().responsesChatCompletionsFallback = true
+    getCachedConfig().responsesApiAutoContextManagement = true
+    getCachedConfig().responsesApiContextManagementModels = ['gemini-test']
+    const gemini = buildModel('gemini-test', {
+      supported_endpoints: ['/chat/completions'],
+    })
+    gemini.capabilities.supports.reasoning_effort = ['low', 'high']
+    modelCache.cacheModels(buildModelsResponse(gemini))
+    expect(getDashboardModels()[0]).toMatchObject({
+      upstream: { endpoints: ['/chat/completions'] },
+      effective: {
+        responsesAvailable: false,
+        nativeResponsesAvailable: false,
+        defaultResponsesStrategy: 'responses-chat-completions',
+        messagesStructuredOutput: false,
+        responsesParameterFilters: [],
+        contextManagement: false,
+      },
+    })
+    getCachedConfig().responsesChatCompletionsFallback = false
+    expect(getDashboardModels()[0]?.effective.defaultResponsesStrategy).toBeNull()
+  })
+
   test('keeps upstream metadata separate from proxy-effective behavior', () => {
     const native = buildModel('claude-sonnet-4.5', {
       supported_endpoints: ['/v1/messages', '/chat/completions'],

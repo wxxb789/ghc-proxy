@@ -33,6 +33,14 @@ export const PROXY_EFFECT_DEFINITIONS = {
     category: 'Strategy',
     label: 'Responses passthrough selected',
   },
+  'strategy.responses_chat_completions': {
+    category: 'Strategy',
+    label: 'Responses translated through Chat Completions',
+  },
+  'responses.chat_translation_lossy': {
+    category: 'Translation',
+    label: 'Responses Chat compatibility adjustment',
+  },
   'strategy.responses_translation': {
     category: 'Strategy',
     label: 'Messages translated through Responses',
@@ -168,6 +176,8 @@ export function effectForStrategy(
   }
   if (protocol === 'responses' && strategy === 'responses-passthrough')
     return 'strategy.responses_passthrough'
+  if (protocol === 'responses' && strategy === 'responses-chat-completions')
+    return 'strategy.responses_chat_completions'
   if (protocol === 'openai-chat' && strategy === 'chat-completions')
     return 'strategy.chat_completions'
   return undefined

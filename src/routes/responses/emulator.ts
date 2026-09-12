@@ -347,6 +347,9 @@ function convertOutputItemsToInputItems(
       case 'function_call':
         items.push(convertFunctionCallOutputToInput(item))
         break
+      case 'custom_tool_call':
+        items.push(cloneValue(item))
+        break
       case 'reasoning': {
         const reasoningInput = convertReasoningOutputToInput(item)
         if (reasoningInput) {
@@ -370,6 +373,7 @@ function convertMessageOutputToInput(
     type: 'message',
     role: item.role,
     status: item.status,
+    ...(item.phase ? { phase: item.phase } : {}),
     content: item.content?.map((content) => {
       if (content.type === 'output_text' && typeof content.text === 'string') {
         return {
@@ -389,6 +393,7 @@ function convertFunctionCallOutputToInput(
     type: 'function_call',
     call_id: item.call_id,
     name: item.name,
+    ...('namespace' in item && typeof item.namespace === 'string' ? { namespace: item.namespace } : {}),
     arguments: item.arguments,
     status: item.status,
   }
