@@ -3,7 +3,7 @@ import type { StrategyEntry } from '~/dispatch'
 import type { ExecutionResult } from '~/lib/execution-strategy'
 import type { IngestContext, PipelineConfig, TransformContext } from '~/pipeline/runner'
 
-import type { ChatCompletionsPayload, Model } from '~/types'
+import type { ChatCompletionsPayload, Model, ResponsesPayload } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import consola from 'consola'
@@ -705,6 +705,48 @@ describe('runPipeline', () => {
       to: 'target',
     })
     expect(result).toEqual({ kind: 'json', data: { model: 'target', ok: true } })
+  })
+
+  test('allows Responses JSON mode on a Chat-only fallback without structured outputs', async () => {
+    getCachedConfig().responsesChatCompletionsFallback = true
+    getCachedConfig().overloadFallbacks = { source: 'target' }
+    const target = buildModel('target', { supported_endpoints: ['/chat/completions'] })
+    target.capabilities.supports.structured_outputs = false
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('source', { supported_endpoints: ['/responses'] }),
+      target,
+    ))
+    interface Context {
+      model: string
+      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
+    }
+    const attempts: string[] = []
+    const registry = new StrategyRegistry<Context>()
+    registry.register({
+      name: 'json-mode-fallback',
+      canHandle: () => true,
+      execute: async ({ model, recovery }) => {
+        attempts.push(model)
+        if (model === 'source') {
+          recovery.sourceModel = model
+          throw new TerminalUpstreamRecoveryError(
+            new HTTPError(529, { error: { message: 'source overloaded', type: 'overloaded_error' } }),
+            recovery,
+          )
+        }
+        return { kind: 'json', data: { model } }
+      },
+    })
+    const result = await runPipeline<ResponsesPayload, Context>({
+      ...makeParams({ model: 'source', messages: [] }),
+      body: { model: 'source', input: 'Return JSON.', text: { format: { type: 'json_object' } } },
+    }, {
+      protocol: 'responses',
+      strategyRegistry: registry,
+      buildStrategyContext: ({ payload, recovery }) => ({ model: payload.model, recovery }),
+    })
+    expect(attempts).toEqual(['source', 'target'])
+    expect(result.result).toEqual({ kind: 'json', data: { model: 'target' } })
   })
 
   test('shares one absolute upstream timeout across source and fallback attempts', async () => {

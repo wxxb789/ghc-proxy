@@ -9,6 +9,7 @@ import {
   parseResponsesInputTokensPayload,
   parseResponsesPayload,
 } from '~/ingest/validation'
+import { getCachedConfig } from '~/lib/config'
 import { HTTPError, withTranslationErrors } from '~/lib/error'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { REASONING_EFFORT_VALUES } from '~/types'
@@ -738,6 +739,87 @@ describe('Responses payload validation', () => {
       type: 'function',
       name: 'read_file',
     })
+  })
+
+  test('matches custom tool choice against custom declarations', () => {
+    const request = {
+      model: 'chat-only',
+      input: 'hello',
+      tools: [{ type: 'custom', name: 'write_note' }],
+      tool_choice: { type: 'custom' as const, name: 'write_note' },
+    }
+    expect(parseResponsesPayload(request).tool_choice).toEqual(request.tool_choice)
+    expect(() => parseResponsesPayload({
+      ...request,
+      tools: [{ type: 'function', name: 'write_note', parameters: { type: 'object' } }],
+    })).toThrow(HTTPError)
+  })
+
+  const namedToolChoices: Array<{
+    label: string
+    type: 'function' | 'custom'
+    name: string
+    shim: boolean
+    valid: boolean
+  }> = [
+    { label: 'ordinary function', type: 'function', name: 'lookup', shim: false, valid: true },
+    { label: 'enabled patch shim', type: 'function', name: 'apply_patch', shim: true, valid: true },
+    { label: 'disabled patch shim', type: 'function', name: 'apply_patch', shim: false, valid: false },
+    { label: 'custom text tool', type: 'custom', name: 'write_note', shim: false, valid: true },
+    { label: 'native custom patch without shim', type: 'custom', name: 'apply_patch', shim: false, valid: true },
+    { label: 'function mistaken for custom', type: 'custom', name: 'lookup', shim: true, valid: false },
+    { label: 'missing function', type: 'function', name: 'missing', shim: true, valid: false },
+    { label: 'missing custom tool', type: 'custom', name: 'missing', shim: true, valid: false },
+  ]
+
+  test.each(namedToolChoices)('preserves named tool membership for $label', ({ type, name, shim, valid }) => {
+    const config = getCachedConfig()
+    const hadShimSetting = Object.hasOwn(config, 'useFunctionApplyPatch')
+    const previousShim = config.useFunctionApplyPatch
+    config.useFunctionApplyPatch = shim
+    const choice = { type, name }
+    const request = {
+      model: 'chat-only',
+      input: 'hello',
+      tools: [
+        { type: 'function', name: 'lookup', parameters: { type: 'object' } },
+        { type: 'custom', name: 'write_note' },
+        { type: 'custom', name: 'apply_patch' },
+        { type: 'web_search' },
+      ],
+      tool_choice: choice,
+    }
+    try {
+      if (valid) {
+        expect(parseResponsesPayload(request).tool_choice).toEqual(choice)
+      }
+      else {
+        let failure: unknown
+        try {
+          parseResponsesPayload(request)
+        }
+        catch (error) {
+          failure = error
+        }
+        expect(failure).toBeInstanceOf(HTTPError)
+        if (!(failure instanceof HTTPError))
+          throw new Error('Expected named tool validation to fail')
+        expect(failure.status).toBe(400)
+        expect(failure.body.error.details).toContainEqual({
+          code: 'custom',
+          path: ['tool_choice', 'name'],
+          message: type === 'custom'
+            ? 'tool_choice.name must reference a declared custom tool'
+            : 'tool_choice.name must reference a declared function tool',
+        })
+      }
+    }
+    finally {
+      if (hadShimSetting)
+        config.useFunctionApplyPatch = previousShim
+      else
+        delete config.useFunctionApplyPatch
+    }
   })
 
   test('accepts apply_patch tool_choice when the custom-tool shim is enabled', () => {

@@ -2,8 +2,13 @@
 
 import type { Socket } from 'node:net'
 import type { Dispatcher } from 'undici'
+import type {
+  CapiChatCompletionChunk,
+  CapiChatCompletionResponse,
+} from '~/core/capi'
 import type { AccountRoutingConfig } from '~/lib/account-routing'
-import type { CopilotUsageResponse } from '~/types'
+import type { SSEStreamChunk } from '~/lib/execution-strategy'
+import type { CopilotUsageResponse, Model } from '~/types'
 
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -17,8 +22,10 @@ import { Elysia } from 'elysia'
 import { Agent } from 'undici'
 
 import { AccountManager } from '~/accounts/manager'
+import { CopilotClient } from '~/clients'
 import { UpstreamRequestQueue } from '~/clients/upstream-queue'
 import { compileAccountRouting } from '~/lib/account-routing'
+import { getCachedConfig } from '~/lib/config'
 import {
   finalizeGitHubCredentialMigration,
   prepareGitHubCredential,
@@ -69,6 +76,22 @@ interface HttpProbeResult {
   status: number
 }
 
+interface LocalRequestOptions {
+  body?: string
+  headers?: Record<string, string>
+  method?: string
+}
+
+interface SelfcheckSseEvent {
+  data?: string
+  event?: string
+}
+
+type SelfcheckToolOutput = Record<string, unknown> & {
+  call_id: string
+  type: 'custom_tool_call' | 'function_call'
+}
+
 const PROBE_ENCODINGS = [
   'o200k_base',
   'cl100k_base',
@@ -78,6 +101,8 @@ const PROBE_ENCODINGS = [
 ] as const
 
 const PROBE_MESSAGE = 'ghc-proxy selfcheck: probe text for tokenizer chunk load'
+const SELFCHECK_SSE_BLOCK_SEPARATOR_RE = /\r?\n\r?\n/
+const SELFCHECK_SSE_LINE_SEPARATOR_RE = /\r?\n/
 
 const RUNTIME_PROBES = [
   ['http-error-response-contract', probeHttpErrorResponseContract],
@@ -833,6 +858,436 @@ async function probeAccountHostnameRouting(): Promise<void> {
   }
 }
 
+async function probeResponsesChatCompletionsBridge(): Promise<void> {
+  const accountName = 'selfcheck-responses-chat'
+  const modelId = 'selfcheck-chat-only'
+  const host = 'responses-chat.localhost'
+  const runtime = createAccountRuntime(accountName)
+  runtime.auth.copilotToken = 'selfcheck-responses-chat-token'
+  runtime.models.cacheModels({
+    object: 'list',
+    data: [
+      {
+        id: modelId,
+        model_picker_enabled: true,
+        name: modelId,
+        object: 'model',
+        preview: false,
+        vendor: 'google',
+        version: 'selfcheck',
+        capabilities: {
+          family: 'gemini',
+          limits: {
+            max_context_window_tokens: 128_000,
+            max_output_tokens: 4_096,
+            max_prompt_tokens: 100_000,
+          },
+          object: 'model_capabilities',
+          supports: {
+            parallel_tool_calls: true,
+            streaming: true,
+            tool_calls: true,
+          },
+          tokenizer: 'o200k_base',
+          type: 'chat',
+        },
+        supported_endpoints: ['/chat/completions'],
+      } satisfies Model,
+    ],
+  })
+
+  const routing = compileAccountRouting({
+    baseHostname: 'localhost',
+    defaultAccount: accountName,
+    hostnames: { [host]: accountName },
+  }, [accountName])
+  const cachedConfig = getCachedConfig() as Record<string, unknown>
+  const configSnapshot = structuredClone(cachedConfig)
+  const originalCreateChatCompletions = CopilotClient.prototype.createChatCompletions
+  const originalCreateResponses = CopilotClient.prototype.createResponses
+  const nativeRouteSentinel = new Error('selfcheck native Responses dispatch escaped the Chat bridge probe')
+  const calls: Array<{
+    payload: Parameters<typeof CopilotClient.prototype.createChatCompletions>[0]
+  }> = []
+  let streamCalls = 0
+  let app: ReturnType<typeof createProxyServer> | undefined
+  let nodeListener: NodeDashboardListener | undefined
+
+  try {
+    configureAccountRuntimes(routing, [runtime])
+    cachedConfig.responsesChatCompletionsFallback = true
+    const fakeCreateChatCompletions: typeof CopilotClient.prototype.createChatCompletions = async (payload) => {
+      calls.push({ payload })
+      if (payload.stream === true) {
+        const streamKind = streamCalls++
+        return createSelfcheckChatStream(streamKind, payload.model)
+      }
+
+      const hasToolContinuation = payload.messages.some(message => message.role === 'tool')
+      if (hasToolContinuation) {
+        return createSelfcheckChatResponse(payload.model, {
+          content: 'continued after tools',
+          id: 'chatcmpl_selfcheck_continuation',
+          usage: { completion_tokens: 4, prompt_tokens: 18, total_tokens: 22 },
+        })
+      }
+
+      const functionAlias = payload.tools?.[0]?.function.name ?? 'lookup'
+      const customAlias = payload.tools?.[1]?.function.name ?? 'write_note'
+      return createSelfcheckChatResponse(payload.model, {
+        id: 'chatcmpl_selfcheck_tools',
+        toolCalls: [
+          {
+            function: { arguments: '{"key":"value"}', name: functionAlias },
+            id: 'upstream-function-call',
+          },
+          {
+            function: { arguments: '{"input":"note body"}', name: customAlias },
+            id: 'upstream-custom-call',
+          },
+        ],
+        usage: { completion_tokens: 5, prompt_tokens: 17, total_tokens: 22 },
+      })
+    }
+    CopilotClient.prototype.createChatCompletions = fakeCreateChatCompletions
+    const fakeCreateResponses: typeof CopilotClient.prototype.createResponses = async () => {
+      throw nativeRouteSentinel
+    }
+    CopilotClient.prototype.createResponses = fakeCreateResponses
+
+    app = createProxyServer({ logRequests: false })
+    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
+      if (!process.versions.bun)
+        nodeListener = server as unknown as NodeDashboardListener
+    })
+    const port = await probeListenerPort(app, nodeListener, 'Responses Chat bridge')
+    const request = async (stage: string, body: Record<string, unknown>) => {
+      try {
+        const requestBody = JSON.stringify(body)
+        if (process.versions.bun) {
+          const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+            body: requestBody,
+            signal: AbortSignal.timeout(5000),
+            headers: {
+              'accept': 'application/json',
+              'content-type': 'application/json',
+              'host': `${host}:${port}`,
+            },
+            method: 'POST',
+          })
+          return { body: await response.text(), status: response.status }
+        }
+        return await requestLocal(
+          '127.0.0.1',
+          port,
+          `${host}:${port}`,
+          '/v1/responses',
+          {
+            body: requestBody,
+            headers: { 'accept': 'application/json', 'content-type': 'application/json' },
+            method: 'POST',
+          },
+        )
+      }
+      catch (error) {
+        throw new Error(`${stage}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+      }
+    }
+
+    const tools = [
+      {
+        description: 'Look up a value.',
+        name: 'lookup',
+        namespace: 'archive',
+        parameters: { properties: { key: { type: 'string' } }, type: 'object' },
+        strict: false,
+        type: 'function',
+      },
+      {
+        name: 'write_note',
+        namespace: 'notes',
+        type: 'custom',
+      },
+    ]
+    const jsonResponse = await request('json', {
+      input: 'Call both tools.',
+      model: modelId,
+      store: false,
+      tools,
+    })
+    assertProbe(jsonResponse.status === 200, `Responses Chat JSON returned ${jsonResponse.status}`)
+    const json = JSON.parse(jsonResponse.body) as Record<string, unknown>
+    assertProbe(json.object === 'response', 'Responses Chat JSON lost the response object type')
+    assertProbe(json.status === 'completed', 'Responses Chat JSON did not complete')
+    assertProbe(
+      JSON.stringify(json.usage) === JSON.stringify({
+        input_tokens: 17,
+        output_tokens: 5,
+        total_tokens: 22,
+      }),
+      'Responses Chat JSON lost usage accounting',
+    )
+    const output = Array.isArray(json.output)
+      ? json.output as Array<Record<string, unknown>>
+      : []
+    const functionOutput = output.find(item => item.type === 'function_call')
+    const customOutput = output.find(item => item.type === 'custom_tool_call')
+    assertProbe(functionOutput?.name === 'lookup', 'Responses Chat JSON did not restore the function name')
+    assertProbe(functionOutput?.namespace === 'archive', 'Responses Chat JSON did not restore the function namespace')
+    assertProbe(functionOutput?.call_id === 'upstream-function-call', 'Responses Chat JSON changed the function call ID')
+    assertProbe(customOutput?.name === 'write_note', 'Responses Chat JSON did not restore the custom tool name')
+    assertProbe(customOutput?.namespace === 'notes', 'Responses Chat JSON did not restore the custom tool namespace')
+    assertProbe(customOutput?.input === 'note body', 'Responses Chat JSON did not unwrap custom tool input')
+    assertProbe(calls.length === 1, `expected one JSON Chat call, observed ${calls.length}`)
+    assertProbe(calls[0]?.payload.tools?.length === 2, 'Responses Chat request did not preserve both tool definitions')
+    assertProbe(isSelfcheckToolOutput(functionOutput, 'function_call'), 'Responses Chat JSON omitted the function output call ID')
+    assertProbe(isSelfcheckToolOutput(customOutput, 'custom_tool_call'), 'Responses Chat JSON omitted the custom output call ID')
+    const functionCall = { ...functionOutput, type: 'function_call' as const }
+    const customCall = { ...customOutput, type: 'custom_tool_call' as const }
+
+    const continuationResponse = await request('continuation', {
+      input: [
+        { content: 'Continue after tool execution.', role: 'user', type: 'message' },
+        // Keep parallel calls in one assistant turn before either result. The
+        // bridge canonicalizes the following tool outputs into that turn's
+        // tool lane while retaining each call ID and namespace.
+        functionCall,
+        customCall,
+        { call_id: functionCall.call_id, output: '{"value":42}', type: 'function_call_output' },
+        { call_id: customCall.call_id, output: 'saved', type: 'custom_tool_call_output' },
+      ],
+      model: modelId,
+      store: false,
+      tools,
+    })
+    assertProbe(continuationResponse.status === 200, `Responses Chat continuation returned ${continuationResponse.status}`)
+    const continuation = JSON.parse(continuationResponse.body) as Record<string, unknown>
+    assertProbe(continuation.output_text === 'continued after tools', 'Responses Chat continuation lost assistant text')
+    assertProbe(
+      JSON.stringify(continuation.usage) === JSON.stringify({
+        input_tokens: 18,
+        output_tokens: 4,
+        total_tokens: 22,
+      }),
+      'Responses Chat continuation lost usage accounting',
+    )
+    const continuationPayload = calls[1]?.payload
+    assertProbe(continuationPayload !== undefined, 'Responses Chat continuation did not dispatch to Chat')
+    assertProbe(
+      continuationPayload.messages.some(message => message.role === 'assistant' && message.tool_calls?.length === 2),
+      'Responses Chat continuation did not rebuild the assistant tool-call turn',
+    )
+    assertProbe(
+      continuationPayload.messages.filter(message => message.role === 'tool').length === 2,
+      'Responses Chat continuation did not preserve both tool outputs',
+    )
+
+    const streamResponse = await request('stream', {
+      input: 'Stream a text answer.',
+      model: modelId,
+      store: false,
+      stream: true,
+    })
+    assertProbe(streamResponse.status === 200, `Responses Chat SSE returned ${streamResponse.status}`)
+    const streamEvents = parseSelfcheckSse(streamResponse.body)
+    assertResponsesChatSseLifecycle(streamEvents, {
+      outputText: 'streamed response',
+      terminal: 'response.completed',
+      usage: { input_tokens: 19, output_tokens: 4, total_tokens: 23 },
+    })
+
+    const eofResponse = await request('stream-eof', {
+      input: 'End the stream early.',
+      model: modelId,
+      store: false,
+      stream: true,
+    })
+    assertProbe(eofResponse.status === 200, `Responses Chat EOF SSE returned ${eofResponse.status}`)
+    assertResponsesChatSseLifecycle(parseSelfcheckSse(eofResponse.body), {
+      outputText: undefined,
+      terminal: 'response.failed',
+    })
+    assertProbe(!eofResponse.body.includes('response.completed'), 'Responses Chat EOF fabricated a successful terminal event')
+
+    const errorResponse = await request('stream-error', {
+      input: 'Fail the stream.',
+      model: modelId,
+      store: false,
+      stream: true,
+    })
+    assertProbe(errorResponse.status === 200, `Responses Chat error SSE returned ${errorResponse.status}`)
+    assertResponsesChatSseLifecycle(parseSelfcheckSse(errorResponse.body), {
+      outputText: undefined,
+      terminal: 'response.failed',
+    })
+    assertProbe(!errorResponse.body.includes('selfcheck native stream failure'), 'Responses Chat SSE leaked the upstream exception')
+  }
+  finally {
+    CopilotClient.prototype.createChatCompletions = originalCreateChatCompletions
+    CopilotClient.prototype.createResponses = originalCreateResponses
+    for (const key of Object.keys(cachedConfig))
+      delete cachedConfig[key]
+    Object.assign(cachedConfig, configSnapshot)
+    resetAccountRuntimes()
+    if (process.versions.bun) {
+      await app?.stop()
+    }
+    else {
+      await nodeListener?.raw.close(true)
+    }
+  }
+}
+
+function isSelfcheckToolOutput(
+  value: Record<string, unknown> | undefined,
+  type: SelfcheckToolOutput['type'],
+): value is SelfcheckToolOutput {
+  return value?.type === type && typeof value.call_id === 'string'
+}
+
+function createSelfcheckChatResponse(
+  model: string,
+  options: {
+    content?: string
+    id: string
+    toolCalls?: Array<{ function: { arguments: string, name: string }, id: string }>
+    usage: { completion_tokens: number, prompt_tokens: number, total_tokens: number }
+  },
+): CapiChatCompletionResponse {
+  return {
+    choices: [{
+      finish_reason: options.toolCalls
+        ? 'tool_calls'
+        : 'stop',
+      index: 0,
+      logprobs: null,
+      message: {
+        content: options.content ?? null,
+        role: 'assistant',
+        ...(options.toolCalls
+          ? {
+              tool_calls: options.toolCalls.map(toolCall => ({
+                function: toolCall.function,
+                id: toolCall.id,
+                type: 'function' as const,
+              })),
+            }
+          : {}),
+      },
+    }],
+    created: 1_757_600_000,
+    id: options.id,
+    model,
+    object: 'chat.completion',
+    usage: options.usage,
+  }
+}
+
+async function* createSelfcheckChatStream(
+  streamKind: number,
+  model: string,
+): AsyncGenerator<SSEStreamChunk> {
+  if (streamKind === 0) {
+    yield { data: JSON.stringify(createSelfcheckChatChunk(model, { role: 'assistant' })) }
+    yield { data: JSON.stringify(createSelfcheckChatChunk(model, { content: 'streamed ' })) }
+    yield { data: JSON.stringify(createSelfcheckChatChunk(model, { content: 'response' })) }
+    yield { data: JSON.stringify(createSelfcheckChatChunk(model, {}, 'stop', {
+      completion_tokens: 4,
+      prompt_tokens: 19,
+      total_tokens: 23,
+    })) }
+    // A usage-only tail must be consumed before the bridge closes the stream.
+    yield { data: JSON.stringify({
+      choices: [],
+      created: 1_757_600_000,
+      id: 'chatcmpl_selfcheck_stream',
+      model,
+      object: 'chat.completion.chunk',
+      usage: { completion_tokens: 4, prompt_tokens: 19, total_tokens: 23 },
+    } satisfies CapiChatCompletionChunk) }
+    yield { data: '[DONE]' }
+    return
+  }
+
+  yield { data: JSON.stringify(createSelfcheckChatChunk(model, { content: 'partial' })) }
+  if (streamKind === 2)
+    throw new Error('selfcheck native stream failure')
+}
+
+function createSelfcheckChatChunk(
+  model: string,
+  delta: Record<string, unknown>,
+  finishReason: CapiChatCompletionChunk['choices'][number]['finish_reason'] = null,
+  usage?: { completion_tokens: number, prompt_tokens: number, total_tokens: number },
+): CapiChatCompletionChunk {
+  return {
+    choices: [{
+      delta: delta as CapiChatCompletionChunk['choices'][number]['delta'],
+      finish_reason: finishReason,
+      index: 0,
+      logprobs: null,
+    }],
+    created: 1_757_600_000,
+    id: 'chatcmpl_selfcheck_stream',
+    model,
+    object: 'chat.completion.chunk',
+    ...(usage ? { usage } : {}),
+  }
+}
+
+function parseSelfcheckSse(body: string): Array<SelfcheckSseEvent> {
+  return body
+    .split(SELFCHECK_SSE_BLOCK_SEPARATOR_RE)
+    .map((block) => {
+      const event: SelfcheckSseEvent = {}
+      for (const line of block.split(SELFCHECK_SSE_LINE_SEPARATOR_RE)) {
+        if (line.startsWith('event: '))
+          event.event = line.slice('event: '.length)
+        if (line.startsWith('data: '))
+          event.data = event.data ? `${event.data}\n${line.slice('data: '.length)}` : line.slice('data: '.length)
+      }
+      return event
+    })
+    .filter(event => event.event !== undefined || event.data !== undefined)
+}
+
+function assertResponsesChatSseLifecycle(
+  events: Array<SelfcheckSseEvent>,
+  expected: {
+    outputText?: string
+    terminal: 'response.completed' | 'response.failed'
+    usage?: Record<string, unknown>
+  },
+): void {
+  const parsed = events
+    .filter(event => event.data !== undefined)
+    .map(event => JSON.parse(event.data!) as Record<string, unknown>)
+  const types = parsed.map(event => event.type)
+  const terminalEvents = parsed.filter(event => event.type === 'response.completed' || event.type === 'response.failed' || event.type === 'response.incomplete')
+  assertProbe(types.includes('response.created'), 'Responses Chat SSE omitted response.created')
+  assertProbe(terminalEvents.length === 1, `Responses Chat SSE emitted ${terminalEvents.length} terminal events`)
+  assertProbe(terminalEvents[0]?.type === expected.terminal, `Responses Chat SSE terminal was ${String(terminalEvents[0]?.type)}`)
+
+  const sequenceNumbers = parsed
+    .map(event => event.sequence_number)
+    .filter((value): value is number => typeof value === 'number')
+  assertProbe(
+    sequenceNumbers.every((value, index) => index === 0 || value > sequenceNumbers[index - 1]!),
+    'Responses Chat SSE sequence numbers were not strictly increasing',
+  )
+
+  if (expected.outputText !== undefined) {
+    assertProbe(types.includes('response.output_text.delta'), 'Responses Chat SSE omitted text deltas')
+    assertProbe(types.includes('response.output_text.done'), 'Responses Chat SSE omitted text completion')
+  }
+
+  const terminalResponse = terminalEvents[0]?.response as Record<string, unknown> | undefined
+  if (expected.outputText !== undefined)
+    assertProbe(terminalResponse?.output_text === expected.outputText, 'Responses Chat SSE terminal lost output text')
+  if (expected.usage !== undefined)
+    assertProbe(JSON.stringify(terminalResponse?.usage) === JSON.stringify(expected.usage), 'Responses Chat SSE terminal lost usage')
+}
+
 function selfcheckUsageFixture(): CopilotUsageResponse {
   const quota = {
     entitlement: 100,
@@ -899,15 +1354,20 @@ function requestLocal(
   port: number,
   host: string,
   requestPath: string,
+  options: LocalRequestOptions = {},
 ): Promise<HttpProbeResult> {
   return new Promise((resolve, reject) => {
     const request = httpRequest({
       headers: {
         connection: 'close',
         host,
+        ...(options.body !== undefined
+          ? { 'content-length': String(new TextEncoder().encode(options.body).byteLength) }
+          : {}),
+        ...options.headers,
       },
       hostname: address,
-      method: 'GET',
+      method: options.method ?? 'GET',
       path: requestPath,
       port,
     }, (response) => {
@@ -922,8 +1382,10 @@ function requestLocal(
 
     request.on('error', reject)
     request.setTimeout(5_000, () => {
-      request.destroy(new Error(`dashboard listener probe timed out for ${address}`))
+      request.destroy(new Error(`local listener probe timed out for ${address}`))
     })
+    if (options.body)
+      request.write(options.body)
     request.end()
   })
 }
@@ -960,6 +1422,7 @@ async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
     await runRuntimeProbe('account-hostname-routing', probeAccountHostnameRouting),
     await runRuntimeProbe('legacy-single-account-routing-migration', probeLegacySingleAccountRoutingMigration),
     await runRuntimeProbe('dashboard-node-quota-projection', probeDashboardNodeQuotaProjection),
+    await runRuntimeProbe('responses-chat-completions-bridge', probeResponsesChatCompletionsBridge),
   ]
   const failed = [...probes, ...runtimeProbes].filter(p => !p.ok)
 

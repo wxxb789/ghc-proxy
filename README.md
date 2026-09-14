@@ -314,6 +314,7 @@ All fields are optional. The full schema:
 | `responsesApiParameterFiltersReplaceDefault` | `boolean` | `false` | Disable the built-in reasoning-model default rule so only your `responsesApiParameterFilters` apply |
 | `chatCompletionsUseMaxCompletionTokens` | `string[]` | `[]` | Extra model globs that rename Chat Completions `max_tokens` to `max_completion_tokens`; adds to the built-in `gpt-5.4` / `gpt-5.4-*` rules |
 | `responsesOfficialEmulator` | `boolean` | `false` | Enable local OpenAI-style Responses state emulation for `previous_response_id`, `conversation`, retrieve, input_items, delete, and input_tokens |
+| `responsesChatCompletionsFallback` | `boolean` | `false` | Opt in to the Responses create bridge for models that advertise `/chat/completions` but not `/responses` |
 | `responsesOfficialEmulatorTtlSeconds` | `number` | `14400` | In-memory TTL for locally emulated Responses state |
 | `modelReasoningEfforts` | `Record<string, string>` | `{}`; unlisted models use `high` | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (ascending) |
 | `upstreamQueueConcurrency` | `number` | `10` | Maximum concurrent Copilot upstream requests |
@@ -344,6 +345,7 @@ Example:
   "responsesApiContextManagementModels": ["gpt-5", "gpt-5-mini"],
   "chatCompletionsUseMaxCompletionTokens": [],
   "responsesOfficialEmulator": false,
+  "responsesChatCompletionsFallback": false,
   "responsesOfficialEmulatorTtlSeconds": 14400,
   "modelReasoningEfforts": {
     "gpt-5": "high",
@@ -471,7 +473,7 @@ The proxy authenticates with GitHub using the [device code OAuth flow](https://d
 
 When the Copilot token response includes `endpoints.api`, `ghc-proxy` now prefers that runtime API base automatically instead of relying only on the configured account type. This keeps enterprise/business routing aligned with the endpoint GitHub actually returned for the current token.
 
-Incoming requests hit an [Elysia](https://elysiajs.com/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use a native Responses path with explicit compatibility policies. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
+Incoming requests hit an [Elysia](https://elysiajs.com/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use native Responses when the selected model advertises `/responses`, or an explicitly enabled Responses-to-Chat bridge when it advertises only `/chat/completions`. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
 
 The built-in Dashboard projects process health, named account status, model routing, behavior, and recent request lifecycle metadata without storing request or response content. Legacy single-account startup automatically migrates to named routing; its protected Accounts view can then authenticate a new account with a dedicated hostname and switch the default account. See [Dashboard Observability](./docs/design/dashboard-observability.md).
 
@@ -482,7 +484,7 @@ For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-op
 `ghc-proxy` does not force every request through one protocol. The current routing rules are:
 
 - `POST /v1/chat/completions`: OpenAI Chat Completions -> shared planning pipeline -> Copilot `/chat/completions`
-- `POST /v1/responses`: OpenAI Responses create -> native Responses handler -> Copilot `/responses`
+- `POST /v1/responses`: OpenAI Responses create -> native Responses handler -> Copilot `/responses`, or (with `responsesChatCompletionsFallback: true`) Responses-to-Chat translation -> Copilot `/chat/completions` for Chat-only models
 - `POST /v1/responses/input_tokens`: Responses input-token counting passthrough by default, or local estimation in official emulator mode
 - `GET /v1/responses/:responseId`: Responses retrieve passthrough by default, or local retrieval in official emulator mode
 - `GET /v1/responses/:responseId/input_items`: Responses input-items passthrough by default, or local retrieval in official emulator mode
@@ -553,6 +555,7 @@ Dashboard routes are restricted to local access and return `403` when the peer, 
 - client-supplied `top_k` is rejected with `400` on the OpenAI Chat Completions and Responses boundaries because neither official OpenAI schema defines it; clients that send it by mistake receive an explicit error instead of a silent drop. Anthropic Messages `top_k` remains supported and is preserved when the proxy translates that request internally for Copilot
 - common official request fields such as `conversation`, `previous_response_id`, `max_tool_calls`, `truncation`, `user`, `prompt`, and `text` are now modeled explicitly instead of relying on loose passthrough alone
 - official `text.format` options are modeled explicitly, including `text`, `json_object`, and `json_schema`
+- `responsesChatCompletionsFallback` is opt-in and native-first: a model advertising `/responses` always stays on the native strategy; a Chat-only model is eligible only when it advertises `/chat/completions`. `responsesAvailable` and `upstream.endpoints` continue to describe native/upstream facts, while Dashboard `defaultResponsesStrategy` identifies the effective translated strategy
 - an opt-in `responsesOfficialEmulator` mode adds in-memory OpenAI-style state for `previous_response_id`, `conversation`, `GET /responses/{id}`, `GET /responses/{id}/input_items`, `DELETE /responses/{id}`, and `POST /responses/input_tokens`
 - emulator state is memory-only and expires after `responsesOfficialEmulatorTtlSeconds` (default `14400`, or 4 hours)
 - `background: true` is rejected explicitly while emulator mode is enabled
@@ -562,7 +565,7 @@ Dashboard routes are restricted to local access and return `403` when the peer, 
 - reasoning defaults for Anthropic -> Responses translation can be tuned with `modelReasoningEfforts`
 - request parameters that a model rejects (e.g. `temperature`/`top_p` on reasoning models) are stripped on the Responses boundary rather than leaked upstream as a `400`; see [Responses Parameter Filters](#responses-parameter-filters)
 - built-in web search (`web_search`, `web_search_preview`, and their dated variants) is forwarded to Copilot rather than blocked; every `/responses` model reached by the August 4, 2026 acceptance sweep accepted the tool, while functional search execution was verified on `gpt-5.6-sol` and `gpt-5.6-terra`, see [docs/research/responses-web-search.md](docs/research/responses-web-search.md)
-- external image URLs on the Responses path fail explicitly with `400`; use `file_id` or data URL image input instead
+- external image URLs on the native Responses path fail explicitly with `400`; the opt-in Chat bridge accepts only HTTP(S) or data URLs when the target's vision capability is eligible
 - official `input_file` and `item_reference` input items are modeled explicitly and validated, but the verified Copilot GPT Responses boundary is stateless: it rejects `store: true` and cannot resolve returned item IDs on later requests. The proxy deliberately applies a proxy-wide `store: false` policy, removes all `item_reference` items before dispatch, and removes `function_call_output` items whose `call_id` has no matching `function_call` in the same input array. Without the optional emulator, a caller that requested storage still receives a successful stateless response; retrieve/delete/continuation semantics are available only from the local emulator
 
 Example opt-in configuration for these two Responses-specific policies:
@@ -578,6 +581,38 @@ Example opt-in configuration for these two Responses-specific policies:
 ```
 
 > See [Responses Upstream Notes](./docs/responses-upstream-notes.md) for detailed upstream compatibility observations from live testing.
+
+### Responses via Chat Completions
+
+The create operation can be translated through Copilot Chat Completions for a
+model that does not advertise `/responses`:
+
+```json
+{
+  "responsesChatCompletionsFallback": true
+}
+```
+
+The bridge reuses the CAPI planning pipeline and translates ordinary text,
+instructions, message history, supported HTTP/data-URL images, function tools,
+and custom text tools. Namespaced tools use a request-local bounded alias map;
+custom text is carried through a reversible JSON `{ "input": "..." }`
+wrapper. `apply_patch` uses the existing `useFunctionApplyPatch` gate and is
+explicitly lossy. JSON mode maps to Chat JSON mode. JSON Schema and function
+`strict` are accepted only when the selected model metadata and internal CAPI
+wire type can preserve them. Translation warnings are observable; unsupported
+intent fails with a client-facing `400` instead of being silently dropped.
+
+The bridge is a proxy compatibility path, not upstream native Responses
+support. It does not execute hosted tools, resolve prompt templates or files,
+invent encrypted reasoning state, provide remote compaction, or add a second
+state store. `conversation`, `previous_response_id`, and `store` continuation
+are available only through the existing account-scoped local Responses
+emulator. The bridge covers `POST /responses` and `/v1/responses` create only;
+`input_tokens`, retrieve, input-items, and delete keep their existing
+native/emulator behavior. Enabling the flag is not evidence of Gemini model
+quality or complete Codex long-session compatibility; those claims require a
+pinned client fixture and separate verification.
 
 ### Responses Parameter Filters
 

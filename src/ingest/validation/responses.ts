@@ -403,20 +403,21 @@ function createResponsesPayloadSchema(options: {
       && typeof toolChoice.name === 'string'
       && Array.isArray(payload.tools)
     ) {
-      const declaredFunctionNames = payload.tools
-        .filter((tool) => {
-          if (tool.type === 'function' && typeof tool.name === 'string') {
-            return true
-          }
-          return configStore.isFunctionApplyPatchEnabled()
-            && tool.type === 'custom'
-            && tool.name === 'apply_patch'
-        })
-        .map(tool => tool.name)
-      if (!declaredFunctionNames.includes(toolChoice.name)) {
+      const useFunctionApplyPatch = configStore.isFunctionApplyPatchEnabled()
+      const hasDeclaredTool = payload.tools.some((tool) => {
+        if (tool.name !== toolChoice.name)
+          return false
+        if (toolChoice.type === 'custom')
+          return tool.type === 'custom'
+        return tool.type === 'function'
+          || (useFunctionApplyPatch && tool.type === 'custom' && tool.name === 'apply_patch')
+      })
+      if (!hasDeclaredTool) {
         ctx.addIssue({
           code: 'custom',
-          message: 'tool_choice.name must reference a declared function tool',
+          message: toolChoice.type === 'custom'
+            ? 'tool_choice.name must reference a declared custom tool'
+            : 'tool_choice.name must reference a declared function tool',
           path: ['tool_choice', 'name'],
         })
       }

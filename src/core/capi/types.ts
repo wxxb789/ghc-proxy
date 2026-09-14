@@ -44,11 +44,37 @@ export interface CapiTool extends Tool {
   copilot_cache_control?: CopilotCacheControl
 }
 
+export interface CapiFunctionTool extends Omit<Tool['function'], 'parameters'> {
+  parameters: Record<string, unknown>
+  strict?: boolean
+}
+
+export interface CapiResponseFormatJsonSchema {
+  type: 'json_schema'
+  json_schema: {
+    name: string
+    schema: Record<string, unknown>
+    description?: string
+    strict?: boolean
+  }
+}
+
+export type CapiResponseFormat
+  = | { type: 'json_object' }
+    | CapiResponseFormatJsonSchema
+
+export type CapiToolWithStrict = Omit<CapiTool, 'function'> & {
+  function: CapiFunctionTool
+}
+
 export interface CapiChatCompletionsPayload
-  extends Omit<ChatCompletionsPayload, 'messages' | 'tools'> {
+  extends Omit<ChatCompletionsPayload, 'messages' | 'tools' | 'response_format'> {
   messages: Array<CapiMessage>
-  tools?: Array<CapiTool> | null
+  tools?: Array<CapiToolWithStrict> | null
+  response_format?: CapiResponseFormat | null
   stream_options?: CapiStreamOptions | null
+  parallel_tool_calls?: boolean | null
+  max_completion_tokens?: number | null
   /**
    * Not part of the OpenAI chat schema — Copilot accepts it as an extension.
    * Probed 2026-07-26: accepted by every reachable model on both
@@ -104,7 +130,7 @@ export interface CapiChatCompletionChunk
 
 export interface CapiExecutionPlan {
   payload: CapiChatCompletionsPayload
-  tokenCountPayload: ChatCompletionsPayload
+  tokenCountPayload: CapiChatCompletionsPayload
   requestContext: CapiRequestContext
   initiator: 'user' | 'agent'
   profileId: 'base' | 'claude'

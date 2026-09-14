@@ -43,6 +43,7 @@ const configFileSchema = z.object({
   responsesApiParameterFiltersReplaceDefault: z.boolean().optional(),
   chatCompletionsUseMaxCompletionTokens: z.array(z.string()).optional(),
   responsesOfficialEmulator: z.boolean().optional(),
+  responsesChatCompletionsFallback: z.boolean().optional(),
   responsesOfficialEmulatorTtlSeconds: z.number().int().positive().optional(),
   modelReasoningEfforts: z.record(z.string(), reasoningEffortSchema).optional(),
   modelRewrites: z.array(z.object({ from: z.string(), to: z.string() })).optional(),

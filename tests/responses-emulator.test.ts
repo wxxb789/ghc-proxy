@@ -7,6 +7,7 @@ import { CopilotClient } from '~/clients'
 import { TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
 import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
+import { prepareEmulatorRequest } from '~/routes/responses/emulator'
 import { authStore, modelCache, responsesEmulatorState } from '~/state'
 import { createResponsesEmulatorState } from '~/state/responses-emulator-state'
 
@@ -86,6 +87,41 @@ afterEach(() => {
 })
 
 describe('responses official emulator', () => {
+  test('preserves a response message phase in continuation history', () => {
+    responsesEmulatorState.setResponse(buildResponsesResult({
+      id: 'resp_phase',
+      output: [{
+        id: 'msg_phase',
+        type: 'message',
+        role: 'assistant',
+        status: 'completed',
+        phase: 'commentary',
+        content: [{ type: 'output_text', text: 'intermediate', annotations: [] }],
+      }],
+    }))
+    responsesEmulatorState.setInputItems('resp_phase', [
+      { type: 'message', role: 'user', content: 'hello' },
+    ])
+
+    const prepared = prepareEmulatorRequest({
+      model: 'gpt-5',
+      previous_response_id: 'resp_phase',
+      input: 'continue',
+    })
+
+    expect(prepared.effectiveInputItems).toEqual([
+      { type: 'message', role: 'user', content: 'hello' },
+      {
+        type: 'message',
+        role: 'assistant',
+        status: 'completed',
+        phase: 'commentary',
+        content: [{ type: 'output_text', text: 'intermediate' }],
+      },
+      { type: 'message', role: 'user', content: 'continue' },
+    ])
+  })
+
   test('/v1/responses official emulator persists create, retrieve, and input_items state', async () => {
     const app = createApp()
     enableOfficialResponsesEmulator()
