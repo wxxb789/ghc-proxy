@@ -586,7 +586,6 @@ function parseNamespaceFromItem(item: RecordValue, path: string): string | undef
 function parseFunctionCallItem(
   item: RecordValue,
   path: string,
-  declared: Map<string, ToolDescriptor>,
   context: TranslationContext,
 ): ParsedCallItem {
   assertKnownKeys(item, FUNCTION_CALL_KEYS, path)
@@ -603,21 +602,6 @@ function parseFunctionCallItem(
   if (item.status !== undefined && item.status !== null && item.status !== 'completed') {
     fail('invalid_function_call_history', `${path}.status=${String(item.status)} is unresolved.`)
   }
-  const custom = declared.get(toolKey('custom', name, namespace))
-  const functionTool = declared.get(toolKey('function', name, namespace))
-  const callKind: ToolKind = custom && !functionTool ? 'custom' : 'function'
-  if (callKind === 'custom') {
-    const input = unwrapCustomInput(argumentsText)
-    return {
-      kind: 'call',
-      callKind,
-      callId,
-      name,
-      namespace,
-      argumentsText: JSON.stringify({ input }),
-      input: { input },
-    }
-  }
   let parsed: unknown
   try {
     parsed = JSON.parse(argumentsText)
@@ -630,26 +614,13 @@ function parseFunctionCallItem(
   }
   return {
     kind: 'call',
-    callKind,
+    callKind: 'function',
     callId,
     name,
     namespace,
     argumentsText,
     input: parsed,
   }
-}
-
-function unwrapCustomInput(argumentsText: string): string {
-  try {
-    const parsed = JSON.parse(argumentsText) as unknown
-    if (isRecord(parsed) && typeof parsed.input === 'string') {
-      return parsed.input
-    }
-  }
-  catch {
-    // A historical custom call may carry raw freeform text. Preserve it as-is.
-  }
-  return argumentsText
 }
 
 function parseCustomCallItem(
@@ -745,7 +716,6 @@ function parseReasoningItem(item: RecordValue, path: string, context: Translatio
 
 function parseInputItems(
   payload: ResponsesPayload,
-  declared: Map<string, ToolDescriptor>,
   context: TranslationContext,
 ): Array<ParsedInputItem> {
   if (payload.input === undefined || payload.input === null) {
@@ -776,7 +746,7 @@ function parseInputItems(
     let parsed: ParsedInputItem
     switch (type) {
       case 'function_call':
-        parsed = parseFunctionCallItem(rawItem, path, declared, context)
+        parsed = parseFunctionCallItem(rawItem, path, context)
         break
       case 'custom_tool_call':
         parsed = parseCustomCallItem(rawItem, path, context)
@@ -1002,6 +972,9 @@ function translateToolChoice(
   }
   if (type === 'apply_patch') {
     assertKnownKeys(choice, new Set(['type']), 'tool_choice')
+    if (!allowApplyPatchGrammar) {
+      fail('unsupported_tool_choice', 'tool_choice.apply_patch requires the function apply_patch shim.')
+    }
     const descriptor = resolveToolDescriptor('apply_patch', undefined, 'custom', descriptors, true)
     return { choice: { type: 'tool', name: aliases.aliasFor(descriptor.key) } }
   }
@@ -1309,7 +1282,7 @@ export function translateResponsesToChat(
     context,
     options.allowApplyPatchGrammar ?? false,
   )
-  const parsedItems = parseInputItems(payload, parsedTools.byKey, context)
+  const parsedItems = parseInputItems(payload, context)
   addHistoricalDescriptors(parsedItems, parsedTools.byKey)
   validateModelCapabilities(payload, model, parsedTools.ordered, parsedItems)
   const aliases = createAliasRegistry(parsedTools.byKey)
