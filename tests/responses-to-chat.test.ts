@@ -284,6 +284,29 @@ describe('translateResponsesToChat', () => {
     expect(() => translateResponsesToChat(payload, model())).toThrow(TranslationFailure)
   })
 
+  test('requires the apply_patch shim for the dedicated apply_patch tool choice', () => {
+    const payload: ResponsesPayload = {
+      model: 'caller-model',
+      input: 'hello',
+      tools: [{ type: 'custom', name: 'apply_patch' }],
+      tool_choice: { type: 'apply_patch' },
+    }
+
+    const result = translateResponsesToChat(payload, model(), { allowApplyPatchGrammar: true })
+    expect(result.plan.payload.tool_choice).toEqual({ type: 'function', function: { name: 'apply_patch' } })
+    expect(Array.from(result.toolMap.values())).toEqual([{ type: 'custom', name: 'apply_patch' }])
+
+    expect(() => translateResponsesToChat(payload, model())).toThrow(TranslationFailure)
+  })
+
+  test('requires a declared custom apply_patch tool for the dedicated apply_patch choice', () => {
+    expect(() => translateResponsesToChat({
+      model: 'caller-model',
+      input: 'hello',
+      tool_choice: { type: 'apply_patch' },
+    }, model(), { allowApplyPatchGrammar: true })).toThrow(TranslationFailure)
+  })
+
   test('accepts function-form apply_patch in allowed_tools for a custom declaration when the shim is enabled', () => {
     const payload: ResponsesPayload = {
       model: 'caller-model',
@@ -484,5 +507,32 @@ describe('translateResponsesToChat', () => {
     const before = structuredClone(payload)
     expect(() => translateResponsesToChat(payload, model())).toThrow(TranslationFailure)
     expect(payload).toEqual(before)
+  })
+
+  test('preserves an explicit historical function call when a current custom tool has the same name', () => {
+    const result = translateResponsesToChat({
+      model: 'caller-model',
+      tools: [{ type: 'custom', name: 'same_name' }],
+      input: [
+        { type: 'function_call', call_id: 'historical-function', name: 'same_name', arguments: '{"query":"value"}' },
+        { type: 'function_call_output', call_id: 'historical-function', output: 'result' },
+      ],
+    }, model())
+
+    expect(result.plan.payload.messages).toMatchObject([
+      { role: 'assistant', tool_calls: [{ id: 'historical-function', function: { arguments: '{"query":"value"}' } }] },
+      { role: 'tool', tool_call_id: 'historical-function', content: 'result' },
+    ])
+  })
+
+  test('rejects a function output paired with a custom call of the same name', () => {
+    expect(() => translateResponsesToChat({
+      model: 'caller-model',
+      tools: [{ type: 'custom', name: 'same_name' }],
+      input: [
+        { type: 'custom_tool_call', call_id: 'custom-call', name: 'same_name', input: 'value' },
+        { type: 'function_call_output', call_id: 'custom-call', output: 'result' },
+      ],
+    }, model())).toThrow(TranslationFailure)
   })
 })

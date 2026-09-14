@@ -720,6 +720,83 @@ describe('Responses Chat bridge streaming contract', () => {
     expect(completed && completed.type === 'response.completed' ? completed.response.output_text : undefined).toBe('hello world')
   })
 
+  test('emulator persists a completed Chat bridge stream once and replays it through previous_response_id', async () => {
+    enableFallback()
+    getCachedConfig().responsesOfficialEmulator = true
+    cacheChatModel()
+    const calls: Array<CapturedChatCall> = []
+    const originalSetResponse = responsesEmulatorState.setResponse
+    let setResponseCount = 0
+    let turn = 0
+    responsesEmulatorState.setResponse = ((response: ResponsesResult) => {
+      setResponseCount++
+      return originalSetResponse.call(responsesEmulatorState, response)
+    }) as typeof responsesEmulatorState.setResponse
+    CopilotClient.prototype.createChatCompletions = (async (payload, options) => {
+      calls.push({ payload, options })
+      if (turn++ > 0)
+        return textChatResponse('chat-only', 'continued', 'chat_stream_2')
+
+      return Promise.resolve((async function* () {
+        yield { data: JSON.stringify(chatChunk('chat-only', { role: 'assistant', content: 'streamed' })) }
+        yield { data: JSON.stringify(chatChunk('chat-only', { content: ' response' })) }
+        yield { data: JSON.stringify(chatChunk('chat-only', {}, 'stop', {
+          prompt_tokens: 10,
+          completion_tokens: 2,
+          total_tokens: 12,
+        })) }
+        yield { data: '[DONE]' }
+      })())
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    try {
+      const first = await post(createServer(), '/v1/responses', {
+        model: 'chat-only',
+        stream: true,
+        input: 'start streamed response',
+      })
+      const firstEvents = decodeSseEvents(await first.text())
+      const completed = terminalEvents(firstEvents).find(payload => payload.type === 'response.completed')
+      expect(first.status).toBe(200)
+      expect(completed?.type).toBe('response.completed')
+      if (!completed || completed.type !== 'response.completed')
+        throw new Error('expected response.completed')
+
+      expect(completed.response.output_text).toBe('streamed response')
+      expect(setResponseCount).toBe(1)
+
+      const stored = await createServer().handle(new Request(`http://localhost/v1/responses/${completed.response.id}`))
+      const inputItems = await createServer().handle(new Request(`http://localhost/v1/responses/${completed.response.id}/input_items`))
+      expect(stored.status).toBe(200)
+      expect(await stored.json()).toMatchObject({
+        id: completed.response.id,
+        output_text: 'streamed response',
+      })
+      expect(await inputItems.json()).toMatchObject({
+        object: 'list',
+        data: [expect.objectContaining({ type: 'message', role: 'user', content: 'start streamed response' })],
+      })
+      expect(setResponseCount).toBe(1)
+
+      const second = await post(createServer(), '/v1/responses', {
+        model: 'chat-only',
+        previous_response_id: completed.response.id,
+        input: 'follow up',
+      })
+      const secondBody = await decodeJson<ResponsesResult>(second)
+
+      expect(second.status).toBe(200)
+      expect(secondBody.output_text).toBe('continued')
+      expect(setResponseCount).toBe(2)
+      expect(calls).toHaveLength(2)
+      expect(calls[1]?.payload.messages.map(message => message.role)).toEqual(['user', 'assistant', 'user'])
+      expect(calls[1]?.payload.messages.at(-1)?.content).toBe('follow up')
+    }
+    finally {
+      responsesEmulatorState.setResponse = originalSetResponse
+    }
+  })
+
   test('streams parallel function and custom calls with typed deltas and restored output items', async () => {
     enableFallback()
     cacheChatModel()
@@ -867,17 +944,23 @@ describe('Responses Chat bridge streaming contract', () => {
     const cancelled = new Promise<void>((resolve) => {
       markCancelled = resolve
     })
+    const { promise: generatorFinished, resolve: markGeneratorFinished } = Promise.withResolvers<void>()
     CopilotClient.prototype.createChatCompletions = (async (_payload, options) => {
       const signal = options?.signal
       return Promise.resolve((async function* () {
-        yield { data: JSON.stringify(chatChunk('chat-only', { content: 'partial' })) }
-        if (!signal?.aborted) {
-          await new Promise<void>((resolve) => {
-            signal?.addEventListener('abort', () => resolve(), { once: true })
-          })
+        try {
+          yield { data: JSON.stringify(chatChunk('chat-only', { content: 'partial' })) }
+          if (!signal?.aborted) {
+            await new Promise<void>((resolve) => {
+              signal?.addEventListener('abort', () => resolve(), { once: true })
+            })
+          }
+          markCancelled?.()
+          throw signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError')
         }
-        markCancelled?.()
-        throw signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+        finally {
+          markGeneratorFinished()
+        }
       })())
     }) as typeof CopilotClient.prototype.createChatCompletions
 
@@ -909,7 +992,7 @@ describe('Responses Chat bridge streaming contract', () => {
         socket.once('error', reject)
       })
       await cancelled
-      await Bun.sleep(50)
+      await generatorFinished
 
       expect(received).not.toContain('response.completed')
       expect(received).not.toContain('response.failed')
@@ -931,19 +1014,25 @@ describe('Responses Chat bridge streaming contract', () => {
     const cancelled = new Promise<void>((resolve) => {
       markCancelled = resolve
     })
+    const { promise: generatorFinished, resolve: markGeneratorFinished } = Promise.withResolvers<void>()
     CopilotClient.prototype.createChatCompletions = (async (_payload, options) => {
       const signal = options?.signal
       return Promise.resolve((async function* () {
-        yield { data: JSON.stringify(chatChunk('chat-only', { content: 'partial' })) }
-        if (!signal?.aborted) {
-          await new Promise<void>((resolve) => {
-            signal?.addEventListener('abort', () => resolve(), { once: true })
-          })
+        try {
+          yield { data: JSON.stringify(chatChunk('chat-only', { content: 'partial' })) }
+          if (!signal?.aborted) {
+            await new Promise<void>((resolve) => {
+              signal?.addEventListener('abort', () => resolve(), { once: true })
+            })
+          }
+          markCancelled?.()
+          yield { data: '[DONE]' }
+          // A transport may finish its iterator normally after observing the
+          // client disconnect. The strategy must not turn that into a failure.
         }
-        markCancelled?.()
-        yield { data: '[DONE]' }
-        // A transport may finish its iterator normally after observing the
-        // client disconnect. The strategy must not turn that into a failure.
+        finally {
+          markGeneratorFinished()
+        }
       })())
     }) as typeof CopilotClient.prototype.createChatCompletions
 
@@ -975,7 +1064,7 @@ describe('Responses Chat bridge streaming contract', () => {
         socket.once('error', reject)
       })
       await cancelled
-      await Bun.sleep(50)
+      await generatorFinished
 
       expect(received).not.toContain('response.completed')
       expect(received).not.toContain('response.failed')
@@ -992,6 +1081,65 @@ describe('Responses Chat bridge streaming contract', () => {
 })
 
 describe('Responses Chat bridge overload fallback', () => {
+  test('retries a Chat-only source through a Chat-only target with a fresh namespaced tool map', async () => {
+    enableFallback()
+    getCachedConfig().overloadFallbacks = { source: 'target' }
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('source', { supported_endpoints: ['/chat/completions'] }),
+      buildModel('target', { supported_endpoints: ['/chat/completions'] }),
+    ))
+    const chatCalls: Array<CapturedChatCall> = []
+    CopilotClient.prototype.createChatCompletions = (async (payload, options) => {
+      chatCalls.push({ payload, options })
+      if (chatCalls.length === 1) {
+        throw new TerminalUpstreamRecoveryError(
+          new HTTPError(529, { error: { message: 'source overloaded', type: 'overloaded_error' } }),
+          { requestId: 'chat-chat-overload', retryCount: 1, sourceModel: 'source' },
+        )
+      }
+      const alias = payload.tools?.[0]?.function.name
+      if (!alias)
+        throw new Error('expected target request to rebuild its Chat tool alias')
+      return toolChatResponse('target', [{
+        id: 'target_lookup',
+        name: alias,
+        arguments: '{"city":"Paris"}',
+      }], 'chat_target_tools')
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    const response = await post(createServer(), '/v1/responses', {
+      model: 'source',
+      tools: [{
+        type: 'function',
+        name: 'lookup',
+        namespace: 'weather',
+        parameters: { type: 'object', properties: { city: { type: 'string' } } },
+      }],
+      input: 'weather in Paris',
+    })
+    const body = await decodeJson<ResponsesResult>(response)
+
+    expect(response.status).toBe(200)
+    expect(chatCalls.map(call => call.payload.model)).toEqual(['source', 'target'])
+    expect(chatCalls[0]?.payload.tools?.[0]?.function.name).toBe('weather__lookup')
+    expect(chatCalls[1]?.payload.tools?.[0]?.function.name).toBe('weather__lookup')
+    expect(body.model).toBe('target')
+    expect(body.output).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'function_call',
+        call_id: 'target_lookup',
+        name: 'lookup',
+        namespace: 'weather',
+        arguments: '{"city":"Paris"}',
+      }),
+    ]))
+    expect([...runtimeStore.requests.snapshot().active, ...runtimeStore.requests.snapshot().recent]).toContainEqual(expect.objectContaining({
+      requestedModel: 'source',
+      effectiveModel: 'target',
+      selectedStrategy: 'responses-chat-completions',
+    }))
+  })
+
   test('retries a native source through a Chat-only target for JSON mode and discloses the target model', async () => {
     enableFallback()
     getCachedConfig().overloadFallbacks = { source: 'target' }

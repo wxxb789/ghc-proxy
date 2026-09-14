@@ -213,4 +213,48 @@ describe('Responses via Chat Completions', () => {
       output: [{ type: 'custom_tool_call', name: 'apply_patch', input: '*** Begin Patch\n*** End Patch' }],
     })
   })
+
+  test('rejects the dedicated apply_patch choice without dispatch when the shim is disabled', async () => {
+    getCachedConfig().responsesChatCompletionsFallback = true
+    getCachedConfig().useFunctionApplyPatch = false
+    const calls: Array<CapturedChatCall> = []
+    CopilotClient.prototype.createChatCompletions = mockNonStreamingResponse(chatResult, calls)
+
+    const response = await post({
+      tools: [{ type: 'custom', name: 'apply_patch' }],
+      tool_choice: { type: 'apply_patch' },
+    })
+
+    expect(response.status).toBe(400)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('round-trips the dedicated apply_patch choice through a Chat function when the shim is enabled', async () => {
+    getCachedConfig().responsesChatCompletionsFallback = true
+    getCachedConfig().useFunctionApplyPatch = true
+    const calls: Array<CapturedChatCall> = []
+    CopilotClient.prototype.createChatCompletions = mockNonStreamingResponse({
+      ...chatResult,
+      choices: [{ index: 0, finish_reason: 'tool_calls', logprobs: null, message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'patch-call',
+          type: 'function',
+          function: { name: 'apply_patch', arguments: '{"input":"*** Begin Patch\\n*** End Patch"}' },
+        }],
+      } }],
+    }, calls)
+
+    const response = await post({
+      tools: [{ type: 'custom', name: 'apply_patch' }],
+      tool_choice: { type: 'apply_patch' },
+    })
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.tool_choice).toEqual({ type: 'function', function: { name: 'apply_patch' } })
+    expect(await response.json()).toMatchObject({
+      output: [{ type: 'custom_tool_call', name: 'apply_patch', input: '*** Begin Patch\n*** End Patch' }],
+    })
+  })
 })
