@@ -1,10 +1,11 @@
 import type { ModelMappingInfo } from '~/lib/request-logger'
 import type { AnthropicMessagesPayload } from '~/translator'
 
+import process from 'node:process'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { getCachedConfig } from '~/lib/config'
-import { DEFAULT_FALLBACKS, resolveModel } from '~/lib/model-resolver'
+import { DEFAULT_FALLBACKS, getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
 import { appendModelStepInPlace, getEffectiveModel, logRequest } from '~/lib/request-logger'
 import { modelCache } from '~/state'
 import { rewriteModel } from '~/transform/model-rewrite'
@@ -77,7 +78,64 @@ describe('resolveModel', () => {
   })
 })
 
+describe('getModelFallbackConfig', () => {
+  let originalOpusOverride: string | undefined
+
+  beforeEach(() => {
+    originalOpusOverride = process.env.MODEL_FALLBACK_CLAUDE_OPUS
+    delete process.env.MODEL_FALLBACK_CLAUDE_OPUS
+    clearConfig()
+  })
+
+  afterEach(() => {
+    clearConfig()
+    if (originalOpusOverride === undefined) {
+      delete process.env.MODEL_FALLBACK_CLAUDE_OPUS
+    }
+    else {
+      process.env.MODEL_FALLBACK_CLAUDE_OPUS = originalOpusOverride
+    }
+  })
+
+  test('uses the advertised legacy Opus default in the resolver path when 5.5 is unavailable', () => {
+    const knownModelIds = new Set(['claude-opus-5'])
+    const fallbackConfig = getModelFallbackConfig(knownModelIds)
+
+    expect(DEFAULT_FALLBACKS.claudeOpus).toBe('claude-opus-5.5')
+    expect(fallbackConfig.claudeOpus).toBe('claude-opus-5')
+    expect(resolveModel('claude-opus-unadvertised', knownModelIds, fallbackConfig)).toBe('claude-opus-5')
+  })
+
+  test('keeps the built-in default when cache IDs are absent or advertise neither default', () => {
+    expect(getModelFallbackConfig().claudeOpus).toBe('claude-opus-5.5')
+    expect(getModelFallbackConfig(new Set(['claude-opus-4.8'])).claudeOpus).toBe('claude-opus-5.5')
+  })
+
+  test('keeps 5.5 when it is advertised alongside the legacy default', () => {
+    const knownModelIds = new Set(['claude-opus-5', 'claude-opus-5.5'])
+
+    expect(getModelFallbackConfig(knownModelIds).claudeOpus).toBe('claude-opus-5.5')
+  })
+
+  test('preserves an explicit config fallback equal to the built-in default', () => {
+    getCachedConfig().modelFallback = { claudeOpus: 'claude-opus-5.5' }
+
+    expect(getModelFallbackConfig(new Set(['claude-opus-5'])).claudeOpus).toBe('claude-opus-5.5')
+  })
+
+  test('preserves an explicit environment fallback equal to the built-in default', () => {
+    process.env.MODEL_FALLBACK_CLAUDE_OPUS = 'claude-opus-5.5'
+
+    expect(getModelFallbackConfig(new Set(['claude-opus-5'])).claudeOpus).toBe('claude-opus-5.5')
+  })
+})
+
 describe('DEFAULT_FALLBACKS', () => {
+  test('unknown Opus models fall back to Claude Opus 5.5 by default', () => {
+    expect(DEFAULT_FALLBACKS.claudeOpus).toBe('claude-opus-5.5')
+    expect(resolveModel('claude-opus-unadvertised', new Set(), DEFAULT_FALLBACKS)).toBe('claude-opus-5.5')
+  })
+
   test('all three tiers are defined with non-empty model IDs', () => {
     expect(DEFAULT_FALLBACKS.claudeOpus).toBeString()
     expect(DEFAULT_FALLBACKS.claudeSonnet).toBeString()

@@ -55,10 +55,16 @@ MODEL_FALLBACK_CLAUDE_HAIKU     → config.modelFallback.claudeHaiku
 
 Default fallbacks:
 ```text
-claudeOpus:   claude-opus-5
+claudeOpus:   claude-opus-5.5
 claudeSonnet: claude-sonnet-5
 claudeHaiku:  claude-haiku-4.5
 ```
+
+Within this Chat Completions adapter, the unconfigured Opus fallback uses
+`claude-opus-5` only when the cached model IDs advertise it and omit
+`claude-opus-5.5`; absent cache data or neither ID keeps the built-in 5.5
+default. Explicit environment and config overrides are unchanged, and no other
+candidate is inferred.
 
 ### Overload Fallback
 
@@ -112,7 +118,7 @@ Claude `/v1/messages` rows re-probed **2026-07-25** (enterprise endpoint `api.en
 | `gemini-3.5-flash` | `/chat/completions` | 1000k ctx |
 | `gemini-3.1-pro-preview` | `/chat/completions` | 1000k ctx |
 
-`claude-opus-5` / `claude-sonnet-5` are the default `claude-opus-*` / `claude-sonnet-*` fallbacks; both are live known models, so exact-match resolution returns them directly (the fallback branch never fires for them).
+`claude-opus-5.5` / `claude-sonnet-5` are the default `claude-opus-*` / `claude-sonnet-*` fallbacks. If a requested ID is in the cached model list, exact-match resolution keeps it instead of applying a family fallback.
 
 **Reasoning / effort control** (`/v1/messages`): the modeled Anthropic field is
 `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`, or `null`). A null

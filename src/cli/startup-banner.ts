@@ -26,7 +26,8 @@ export function printStartupBanner(serverUrl: string): void {
     lines.push(info('Endpoint', authStore.copilotApiBase))
 
   // Models section
-  const models = modelCache.getModels()?.data ?? []
+  const cachedModels = modelCache.getModels()
+  const models = cachedModels?.data ?? []
   if (models.length > 0) {
     lines.push('')
     lines.push(`  ${colorize('bold', 'Models')}`)
@@ -44,7 +45,10 @@ export function printStartupBanner(serverUrl: string): void {
   }
 
   // Fallbacks section
-  const fallbacks = getModelFallbackConfig()
+  const knownModelIds = cachedModels
+    ? new Set(models.map(model => model.id))
+    : undefined
+  const fallbacks = getModelFallbackConfig(knownModelIds)
   lines.push('')
   lines.push(`  ${colorize('bold', 'Fallbacks')}`)
   lines.push(`    ${colorize('dim', 'claude-opus-*')}    -> ${fallbacks.claudeOpus}`)
