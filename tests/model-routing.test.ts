@@ -78,6 +78,11 @@ describe('resolveModel', () => {
 })
 
 describe('DEFAULT_FALLBACKS', () => {
+  test('unknown Opus models fall back to Claude Opus 5.5 by default', () => {
+    expect(DEFAULT_FALLBACKS.claudeOpus).toBe('claude-opus-5.5')
+    expect(resolveModel('claude-opus-unadvertised', new Set(), DEFAULT_FALLBACKS)).toBe('claude-opus-5.5')
+  })
+
   test('all three tiers are defined with non-empty model IDs', () => {
     expect(DEFAULT_FALLBACKS.claudeOpus).toBeString()
     expect(DEFAULT_FALLBACKS.claudeSonnet).toBeString()
