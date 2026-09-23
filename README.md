@@ -396,7 +396,7 @@ Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
 }
 ```
 
-> **Note:** Model fallbacks only apply to the **chat completions translation path**. The native Messages and Responses API strategies pass the model ID through to Copilot as-is.
+> **Note:** Model fallbacks apply only inside the **Chat Completions adapter** used by the Messages fallback path; native Messages and Responses strategies pass the model ID through to Copilot unchanged. With no Opus override, `claude-opus-5` is selected only when cached models advertise it but omit `claude-opus-5.5`.
 
 ### Model Rewrites
 

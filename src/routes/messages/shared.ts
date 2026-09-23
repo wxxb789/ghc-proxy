@@ -12,7 +12,7 @@ export function createAnthropicAdapter(): AnthropicMessagesAdapter {
   const knownModelIds = models
     ? new Set(models.data.map(model => model.id))
     : undefined
-  const fallbackConfig = getModelFallbackConfig()
+  const fallbackConfig = getModelFallbackConfig(knownModelIds)
 
   return new AnthropicMessagesAdapter({
     modelResolver: (model: string) => resolveModel(model, knownModelIds, fallbackConfig),

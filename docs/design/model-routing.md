@@ -60,6 +60,12 @@ claudeSonnet: claude-sonnet-5
 claudeHaiku:  claude-haiku-4.5
 ```
 
+Within this Chat Completions adapter, the unconfigured Opus fallback uses
+`claude-opus-5` only when the cached model IDs advertise it and omit
+`claude-opus-5.5`; absent cache data or neither ID keeps the built-in 5.5
+default. Explicit environment and config overrides are unchanged, and no other
+candidate is inferred.
+
 ### Overload Fallback
 
 Overload fallback is not the missing-model fallback above. It starts only after normal model rewrite, compact routing, and family resolution have produced a valid final effective source model that reaches a terminal `529` or is already locally cooled.

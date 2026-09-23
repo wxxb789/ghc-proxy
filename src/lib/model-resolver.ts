@@ -14,13 +14,22 @@ export const DEFAULT_FALLBACKS: ModelFallbackConfig = {
   claudeHaiku: 'claude-haiku-4.5',
 }
 
-export function getModelFallbackConfig(): ModelFallbackConfig {
+const LEGACY_OPUS_FALLBACK = 'claude-opus-5'
+
+export function getModelFallbackConfig(
+  knownModelIds?: ReadonlySet<string>,
+): ModelFallbackConfig {
   const cachedConfig = getCachedConfig()
+  const configuredOpusFallback = process.env.MODEL_FALLBACK_CLAUDE_OPUS
+    || cachedConfig.modelFallback?.claudeOpus
+  const defaultOpusFallback = knownModelIds
+    && !knownModelIds.has(DEFAULT_FALLBACKS.claudeOpus)
+    && knownModelIds.has(LEGACY_OPUS_FALLBACK)
+    ? LEGACY_OPUS_FALLBACK
+    : DEFAULT_FALLBACKS.claudeOpus
+
   return {
-    claudeOpus:
-      process.env.MODEL_FALLBACK_CLAUDE_OPUS
-      || cachedConfig.modelFallback?.claudeOpus
-      || DEFAULT_FALLBACKS.claudeOpus,
+    claudeOpus: configuredOpusFallback || defaultOpusFallback,
     claudeSonnet:
       process.env.MODEL_FALLBACK_CLAUDE_SONNET
       || cachedConfig.modelFallback?.claudeSonnet

@@ -145,6 +145,10 @@ export function getDashboardModels() {
 export function getDashboardBehavior() {
   const requestSummary = runtimeStore.requests.summary()
   const rewrites = configStore.getModelRewrites().map(rule => ({ ...rule }))
+  const cachedModels = modelCache.getModels()
+  const knownModelIds = cachedModels
+    ? new Set(cachedModels.data.map(model => model.id))
+    : undefined
   const effects = Object.entries(PROXY_EFFECT_DEFINITIONS).map(([id, definition]) => ({
     id,
     ...definition,
@@ -159,7 +163,7 @@ export function getDashboardBehavior() {
         enabled: configStore.isCompactSmallModelEnabled(),
         smallModel: configStore.getSmallModel(),
       },
-      familyFallbacks: getModelFallbackConfig(),
+      familyFallbacks: getModelFallbackConfig(knownModelIds),
       overloadFallbacks: configStore.getOverloadFallbacks(),
     },
     strategies: {
