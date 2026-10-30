@@ -47,7 +47,22 @@ function copyPrebuilt(source) {
   return names
 }
 
+/** True when the published payload is newer than every helper source file. */
+function isUpToDate() {
+  const exe = path.join(TARGET, REQUIRED[0])
+  if (!fs.existsSync(exe)) {
+    return false
+  }
+  const builtAt = fs.statSync(exe).mtimeMs
+  const sources = ['msc-auth/Program.cs', 'msc-auth/MscAuth.csproj']
+  return sources.every(file => fs.existsSync(file) && fs.statSync(file).mtimeMs <= builtAt)
+}
+
 function publish() {
+  if (isUpToDate()) {
+    console.log(`[msc-auth] up to date: ${TARGET}`)
+    return fs.readdirSync(TARGET).filter(name => PAYLOAD.test(name))
+  }
   fs.rmSync(TARGET, { recursive: true, force: true })
   const result = spawnSync('dotnet', [
     'publish',
