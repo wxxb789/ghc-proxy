@@ -119,9 +119,16 @@ allow-list is discovered per exact name:
 | Model | Non-stream | Stream |
 | --- | --- | --- |
 | `claude-opus-5.5` | 200, `end_turn` | 200, `text/event-stream`, Anthropic SSE |
+| `claude-opus-5` | 200, `end_turn` | — |
 | `claude-sonnet-5.5` | 200, `end_turn` | — |
+| `claude-sonnet-5` | 200, `end_turn` | — |
 | `claude-haiku-5.5` | 200, `end_turn` | — |
-| `claude-sonnet-4-5-20250929` | 403 `model_not_allowed` | — |
+| `claude-opus-4.6` / `4.7` / `4.8`, `claude-sonnet-4.6`, `claude-haiku-4.5`, `claude-sonnet-4-5-20250929` | 403 `model_not_allowed` | — |
+
+Limits, measured by bisection because the gateway reports only `invalid_body`:
+`max_tokens` 128,000 is accepted and 128,001 is rejected; a 546,008 input-token
+request succeeds, so the context window is at least 546k and its real ceiling is
+unknown.
 
 ## Shipping in the npm package
 
