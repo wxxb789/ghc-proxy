@@ -44,6 +44,24 @@ The resource is `Microsoft FX Gateway`
 but the API owner preauthorizes clients, which is why Azure CLI fails with
 `AADSTS65002` and this client does not.
 
+## Why the Broker package is required
+
+`Microsoft.Identity.Client` (MSAL.NET) and `Microsoft.Identity.Client.Broker` are the
+same SDK: the broker package is the MSAL.NET component that binds it to the Windows
+token broker. Measured with MSAL.NET alone (no `.Broker` reference): `GetAccountsAsync`
+returns 0 accounts and `AcquireTokenSilent` cannot run, because the account and its
+refresh token live in WAM, not in the process.
+
+`msalruntime.dll` is not the SDK. It is `Microsoft.Identity.Client.NativeInterop`
+(a dependency of `.Broker`), the native layer that performs the WAM calls. Dropping it
+while keeping silent acquisition is not possible; the alternatives are a WinRT
+`WebAuthenticationCoreManager` interop written by hand, or an interactive
+authorization-code flow, which needs a registered redirect URI and one sign-in per user.
+
+WAM is reached through the AppX broker, so the client registration has to carry the
+broker redirect URI; a loopback redirect URI cannot be verified without completing a
+sign-in (the authorize endpoint renders the login page for unknown redirect URIs too).
+
 ## Build
 
 ```bash
