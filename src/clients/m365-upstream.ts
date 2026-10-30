@@ -24,18 +24,26 @@ export const M365_API_VERSION = '2026-10-16'
 const MAX_OUTPUT_TOKENS = 128_000
 
 /**
- * Context window is a measured lower bound, not a configured value: a 546,008
- * input-token request succeeds, and the `context-1m-2025-08-07` beta is
- * accepted. The real ceiling is therefore unknown (>= 546k), so the catalog
- * advertises no `max_context_window_tokens`/`max_prompt_tokens` rather than
- * inventing one; consumers treat a missing limit as "do not clamp".
+ * Context window for the 5.5 series.
+ *
+ * Measured: a 546,008 input-token request succeeds and the
+ * `context-1m-2025-08-07` beta is accepted, so the real ceiling is >= 546k but
+ * has not been pinned. 1M is an operator assumption for the 5.5 series, not a
+ * measurement; models without it advertise no context limit, and consumers
+ * treat a missing limit as "do not clamp".
  */
-const VERIFIED_MODELS: Array<{ id: string, name: string, version: string }> = [
-  { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', version: '5.5' },
+const ASSUMED_CONTEXT_TOKENS = 1_000_000
+const VERIFIED_MODELS: Array<{
+  id: string
+  name: string
+  version: string
+  contextTokens?: number
+}> = [
+  { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', version: '5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
   { id: 'claude-opus-5', name: 'Claude Opus 5', version: '5' },
-  { id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', version: '5.5' },
+  { id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', version: '5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
   { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', version: '5' },
-  { id: 'claude-haiku-5.5', name: 'Claude Haiku 5.5', version: '5.5' },
+  { id: 'claude-haiku-5.5', name: 'Claude Haiku 5.5', version: '5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
 ]
 
 /**
@@ -86,6 +94,12 @@ export const M365_MODELS: ModelsResponse = {
       tokenizer: 'cl100k_base',
       limits: {
         max_output_tokens: MAX_OUTPUT_TOKENS,
+        ...(model.contextTokens
+          ? {
+              max_context_window_tokens: model.contextTokens,
+              max_prompt_tokens: model.contextTokens,
+            }
+          : {}),
       },
       supports: {
         tool_calls: true,

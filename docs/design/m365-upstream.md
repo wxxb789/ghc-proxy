@@ -60,11 +60,14 @@ established by bisection, not read from error text:
 - **Output:** `max_tokens: 128000` returns 200, `128001` returns 400 — the
   ceiling is exactly 128k. That value is advertised as `max_output_tokens`.
 - **Context:** a 546,008 input-token request succeeds, and the
-  `anthropic-beta: context-1m-2025-08-07` request is accepted. The real ceiling
-  is therefore at least 546k but unmeasured, so the catalog advertises **no**
-  `max_context_window_tokens`/`max_prompt_tokens`: consumers treat a missing
-  limit as "do not clamp", and a guessed number would either reject valid
-  requests or trigger premature compaction.
+  `anthropic-beta: context-1m-2025-08-07` request is accepted, so the real
+  ceiling is at least 546k but has never been pinned. The catalog therefore
+  advertises **1,000,000** for the 5.5 series as an explicit operator assumption
+  (`ASSUMED_CONTEXT_TOKENS` in `src/clients/m365-upstream.ts`) rather than a
+  measurement. `claude-opus-5` and `claude-sonnet-5` advertise no context limit,
+  which consumers treat as "do not clamp".
+- If the assumption is ever wrong for a model, the failure mode is an upstream
+  `400` on an oversized prompt, not a silent truncation.
 
 ## Family fallbacks
 

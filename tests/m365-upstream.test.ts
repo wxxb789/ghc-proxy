@@ -67,13 +67,21 @@ describe('m365 model catalog', () => {
     expect(modelCache.findById('claude-sonnet-4-5-20250929')).toBeUndefined()
   })
 
-  test('advertises only the measured output ceiling and no context limit', () => {
+  test('advertises the measured output ceiling for every model', () => {
     for (const model of M365_MODELS.data) {
       expect(model.capabilities.limits.max_output_tokens).toBe(128_000)
-      // Not measured: the verified floor is 546k input tokens, so inventing a
-      // context window would clamp requests the gateway actually accepts.
-      expect(model.capabilities.limits.max_context_window_tokens).toBeUndefined()
-      expect(model.capabilities.limits.max_prompt_tokens).toBeUndefined()
+    }
+  })
+
+  test('advertises the assumed 1M context for the 5.5 series only', () => {
+    for (const model of M365_MODELS.data) {
+      const isSeries55 = model.version === '5.5'
+      expect(model.capabilities.limits.max_context_window_tokens).toBe(
+        isSeries55 ? 1_000_000 : undefined,
+      )
+      expect(model.capabilities.limits.max_prompt_tokens).toBe(
+        isSeries55 ? 1_000_000 : undefined,
+      )
     }
   })
 
