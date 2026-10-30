@@ -14,6 +14,7 @@ import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
 import { M365_MODELS } from '~/clients/m365-upstream'
+import { getMscToken } from '~/clients/msc-auth'
 import { recoverAccountManagementTransaction } from '~/lib/account-management-transaction'
 import { compileAccountRouting, normalizeAccountName } from '~/lib/account-routing'
 import {
@@ -201,6 +202,13 @@ async function runServer(options: RunServerOptions): Promise<void> {
     // the gateway has no /models endpoint.
     applyServerAuthOptions(authStore, options, accountType)
     modelCache.cacheModels(M365_MODELS)
+    // Fail here, with the helper's own diagnostics, instead of surfacing a 500
+    // on the first proxied request.
+    const credential = await getMscToken({ exe: options.mscAuthExe })
+    consola.info(
+      `M365 credential acquired (tenant ${credential.tenant || 'unknown'}, `
+      + `expires ${credential.expiresOn.toISOString()})`,
+    )
     accountSetup = {
       accountManager: undefined,
       cleanup: () => {},

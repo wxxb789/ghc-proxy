@@ -1,7 +1,8 @@
 import { AnthropicMessagesAdapter } from '~/adapters'
+import { M365_FALLBACKS } from '~/clients/m365-upstream'
 import { inferModelFamily } from '~/core/capi'
 import { getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
-import { modelCache } from '~/state'
+import { authStore, modelCache } from '~/state'
 
 /**
  * Creates a shared AnthropicMessagesAdapter with standard model resolution
@@ -12,7 +13,11 @@ export function createAnthropicAdapter(): AnthropicMessagesAdapter {
   const knownModelIds = models
     ? new Set(models.data.map(model => model.id))
     : undefined
-  const fallbackConfig = getModelFallbackConfig(knownModelIds)
+  // The GitHub defaults name models the M365 gateway rejects, so that upstream
+  // resolves through its own catalog instead.
+  const fallbackConfig = authStore.upstream === 'm365'
+    ? M365_FALLBACKS
+    : getModelFallbackConfig(knownModelIds)
 
   return new AnthropicMessagesAdapter({
     modelResolver: (model: string) => resolveModel(model, knownModelIds, fallbackConfig),

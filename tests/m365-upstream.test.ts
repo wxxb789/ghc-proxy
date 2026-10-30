@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 
 import { copilotBaseUrl, copilotHeaders } from '~/clients/api-config'
-import { M365_BASE_URL, M365_MODELS, m365Headers } from '~/clients/m365-upstream'
+import { M365_BASE_URL, M365_FALLBACKS, M365_MODELS, m365FallbackFor, m365Headers } from '~/clients/m365-upstream'
 import { modelCache } from '~/state'
 
 afterEach(() => {
@@ -50,7 +50,13 @@ describe('m365 upstream transport', () => {
 describe('m365 model catalog', () => {
   test('lists only the verified models and routes them to native messages', () => {
     const ids = M365_MODELS.data.map(model => model.id)
-    expect(ids).toEqual(['claude-opus-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5'])
+    expect(ids).toEqual([
+      'claude-opus-5.5',
+      'claude-opus-5',
+      'claude-sonnet-5.5',
+      'claude-sonnet-5',
+      'claude-haiku-5.5',
+    ])
 
     modelCache.cacheModels(M365_MODELS)
     for (const id of ids) {
@@ -59,5 +65,41 @@ describe('m365 model catalog', () => {
       expect(modelCache.supportsEndpoint(model, '/responses')).toBe(false)
     }
     expect(modelCache.findById('claude-sonnet-4-5-20250929')).toBeUndefined()
+  })
+
+  test('advertises only the measured output ceiling and no context limit', () => {
+    for (const model of M365_MODELS.data) {
+      expect(model.capabilities.limits.max_output_tokens).toBe(128_000)
+      // Not measured: the verified floor is 546k input tokens, so inventing a
+      // context window would clamp requests the gateway actually accepts.
+      expect(model.capabilities.limits.max_context_window_tokens).toBeUndefined()
+      expect(model.capabilities.limits.max_prompt_tokens).toBeUndefined()
+    }
+  })
+
+  test('maps unadvertised families onto catalog targets', () => {
+    const ids = M365_MODELS.data.map(model => model.id)
+
+    expect(m365FallbackFor('claude-opus-4.6', ids)).toBe('claude-opus-5.5')
+    expect(m365FallbackFor('claude-sonnet-4-5-20250929', ids)).toBe('claude-sonnet-5.5')
+    expect(m365FallbackFor('claude-haiku-4.5', ids)).toBe('claude-haiku-5.5')
+  })
+
+  test('leaves advertised ids and other vendors untouched', () => {
+    const ids = M365_MODELS.data.map(model => model.id)
+
+    for (const id of ids) {
+      expect(m365FallbackFor(id, ids)).toBeUndefined()
+    }
+    expect(m365FallbackFor('gpt-6-sol', ids)).toBeUndefined()
+  })
+
+  test('resolves every fallback to a catalog member', () => {
+    const ids = new Set(M365_MODELS.data.map(model => model.id))
+
+    expect(ids.has(M365_FALLBACKS.claudeOpus)).toBe(true)
+    expect(ids.has(M365_FALLBACKS.claudeSonnet)).toBe(true)
+    expect(ids.has(M365_FALLBACKS.claudeHaiku)).toBe(true)
+    expect(M365_FALLBACKS.claudeSonnet).toBe('claude-sonnet-5.5')
   })
 })

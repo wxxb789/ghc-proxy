@@ -35,15 +35,52 @@ The gateway has no `/models` endpoint (`404 NonExistentApi`) and rejects unknown
 names with `403 model_not_allowed`, so `src/clients/m365-upstream.ts` carries the
 catalog. Only names verified against the live gateway are listed:
 
-| Model | `/v1/messages` | Streaming | Tool calls |
-| --- | --- | --- | --- |
-| `claude-opus-5.5` | verified | verified | verified |
-| `claude-sonnet-5.5` | verified | — | — |
-| `claude-haiku-5.5` | verified | — | — |
+| Model | Status |
+| --- | --- |
+| `claude-opus-5.5` | 200 — streaming and tool calls verified |
+| `claude-opus-5` | 200 |
+| `claude-sonnet-5.5` | 200 |
+| `claude-sonnet-5` | 200 |
+| `claude-haiku-5.5` | 200 |
+
+`claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-4.6`,
+`claude-haiku-4.5`, and `claude-sonnet-4-5-20250929` return
+`403 model_not_allowed`. The host offers those older names in its own picker, so
+the service-side allow-list is narrower than the client-side list.
 
 Every catalog entry advertises only `/v1/messages`. That keeps
 `resolveMessagesStrategyName()` on `native-messages`; the Responses and Chat
 Completions strategies must never be selected because the gateway serves neither.
+
+## Measured limits
+
+The gateway masks upstream detail (`400 {"code":"invalid_body"}`), so limits are
+established by bisection, not read from error text:
+
+- **Output:** `max_tokens: 128000` returns 200, `128001` returns 400 — the
+  ceiling is exactly 128k. That value is advertised as `max_output_tokens`.
+- **Context:** a 546,008 input-token request succeeds, and the
+  `anthropic-beta: context-1m-2025-08-07` request is accepted. The real ceiling
+  is therefore at least 546k but unmeasured, so the catalog advertises **no**
+  `max_context_window_tokens`/`max_prompt_tokens`: consumers treat a missing
+  limit as "do not clamp", and a guessed number would either reject valid
+  requests or trigger premature compaction.
+
+## Family fallbacks
+
+Unadvertised `claude-<family>-*` ids are mapped onto the catalog at rewrite time
+(`rewriteModel` step 3), before model selection, so the request never falls
+through to a strategy the gateway cannot serve. `M365_FALLBACKS` is the single
+source and every target is a catalog member:
+
+| Request family | Target |
+| --- | --- |
+| `claude-opus-*` | `claude-opus-5.5` |
+| `claude-sonnet-*` | `claude-sonnet-5.5` |
+| `claude-haiku-*` | `claude-haiku-5.5` |
+
+Verified through the proxy: `claude-opus-4.6`, `claude-sonnet-4-5-20250929`, and
+`claude-haiku-4.5` are served by the 5.5 models and return `200`.
 
 ## Header contract
 
