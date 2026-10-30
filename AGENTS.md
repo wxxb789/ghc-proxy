@@ -24,6 +24,8 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 bun install                          # Install dependencies (frozen lockfile in CI)
 bun run dev                          # Start with --watch (hot reload)
 bun run build                        # Build dist/main.mjs plus dynamic chunks
+bun run build:msc-auth               # Windows-only: publish msc-auth into dist/msc-auth
+                                     # (skipped elsewhere; MSC_AUTH_DIR copies a prebuilt one)
 bun run lint                         # ESLint with cache
 bun run lint:all                     # ESLint full scan (used in CI)
 bun run typecheck                    # tsc --noEmit
@@ -123,6 +125,11 @@ See `tests/AGENTS.md` for the test-runner conventions, helper inventory, and fix
 
 - **`dist/` is build output.** Never hand-edit; `bun run build` regenerates the
   entry module, dynamic `.mjs` chunks, and source maps from `src/`.
+- **`msc-auth/` is a Windows-only .NET helper.** It ships as an optional binary
+  in `dist/msc-auth` (Windows WAM credential source for the M365 provider).
+  Never import or reference it from `src/` build inputs; `tsdown` cleans
+  `dist/`, so the pack step copies it afterwards. Non-Windows hosts skip it
+  and must report the provider as unavailable, not fall back.
 - **`bun run matrix:live` burns real Copilot quota.** Don't run it as a sanity check; use `bun test` or `bun run smoke:packaged` instead.
 - **`shouldUse*()` helpers are legacy.** New feature-flag queries go through `ConfigStore` (`src/state/config-store.ts`). Don't add new `shouldUse*` call sites.
 - **Don't silently drop unsupported fields in translators.** Use `TranslationPolicy` to mark behavior `exact`/`lossy`/`unsupported`; validation returns 400 for `unsupported`. Silent drops mask client bugs and bite later.
