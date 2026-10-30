@@ -58,9 +58,12 @@ while keeping silent acquisition is not possible; the alternatives are a WinRT
 `WebAuthenticationCoreManager` interop written by hand, or an interactive
 authorization-code flow, which needs a registered redirect URI and one sign-in per user.
 
-WAM is reached through the AppX broker, so the client registration has to carry the
-broker redirect URI; a loopback redirect URI cannot be verified without completing a
-sign-in (the authorize endpoint renders the login page for unknown redirect URIs too).
+WAM is reached through the AppX broker, so the client registration carries the broker
+redirect URI and no loopback entry. Measured: a loopback authorization-code request
+(`http://localhost:53682`, PKCE, `prompt=select_account`) completes sign-in and then
+fails with `AADSTS50011` - the redirect URI is not configured for `0ec893e0-...`.
+There is no non-broker flow, so there is no `msal-node` or other cross-platform path
+to this token; the device-code grant is disabled by tenant policy as well.
 
 ## Build
 
