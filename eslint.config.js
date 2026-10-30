@@ -7,6 +7,10 @@ export default antfu({
     'dist/**',
     'node_modules/**',
     'plans/**',
+    // .NET project: no JavaScript to lint, and bin/obj hold generated JSON.
+    'msc-auth/**',
+    // Locally installed agent skills; not part of the package or CI.
+    '.agents/**',
     'docs/superpowers/**',
     // upgrade-deps workflow output — Workflow tool DSL injects agent()/phase()/
     // pipeline() and a top-level return, so eslint cannot parse it. Generated
