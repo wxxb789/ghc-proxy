@@ -13,6 +13,7 @@ import { generateEnvScript } from '~/cli/shell'
 import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
+import { M365_MODELS } from '~/clients/m365-upstream'
 import { recoverAccountManagementTransaction } from '~/lib/account-management-transaction'
 import { compileAccountRouting, normalizeAccountName } from '~/lib/account-routing'
 import {
@@ -45,6 +46,10 @@ interface RunServerOptions {
   rateLimit?: number
   rateLimitWait: boolean
   githubToken?: string
+  /** `github` (default) or `m365`; the latter needs no GitHub credentials. */
+  upstream?: string
+  /** Explicit msc-auth helper path for the `m365` upstream. */
+  mscAuthExe?: string
   claudeCode: boolean
   showToken: boolean
   proxyEnv: boolean
@@ -165,6 +170,13 @@ async function runServer(options: RunServerOptions): Promise<void> {
   await readConfig()
   const cachedConfig = getCachedConfig()
 
+  const upstream = options.upstream === 'm365' ? 'm365' : 'github'
+  authStore.upstream = upstream
+  authStore.mscAuthExe = options.mscAuthExe
+  if (upstream === 'm365') {
+    consola.info('Upstream: Microsoft 365 Copilot gateway')
+  }
+
   const upstreamQueueConcurrency = options.upstreamQueueConcurrency ?? cachedConfig.upstreamQueueConcurrency
   const upstreamQueueMaxRetries = options.upstreamQueueMaxRetries ?? cachedConfig.upstreamQueueMaxRetries
   const upstreamRecoveryBudgetSeconds = options.upstreamRecoveryBudgetSeconds ?? cachedConfig.upstreamRecoveryBudgetSeconds
@@ -183,7 +195,18 @@ async function runServer(options: RunServerOptions): Promise<void> {
     accountManager?: AccountManager
     cleanup: () => void | Promise<void>
   }
-  if (cachedConfig.accountRouting) {
+  if (upstream === 'm365') {
+    // No GitHub credentials, no account manager: the credential comes from the
+    // Windows token broker through msc-auth, and the catalog is static because
+    // the gateway has no /models endpoint.
+    applyServerAuthOptions(authStore, options, accountType)
+    modelCache.cacheModels(M365_MODELS)
+    accountSetup = {
+      accountManager: undefined,
+      cleanup: () => {},
+    }
+  }
+  else if (cachedConfig.accountRouting) {
     accountSetup = await setupRoutedAccounts(
       options,
       accountType,
@@ -207,8 +230,9 @@ async function runServer(options: RunServerOptions): Promise<void> {
     }
   }
 
-  const serverHostname = accountSetup.accountManager?.getRoutingSummary().baseHostname
-    ?? 'localhost'
+  const serverHostname = upstream === 'm365'
+    ? '127.0.0.1'
+    : accountSetup.accountManager?.getRoutingSummary().baseHostname ?? 'localhost'
   const serverUrl = `http://${serverHostname}:${options.port}`
 
   try {
@@ -225,7 +249,14 @@ async function runServer(options: RunServerOptions): Promise<void> {
       accountManager: accountSetup.accountManager,
       idleTimeout: options.idleTimeoutSeconds,
     })
-    app.listen(options.port)
+    // The M365 upstream authenticates with the user's own Microsoft credential,
+    // so it must not be reachable from the network by default.
+    if (upstream === 'm365') {
+      app.listen({ port: options.port, hostname: '127.0.0.1' })
+    }
+    else {
+      app.listen(options.port)
+    }
 
     const shutdown = async () => {
       consola.info('Shutting down gracefully...')
@@ -556,6 +587,17 @@ export const start = defineCommand({
       description:
         'Provide GitHub token directly (must be generated using the `auth` subcommand)',
     },
+    'upstream': {
+      type: 'string',
+      default: 'github',
+      description:
+        'Upstream API: github (default) or m365 (Microsoft 365 Copilot gateway, Windows only)',
+    },
+    'msc-auth-exe': {
+      type: 'string',
+      description:
+        'Path to the msc-auth helper for the m365 upstream (default: bundled dist/msc-auth/msc-auth.exe)',
+    },
     'claude-code': {
       alias: 'c',
       type: 'boolean',
@@ -636,6 +678,8 @@ export const start = defineCommand({
       rateLimit,
       rateLimitWait: args.wait,
       githubToken: args['github-token'],
+      upstream: args.upstream,
+      mscAuthExe: args['msc-auth-exe'],
       claudeCode: args['claude-code'],
       showToken: args['show-token'],
       proxyEnv: args['proxy-env'],

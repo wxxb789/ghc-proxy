@@ -26,6 +26,7 @@ import { events } from 'fetch-event-stream'
 import { HTTPError, throwUpstreamError } from '~/lib/error'
 
 import { copilotBaseUrl, copilotHeaders } from './api-config'
+import { getMscToken } from './msc-auth'
 import { TerminalUpstreamRecoveryError } from './upstream-queue'
 
 interface RequestOptions {
@@ -74,6 +75,11 @@ export class CopilotClient {
     errorMessage: string,
     options: RequestOptions = {},
   ): Promise<QueuedUpstreamResponse> {
+    if (this.config.upstream === 'm365') {
+      const token = await getMscToken({ exe: this.config.mscAuthExe })
+      this.auth.copilotToken = token.accessToken
+    }
+
     this.requireToken()
 
     const headers = options.extraHeaders
