@@ -12,7 +12,7 @@ Copilot, etc.) working in this repository.
 
 ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Copilot's API into OpenAI- and Anthropic-compatible formats. It enables Claude Code, Cursor, and any OpenAI/Anthropic-speaking client to use a GitHub Copilot subscription. **Unofficial, may break at any time.**
 
-- **Runtime:** Bun >= 1.4 (first-class), Node.js >= 24 compatible via `@elysiajs/node` fallback; CI tracks the latest Node.js LTS and Current releases
+- **Runtime:** Bun >= 1.4 or Node.js >= 24; CI tracks the latest Node.js LTS and Current releases
 - **Language:** TypeScript (ESNext, strict mode)
 - **Framework:** Elysia (HTTP server), citty (CLI), Zod (validation)
 - **Published as:** `ghc-proxy` npm package (`dist/main.mjs` entry plus generated
@@ -54,6 +54,36 @@ All public ghc-proxy endpoints must match the official client-facing schema they
 - OpenAI-facing routes stay OpenAI-compatible at the proxy boundary.
 - Anthropic-facing routes stay Anthropic-compatible at the proxy boundary.
 - Copilot-specific quirks are handled **inside** the proxy via normalization, validation, routing, or translation — never leaked outward.
+
+## Runtime Independence
+
+- **User choice, not a joint prerequisite.** Dual-runtime support exists for
+  convenience: the published CLI and its documented launchers must work with
+  only the selected runtime installed. Keep source build/test tooling requirements
+  separate from consumer runtime requirements.
+- **API compatibility is not an executable dependency.** Shared `src/` code uses
+  Web standards and Node-compatible APIs implemented by both runtimes. `node:fs`
+  and similar imports do not require a Node executable under Bun. Keep
+  runtime-specific APIs and imports behind the selected adapter; Bun-native APIs
+  are also allowed in `scripts/` and `tests/`.
+- **Centralize real differences.** Reuse the existing runtime adapters and
+  `src/lib/server-runtime.ts`, rather than scattering runtime checks across
+  routes, startup code, and tests or adding a general-purpose runtime framework.
+  Unselected runtime-specific dependencies must remain lazily loaded.
+- **One lifecycle contract and owner.** Production and listener-based probes use
+  `createRuntimeApp()` / `listenRuntimeServer()` for adapter selection, readiness,
+  address, and closure. Await binding before reporting startup success.
+  `src/start.ts` owns process signals; dependency-managed signal handlers stay
+  disabled so they cannot race application shutdown.
+- **Prove independence and behavior.** For runtime or distribution changes, run
+  `smoke:packaged`; each CLI child must have the opposite executable unavailable.
+  A green Bun suite does not prove Node behavior; an idle-listener close does not
+  prove signal shutdown or in-flight streaming. Add coverage at the affected
+  boundary and state any unverified runtime/platform cases.
+
+Before changing runtime imports, listeners, or packaging, read
+`docs/design/architecture-overview.md#runtime-isolation` and
+`docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md`.
 
 ## Architecture (overview)
 
@@ -115,7 +145,6 @@ If the route translates between protocols, add an entry to `docs/anthropic-trans
 - **CLI:** `start` must remain an explicit subcommand. No default command.
 - **Complexity:** Favor direct implementation over unnecessary abstractions. Three similar lines is better than a premature helper.
 - **Scope discipline:** Fix only the issue the change targets. Don't refactor pre-existing duplication or "while you're there" — small, focused diffs review better and revert cleaner.
-- **Runtime APIs:** Bun-native APIs (`Bun.file`, `Bun.serve`, `Bun.sleep`, etc.) are fine in `scripts/` and `tests/`. **Route code under `src/` must work on both Bun and Node** — use Web/Node standard APIs (`fetch`, `Response`, `crypto.subtle`, etc.). `smoke:packaged` packs the npm artifact and runs tokenizer and runtime-contract selfchecks under both runtimes. The unit suite still runs only under Bun, so add a Node-shaped fixture when the risk is not covered by those probes; see `docs/solutions/testing/green-suite-is-evidence-about-one-runtime.md`.
 
 ## Testing
 
