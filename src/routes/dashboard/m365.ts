@@ -6,20 +6,16 @@
  * is stored in `config.json` under `m365.account` as the broker home account id,
  * which is unambiguous when the same UPN exists in several tenants.
  */
+import type { MscAccount } from '~/clients/msc-auth'
+
 import { getMscToken, listMscAccounts, resetMscTokenCache } from '~/clients/msc-auth'
 import { getCachedConfig, writeConfigField } from '~/lib/config'
 import { authStore } from '~/state'
 
-export interface M365AccountSummary {
-  upn: string
-  homeAccountId: string
-  environment: string
-}
-
 export interface M365DashboardState {
   enabled: boolean
   selected: { account?: string }
-  accounts: M365AccountSummary[]
+  accounts: MscAccount[]
   error?: string
 }
 

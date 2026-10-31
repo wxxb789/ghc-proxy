@@ -204,14 +204,16 @@ describe('dashboard embedded state', () => {
 
     await runtime.refreshDashboardMetadata()
 
-    expect(requests).toEqual([
-      { method: 'POST', path: '/dashboard/api/refresh' },
-      { method: 'GET', path: '/dashboard/api/overview' },
-      { method: 'GET', path: '/dashboard/api/accounts' },
-      { method: 'GET', path: '/dashboard/api/models' },
-      { method: 'GET', path: '/dashboard/api/behavior' },
-      { method: 'GET', path: '/dashboard/api/requests' },
-      { method: 'GET', path: '/dashboard/api/m365' },
+    const [refreshRequest, ...viewRequests] = requests
+    expect(refreshRequest).toEqual({ method: 'POST', path: '/dashboard/api/refresh' })
+    expect(viewRequests.every(request => request.method === 'GET')).toBe(true)
+    expect(viewRequests.map(request => request.path).sort()).toEqual([
+      '/dashboard/api/accounts',
+      '/dashboard/api/behavior',
+      '/dashboard/api/m365',
+      '/dashboard/api/models',
+      '/dashboard/api/overview',
+      '/dashboard/api/requests',
     ])
     expect(elements.get('error-banner')).toMatchObject({
       hidden: false,

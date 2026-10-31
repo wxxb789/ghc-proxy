@@ -657,15 +657,21 @@ function renderAccountAuthentication(session) {
   byId('account-auth-message').textContent = session.message || (session.state === 'pending' ? 'Waiting for authorization' : '');
 }
 
+let m365Snapshot;
+
 async function loadM365() {
   const panel = byId('m365-panel');
   try {
     const state = await fetchJson('/dashboard/api/m365');
     if (!state.enabled) {
       panel.hidden = true;
+      m365Snapshot = undefined;
       return;
     }
     panel.hidden = false;
+    const snapshot = JSON.stringify([state.accounts, state.selected, state.error || '']);
+    if (snapshot === m365Snapshot) return;
+    m365Snapshot = snapshot;
     const select = byId('m365-account');
     clearNode(select);
     for (const account of state.accounts) {
@@ -681,6 +687,7 @@ async function loadM365() {
     else byId('m365-status').textContent = 'No account selected; using the helper default';
   } catch (error) {
     panel.hidden = false;
+    m365Snapshot = undefined;
     byId('m365-status').textContent = error.message;
   }
 }
@@ -705,7 +712,7 @@ async function saveM365Selection(event) {
   }
 }
 
-async function loadAccounts() {
+async function loadAccounts(options) {
   try {
     renderAccounts(await fetchJson('/dashboard/api/accounts'));
   } catch (error) {
@@ -717,7 +724,7 @@ async function loadAccounts() {
     byId('account-add-panel').hidden = true;
     byId('account-auth').hidden = true;
   } finally {
-    await loadM365();
+    if (!options || options.includeM365 !== false) await loadM365();
   }
 }
 
@@ -1191,7 +1198,12 @@ async function refreshLiveViews() {
     const loads = [{ scope: 'overview', load: loadOverview }];
     if (dashboardState.activeView === 'requests') loads.push({ scope: 'requests', load: loadRequests });
     if (dashboardState.activeView === 'behavior') loads.push({ scope: 'behavior', load: loadBehavior });
-    if (dashboardState.activeView === 'accounts') loads.push({ scope: 'accounts', load: loadAccounts });
+    if (dashboardState.activeView === 'accounts') {
+      loads.push({
+        scope: 'accounts',
+        load: function () { return loadAccounts({ includeM365: false }); },
+      });
+    }
     await settleLoads(loads);
   } finally {
     dashboardState.refreshing = false;
