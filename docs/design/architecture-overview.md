@@ -42,14 +42,14 @@ The Node adapter's automatic signal handling is disabled: `src/start.ts` is the
 sole signal owner, so dependency and application shutdowns cannot race each other.
 The `--idle-timeout` option remains explicitly Bun-only, not a Node socket timeout.
 
-The `server-lifecycle-contract` selfcheck verifies readiness and refusal of fresh
-connections after graceful closure. `smoke:packaged` runs the installed artifact's
-selfcheck and debug commands under each runtime with isolated executable paths
-and application configuration directories, proves the opposite executable cannot
-be spawned, and verifies Bun and Node package launchers. Package-manager config
-files remain readable at their original paths to preserve registry/auth/CA settings.
-This is executable isolation, not an OS sandbox or proof of every upstream/route
-behavior.
+The `server-lifecycle-contract` selfcheck verifies readiness and that a fresh
+connection is refused or reset after graceful closure. `smoke:packaged` runs the
+installed artifact's selfcheck and debug commands under each runtime with isolated
+executable paths and application configuration directories, proves the opposite
+executable cannot be spawned, and verifies Bun and Node package launchers.
+Package-manager config files remain readable at their original paths to preserve
+registry/auth/CA settings. This is executable isolation, not an OS sandbox or
+proof of every upstream/route behavior.
 
 ## High-Level Model Request Flow
 

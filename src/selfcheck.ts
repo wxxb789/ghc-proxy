@@ -170,14 +170,20 @@ async function probeServerLifecycleContract(): Promise<void> {
   }
 
   // requestLocal sends Connection: close, so this must open a fresh connection.
-  let connectionRefused = false
+  // Linux completes a handshake still queued in the closing listener's backlog
+  // and resets it (ECONNRESET) before the port becomes unbound; Windows refuses
+  // it outright (ECONNREFUSED). Either proves no listener accepts and serves.
+  let closeError: string | undefined
   try {
     await requestLocal('127.0.0.1', port, `localhost:${port}`, requestPath)
   }
   catch (error) {
-    connectionRefused = error instanceof Error && 'code' in error && error.code === 'ECONNREFUSED'
+    closeError = error instanceof Error && 'code' in error ? String(error.code) : undefined
   }
-  assertProbe(connectionRefused, 'gracefully closed listener did not refuse a fresh connection')
+  assertProbe(
+    closeError === 'ECONNREFUSED' || closeError === 'ECONNRESET',
+    `gracefully closed listener still accepted a fresh connection (${closeError ?? 'request succeeded'})`,
+  )
 }
 
 async function probeHttpErrorResponseContract(): Promise<void> {
