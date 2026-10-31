@@ -1,9 +1,13 @@
+import type { RuntimeEnvironment, RuntimeName } from './runtime-isolation'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+
 import process from 'node:process'
 
 import { decodeOutput, extractTrailingJson, includesTextIgnoringLineEndings, runCommand, tryParseJsonOrUndefined } from '../lib/cli-exec'
+
+import { createRuntimeEnvironment, resolveNpxEntrypoint, runIsolatedRuntime } from './runtime-isolation'
 
 interface NpmPackResult {
   filename: string
@@ -32,6 +36,7 @@ const EXPECTED_RUNTIME_PROBES = [
   'dashboard-node-quota-projection',
   'responses-chat-completions-bridge',
   'http-error-transport-contract',
+  'server-lifecycle-contract',
 ]
 
 async function main() {
@@ -165,20 +170,28 @@ async function main() {
     // (cross-chunk __toESM, lazyBarrel side-effect drops, etc.) that the
     // help-text check alone cannot.
     //
-    // Run under BOTH Bun and Node: Bun matches the dev runtime, Node matches
-    // the npm-installed end-user runtime (the package declares engines.node
-    // and the bin is `node`-loadable via the .bin shim). The two ESM
-    // resolvers and dynamic-import code paths differ enough that a rolldown
-    // 1.x regression can pass under one and fail under the other.
-    runSelfcheck('bun', packagedBinPath, installRoot)
-    runSelfcheck('node', packagedBinPath, installRoot)
-    runDebugCheck('bun', packagedBinPath, installRoot, packagedVersion)
-    runDebugCheck('node', packagedBinPath, installRoot, packagedVersion)
-    runBunxDebugCheck(tarballPath, installRoot, packagedVersion)
-    runNpxDebugCheck(installRoot, packagedVersion)
+    // The harness needs both runtimes, but each installed CLI run gets only
+    // its selected executable, with temporary user/config/cache directories.
+    const npxEntrypoint = await resolveNpxEntrypoint(installRoot)
+    for (const runtime of ['bun', 'node'] as const) {
+      const environment = await createRuntimeEnvironment(runtime, tempDir, installRoot)
+      runSelfcheck(environment, packagedBinPath, installRoot)
+      runDebugCheck(environment, [packagedBinPath, 'debug', '--json'], installRoot, packagedVersion, 'direct CLI')
+      const launcher = runtime === 'bun' ? 'bunx' : 'npx'
+      const launcherArgs = runtime === 'bun'
+        ? ['x', '--bun', '--no-install', 'ghc-proxy', 'debug', '--json']
+        : [npxEntrypoint, '--no-install', 'ghc-proxy', 'debug', '--json']
+      runDebugCheck(environment, launcherArgs, installRoot, packagedVersion, launcher)
+
+      // Preserve the existing online tarball-install launcher coverage separately
+      // from the no-install contract; offline runs reuse the npm-installed package.
+      if (runtime === 'bun' && process.env.npm_config_offline !== 'true') {
+        runDebugCheck(environment, ['x', '--bun', '--package', tarballPath, 'ghc-proxy', 'debug', '--json'], installRoot, packagedVersion, 'bunx tarball install')
+      }
+    }
 
     const probeCount = EXPECTED_TOKENIZER_PROBES.length + EXPECTED_RUNTIME_PROBES.length
-    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (${probeCount} tokenizer/runtime probes plus debug contract passed under bun + node, bunx + npx launcher coverage)`)
+    console.log(`Packaged CLI smoke test passed for ${packagedPackageJson.name ?? 'ghc-proxy'}. (${probeCount} tokenizer/runtime probes plus debug contract passed with isolated bun + node, bunx + npx launcher coverage)`)
   }
   finally {
     if (tarballPath) {
@@ -223,12 +236,9 @@ interface DebugReport {
   tokenExists?: boolean
 }
 
-function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: string): void {
-  const result = Bun.spawnSync([runtime, packagedBinPath, 'selfcheck', '--json'], {
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
+function runSelfcheck(environment: RuntimeEnvironment, packagedBinPath: string, cwd: string): void {
+  const { runtime } = environment
+  const result = runIsolatedRuntime(environment, [packagedBinPath, 'selfcheck', '--json'], cwd)
   const stdout = decodeOutput(result.stdout)
   const stderr = decodeOutput(result.stderr)
 
@@ -248,10 +258,11 @@ function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: str
       ...missingProbeNames(EXPECTED_TOKENIZER_PROBES, tokenizerProbes.map(p => p.encoding)),
       ...missingProbeNames(EXPECTED_RUNTIME_PROBES, runtimeProbes.map(p => p.name)),
     ]
-    if (report.ok && report.failedCount === 0 && failures.length === 0 && missing.length === 0) {
+    if (result.exitCode === 0 && report.ok && report.failedCount === 0 && failures.length === 0 && missing.length === 0) {
       return
     }
     const detail = [
+      ...(result.exitCode === 0 ? [] : [`  - child exited with code ${result.exitCode}`]),
       ...failures.map(failure => `  - ${failure}`),
       ...missing.map(name => `  - missing required probe: ${name}`),
     ].join('\n') || '  (selfcheck report shape unexpected)'
@@ -265,50 +276,27 @@ function runSelfcheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: str
   )
 }
 
-function runDebugCheck(runtime: 'bun' | 'node', packagedBinPath: string, cwd: string, expectedVersion: string): void {
-  const result = runCommand([runtime, packagedBinPath, 'debug', '--json'], cwd)
+function runDebugCheck(
+  environment: RuntimeEnvironment,
+  args: Array<string>,
+  cwd: string,
+  expectedVersion: string,
+  launcher: string,
+): void {
+  const result = runIsolatedRuntime(environment, args, cwd)
   const stdout = decodeOutput(result.stdout)
   const report = tryParseJsonOrUndefined<DebugReport>(stdout)
 
-  if (!hasExpectedDebugContract(report, runtime, expectedVersion)) {
+  if (result.exitCode !== 0 || !hasExpectedDebugContract(report, environment.runtime, expectedVersion)) {
     throw new Error(
-      `Packaged CLI debug under '${runtime}' returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
-    )
-  }
-}
-
-function runBunxDebugCheck(tarballPath: string, cwd: string, expectedVersion: string): void {
-  // npm has already installed this tarball in cwd. Offline runs must reuse it
-  // because bunx's tarball package selector starts a separate installation.
-  const packageOptions = process.env.npm_config_offline === 'true'
-    ? ['--no-install']
-    : ['--package', tarballPath]
-  const result = runCommand(['bunx', '--bun', ...packageOptions, 'ghc-proxy', 'debug', '--json'], cwd)
-  const stdout = decodeOutput(result.stdout)
-  const report = tryParseJsonOrUndefined<DebugReport>(stdout)
-
-  if (!hasExpectedDebugContract(report, 'bun', expectedVersion)) {
-    throw new Error(
-      `Packaged CLI debug through bunx returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
-    )
-  }
-}
-
-function runNpxDebugCheck(cwd: string, expectedVersion: string): void {
-  const result = runCommand(['npx', '--no-install', 'ghc-proxy', 'debug', '--json'], cwd)
-  const stdout = decodeOutput(result.stdout)
-  const report = tryParseJsonOrUndefined<DebugReport>(stdout)
-
-  if (!hasExpectedDebugContract(report, 'node', expectedVersion)) {
-    throw new Error(
-      `Packaged CLI debug through npx returned unexpected version or runtime metadata.\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
+      `Packaged CLI debug through ${launcher} under '${environment.runtime}' returned unexpected exit, version or runtime metadata (exit ${result.exitCode}).\n--- stdout ---\n${stdout}\n--- stderr ---\n${decodeOutput(result.stderr)}`,
     )
   }
 }
 
 function hasExpectedDebugContract(
   report: DebugReport | undefined,
-  runtime: 'bun' | 'node',
+  runtime: RuntimeName,
   expectedVersion: string,
 ): boolean {
   return report?.runtime?.name === runtime

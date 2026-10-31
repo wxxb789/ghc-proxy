@@ -26,6 +26,7 @@ import {
 } from '~/lib/config'
 import { inspectGitHubCredential, readGitHubCredentials } from '~/lib/credentials'
 import { ensurePaths } from '~/lib/paths'
+import { listenRuntimeServer } from '~/lib/server-runtime'
 import { setupAuthTokens, setupRuntimeOverrideTokens } from '~/lib/token'
 import { createServer } from '~/server'
 import {
@@ -263,25 +264,22 @@ async function runServer(options: RunServerOptions): Promise<void> {
       await maybeCopyClaudeCodeCommand(serverUrl)
     }
 
-    printStartupBanner(serverUrl)
-
     const app = createServer({
       accountManager: accountSetup.accountManager,
       idleTimeout: options.idleTimeoutSeconds,
     })
     // The M365 upstream authenticates with the user's own Microsoft credential,
     // so it must not be reachable from the network by default.
-    if (upstream === 'm365') {
-      app.listen({ port: options.port, hostname: '127.0.0.1' })
-    }
-    else {
-      app.listen(options.port)
-    }
+    const listener = await listenRuntimeServer(app, {
+      port: options.port,
+      ...(upstream === 'm365' ? { hostname: '127.0.0.1' } : {}),
+    })
+    printStartupBanner(`http://${serverHostname}:${listener.port}`)
 
     const shutdown = async () => {
       consola.info('Shutting down gracefully...')
       await accountSetup.cleanup()
-      await app.stop()
+      await listener.close()
       process.exit(0)
     }
 

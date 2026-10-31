@@ -1,10 +1,9 @@
-import type { ElysiaAdapter } from 'elysia'
+import type { Elysia } from 'elysia'
 import type { DashboardAccountManagement } from './routes/dashboard/route'
 import { cors } from '@elysiajs/cors'
-
-import { Elysia } from 'elysia'
 import { HTTPError } from './lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
+import { createRuntimeApp } from './lib/server-runtime'
 import { isTimeoutLikeError } from './lib/timeout-error'
 import { isClientAbortError } from './lib/upstream-signal'
 import { classifyObservedEndpoint, sanitizeObservedError } from './observability/request-store'
@@ -18,25 +17,6 @@ import { createTokenRoute } from './routes/token/route'
 import { createUsageRoute } from './routes/usage/route'
 import { authStore, getRequestAccountName, modelCache, resolveRequestAccountRuntime, runtimeStore, runWithAccountRuntime } from './state'
 import { VERSION } from './util/version'
-
-const isBun = typeof globalThis.Bun !== 'undefined'
-
-async function loadServerAdapter(): Promise<ElysiaAdapter | undefined> {
-  if (isBun)
-    return undefined
-
-  const { node } = await import('@elysiajs/node')
-  return node()
-}
-
-// Top-level await is deliberate. Resolving the adapter once at module scope
-// keeps `createServer` synchronous for every caller, while the Node adapter —
-// and the `node:http`/`node:https`/`node:http2` server stack it pulls in via
-// crossws/srvx — stays off the Bun import graph, where Elysia already serves
-// through `Bun.serve`. The package ships as an ESM-only bin, so TLA is safe on
-// both supported runtimes.
-// eslint-disable-next-line antfu/no-top-level-await
-export const serverAdapter: ElysiaAdapter | undefined = await loadServerAdapter()
 
 // Elysia higher-order wrappers cover both the general fetch handler and Bun's
 // per-path system router, keeping every public path inside the same account
@@ -204,12 +184,7 @@ export function toErrorResponse(
 }
 
 export function createServer(options?: ServerOptions) {
-  const app = new Elysia({
-    adapter: serverAdapter,
-    serve: options?.idleTimeout !== undefined
-      ? { idleTimeout: options.idleTimeout }
-      : undefined,
-  })
+  const app = createRuntimeApp({ idleTimeout: options?.idleTimeout })
     .wrap(accountRoutingWrapper)
     // Names the class for `code`-based observability classification only
     // (`sanitizeObservedError`). The client response is built by

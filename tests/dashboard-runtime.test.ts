@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
 import { getCachedConfig } from '~/lib/config'
+import { listenRuntimeServer } from '~/lib/server-runtime'
 import { createServer } from '~/server'
 import { authStore, modelCache, runtimeStore } from '~/state'
 
@@ -423,10 +424,9 @@ describe('dashboard request lifecycle', () => {
       throw new Error('raw upstream stream secret')
     })())) as typeof CopilotClient.prototype.createChatCompletions
 
-    const app = createServer().listen({ hostname: '127.0.0.1', port: 0 })
+    const listener = await listenRuntimeServer(createServer(), { hostname: '127.0.0.1', port: 0 })
     try {
-      const port = app.server?.port
-      expect(port).toBeNumber()
+      const { port } = listener
       const responsePromise = fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -461,7 +461,7 @@ describe('dashboard request lifecycle', () => {
     }
     finally {
       releaseStream?.()
-      await app.stop(true)
+      await listener.close(true)
     }
   })
 
@@ -501,17 +501,16 @@ describe('dashboard request lifecycle', () => {
       })())
     }) as typeof CopilotClient.prototype.createChatCompletions
 
-    const app = createServer().listen({ hostname: '127.0.0.1', port: 0 })
+    const listener = await listenRuntimeServer(createServer(), { hostname: '127.0.0.1', port: 0 })
     try {
-      const port = app.server?.port
-      expect(port).toBeNumber()
+      const { port } = listener
       const body = JSON.stringify({
         model: 'gpt-5.6-sol',
         messages: [{ role: 'user', content: 'hello' }],
         stream: true,
       })
       await new Promise<void>((resolve, reject) => {
-        const socket = createConnection({ host: '127.0.0.1', port: port! }, () => {
+        const socket = createConnection({ host: '127.0.0.1', port }, () => {
           socket.write([
             'POST /v1/chat/completions HTTP/1.1',
             `Host: 127.0.0.1:${port}`,
@@ -551,7 +550,7 @@ describe('dashboard request lifecycle', () => {
       })
     }
     finally {
-      await app.stop(true)
+      await listener.close(true)
     }
   })
 

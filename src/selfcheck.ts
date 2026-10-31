@@ -8,6 +8,7 @@ import type {
 } from '~/core/capi'
 import type { AccountRoutingConfig } from '~/lib/account-routing'
 import type { SSEStreamChunk } from '~/lib/execution-strategy'
+import type { RuntimeListener } from '~/lib/server-runtime'
 import type { CopilotUsageResponse, Model } from '~/types'
 
 import { deepStrictEqual } from 'node:assert'
@@ -18,7 +19,6 @@ import { networkInterfaces, tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { defineCommand } from 'citty'
-import { Elysia } from 'elysia'
 
 import { AccountManager } from '~/accounts/manager'
 import { CopilotClient } from '~/clients'
@@ -33,10 +33,11 @@ import {
   writeGitHubCredential,
 } from '~/lib/credentials'
 import { HTTPError, isRetryableConnectionEstablishmentError } from '~/lib/error'
+import { createRuntimeApp, listenRuntimeServer } from '~/lib/server-runtime'
 import { getTokenCount } from '~/lib/tokenizer'
 import { DashboardQuotaCache } from '~/routes/dashboard/handler'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
-import { createServer as createProxyServer, serverAdapter } from '~/server'
+import { createServer as createProxyServer } from '~/server'
 import { DEFAULT_ACCOUNT_HOSTNAME, prepareLegacySingleAccountRoutingMigration } from '~/start'
 import {
   configureAccountRuntimes,
@@ -60,14 +61,6 @@ interface RuntimeProbe {
   name: string
   ok: boolean
   error?: string
-}
-
-interface NodeDashboardListener {
-  raw: {
-    close: (closeActiveConnections?: boolean) => Promise<void>
-    ready: () => Promise<unknown>
-    readonly url?: string
-  }
 }
 
 interface HttpProbeResult {
@@ -105,6 +98,7 @@ const SELFCHECK_SSE_BLOCK_SEPARATOR_RE = /\r?\n\r?\n/
 const SELFCHECK_SSE_LINE_SEPARATOR_RE = /\r?\n/
 
 const RUNTIME_PROBES = [
+  ['server-lifecycle-contract', probeServerLifecycleContract],
   ['http-error-response-contract', probeHttpErrorResponseContract],
   ['connection-error-classification', probeConnectionErrorClassification],
   ['response-body-cancellation', probeResponseBodyCancellation],
@@ -157,6 +151,33 @@ async function runRuntimeProbe(
       error: error instanceof Error ? error.message : String(error),
     }
   }
+}
+
+async function probeServerLifecycleContract(): Promise<void> {
+  const requestPath = '/__selfcheck/server-lifecycle'
+  const expectedBody = 'selfcheck listener ready'
+  const app = createRuntimeApp().get(requestPath, () => expectedBody)
+  const listener = await listenRuntimeServer(app, { hostname: '127.0.0.1', port: 0 })
+  const port = listener.port
+
+  try {
+    const response = await requestLocal('127.0.0.1', port, `localhost:${port}`, requestPath)
+    assertProbe(response.status === 200, `ready listener returned ${response.status}`)
+    assertProbe(response.body === expectedBody, 'ready listener returned an unexpected response')
+  }
+  finally {
+    await listener.close()
+  }
+
+  // requestLocal sends Connection: close, so this must open a fresh connection.
+  let connectionRefused = false
+  try {
+    await requestLocal('127.0.0.1', port, `localhost:${port}`, requestPath)
+  }
+  catch (error) {
+    connectionRefused = error instanceof Error && 'code' in error && error.code === 'ECONNREFUSED'
+  }
+  assertProbe(connectionRefused, 'gracefully closed listener did not refuse a fresh connection')
 }
 
 async function probeHttpErrorResponseContract(): Promise<void> {
@@ -217,15 +238,11 @@ async function probeHttpErrorTransportContract(): Promise<void> {
         },
       }, { headers: { 'retry-after': '11' } })
     })
-  let listener: NodeDashboardListener | undefined
+  let listener: RuntimeListener | undefined
 
   try {
-    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
-      if (!process.versions.bun) {
-        listener = server as unknown as NodeDashboardListener
-      }
-    })
-    const port = await probeListenerPort(app, listener, 'http error transport')
+    listener = await listenRuntimeServer(app, { hostname: '127.0.0.1', port: 0 })
+    const port = listener.port
 
     const ordinary = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/__selfcheck/http-error-headers')
     assertHttpErrorEnvelope(ordinary, 'ordinary route', {
@@ -272,12 +289,7 @@ async function probeHttpErrorTransportContract(): Promise<void> {
     })
   }
   finally {
-    if (process.versions.bun) {
-      await app.stop()
-    }
-    else {
-      await listener?.raw.close(true)
-    }
+    await listener?.close(true)
     resetAccountRuntimes()
   }
 }
@@ -736,22 +748,12 @@ async function probeDashboardBundleContract(): Promise<void> {
 }
 
 async function probeDashboardNodeListenerBoundary(): Promise<void> {
-  if (process.versions.bun)
-    return
-
-  const app = new Elysia({ adapter: serverAdapter }).use(createDashboardRoutes())
-  let listener: NodeDashboardListener | undefined
+  const app = createRuntimeApp().use(createDashboardRoutes())
+  let listener: RuntimeListener | undefined
 
   try {
-    app.listen({ hostname: '0.0.0.0', port: 0 }, (server) => {
-      listener = server as unknown as NodeDashboardListener
-    })
-    assertProbe(listener !== undefined, 'Node dashboard listener was not created')
-    await listener.raw.ready()
-    assertProbe(listener.raw.url !== undefined, 'Node dashboard listener has no URL')
-
-    const port = Number(new URL(listener.raw.url).port)
-    assertProbe(Number.isInteger(port) && port > 0, 'Node dashboard listener has no bound port')
+    listener = await listenRuntimeServer(app, { hostname: '0.0.0.0', port: 0 })
+    const port = listener.port
 
     const loopback = await requestDashboard('127.0.0.1', port)
     assertProbe(loopback.status === 200, `loopback dashboard request returned ${loopback.status}`)
@@ -764,7 +766,7 @@ async function probeDashboardNodeListenerBoundary(): Promise<void> {
     }
   }
   finally {
-    await listener?.raw.close(true)
+    await listener?.close(true)
   }
 }
 
@@ -797,7 +799,7 @@ async function probeLegacySingleAccountRoutingMigration(): Promise<void> {
     },
   })
   const app = createProxyServer({ logRequests: false })
-  let nodeListener: NodeDashboardListener | undefined
+  let listener: RuntimeListener | undefined
 
   try {
     let multiAccountMigrationRejected = false
@@ -828,13 +830,9 @@ async function probeLegacySingleAccountRoutingMigration(): Promise<void> {
       resolveRequestAccountRuntime(new Request(`http://${DEFAULT_ACCOUNT_HOSTNAME}/token`))?.name === 'default',
       'migrated default-account.localhost did not select the default account',
     )
-    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
-      listenerStarted = true
-      if (!process.versions.bun) {
-        nodeListener = server as unknown as NodeDashboardListener
-      }
-    })
-    const port = await probeListenerPort(app, nodeListener, 'legacy migration')
+    listenerStarted = true
+    listener = await listenRuntimeServer(app, { hostname: '127.0.0.1', port: 0 })
+    const port = listener.port
     const response = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME)
     assertProbe(response.status === 200, `migrated default hostname returned ${response.status}`)
     assertProbe(
@@ -843,12 +841,7 @@ async function probeLegacySingleAccountRoutingMigration(): Promise<void> {
     )
   }
   finally {
-    if (process.versions.bun) {
-      await app.stop()
-    }
-    else {
-      await nodeListener?.raw.close(true)
-    }
+    await listener?.close(true)
     await manager.stop()
     resetAccountRuntimes()
   }
@@ -868,22 +861,13 @@ async function probeDashboardNodeQuotaProjection(): Promise<void> {
     quotaLoads++
     return selfcheckUsageFixture()
   })
-  const app = process.versions.bun
-    ? createDashboardRoutes({ accountManager: manager, quotaCache })
-    : new Elysia({ adapter: serverAdapter }).use(createDashboardRoutes({
-        accountManager: manager,
-        quotaCache,
-      }))
-  let listener: NodeDashboardListener | undefined
+  const app = createRuntimeApp().use(createDashboardRoutes({ accountManager: manager, quotaCache }))
+  let listener: RuntimeListener | undefined
 
   configureAccountRuntimes(routing, [runtime])
   try {
-    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
-      if (!process.versions.bun) {
-        listener = server as unknown as NodeDashboardListener
-      }
-    })
-    const port = await probeListenerPort(app, listener, 'dashboard quota')
+    listener = await listenRuntimeServer(app, { hostname: '127.0.0.1', port: 0 })
+    const port = listener.port
 
     const [overviewResponse, accountsResponse] = await Promise.all([
       requestLocal('127.0.0.1', port, `localhost:${port}`, '/dashboard/api/overview'),
@@ -906,34 +890,10 @@ async function probeDashboardNodeQuotaProjection(): Promise<void> {
     assertProbe(accounts.accounts[0]?.quota?.chat?.remaining === 80, 'Node dashboard accounts projected the wrong quota')
   }
   finally {
-    if (process.versions.bun) {
-      await app.stop()
-    }
-    else {
-      await listener?.raw.close(true)
-    }
+    await listener?.close(true)
     await manager.stop()
     resetAccountRuntimes()
   }
-}
-
-async function probeListenerPort(
-  app: { server: unknown },
-  nodeListener: NodeDashboardListener | undefined,
-  name: string,
-): Promise<number> {
-  if (process.versions.bun) {
-    const port = (app.server as unknown as { port: number }).port
-    assertProbe(Number.isInteger(port) && port > 0, `${name} listener has no bound port`)
-    return port
-  }
-
-  assertProbe(nodeListener !== undefined, `Node ${name} listener was not created`)
-  await nodeListener.raw.ready()
-  assertProbe(nodeListener.raw.url !== undefined, `Node ${name} listener has no URL`)
-  const port = Number(new URL(nodeListener.raw.url).port)
-  assertProbe(Number.isInteger(port) && port > 0, `Node ${name} listener has no bound port`)
-  return port
 }
 
 async function probeAccountHostnameRouting(): Promise<void> {
@@ -954,25 +914,10 @@ async function probeAccountHostnameRouting(): Promise<void> {
   )
 
   const app = createProxyServer({ logRequests: false })
-  let nodeListener: NodeDashboardListener | undefined
+  let listener: RuntimeListener | undefined
   try {
-    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
-      if (!process.versions.bun) {
-        nodeListener = server as unknown as NodeDashboardListener
-      }
-    })
-
-    let port: number
-    if (process.versions.bun) {
-      port = (app.server as unknown as { port: number }).port
-    }
-    else {
-      assertProbe(nodeListener !== undefined, 'Node account-routing listener was not created')
-      await nodeListener.raw.ready()
-      assertProbe(nodeListener.raw.url !== undefined, 'Node account-routing listener has no URL')
-      port = Number(new URL(nodeListener.raw.url).port)
-    }
-    assertProbe(Number.isInteger(port) && port > 0, 'account-routing listener has no bound port')
+    listener = await listenRuntimeServer(app, { hostname: '127.0.0.1', port: 0 })
+    const port = listener.port
 
     const defaultResponse = await requestAccountRoute(port, 'localhost')
     const loopbackResponse = await requestAccountRoute(port, '127.0.0.1')
@@ -999,12 +944,7 @@ async function probeAccountHostnameRouting(): Promise<void> {
     assertProbe(unknownRootResponse.status === 421, `unknown hostname root returned ${unknownRootResponse.status}`)
   }
   finally {
-    if (process.versions.bun) {
-      await app.stop()
-    }
-    else {
-      await nodeListener?.raw.close(true)
-    }
+    await listener?.close(true)
     resetAccountRuntimes()
   }
 }
@@ -1061,8 +1001,7 @@ async function probeResponsesChatCompletionsBridge(): Promise<void> {
     payload: Parameters<typeof CopilotClient.prototype.createChatCompletions>[0]
   }> = []
   let streamCalls = 0
-  let app: ReturnType<typeof createProxyServer> | undefined
-  let nodeListener: NodeDashboardListener | undefined
+  let listener: RuntimeListener | undefined
 
   try {
     configureAccountRuntimes(routing, [runtime])
@@ -1106,12 +1045,9 @@ async function probeResponsesChatCompletionsBridge(): Promise<void> {
     }
     CopilotClient.prototype.createResponses = fakeCreateResponses
 
-    app = createProxyServer({ logRequests: false })
-    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
-      if (!process.versions.bun)
-        nodeListener = server as unknown as NodeDashboardListener
-    })
-    const port = await probeListenerPort(app, nodeListener, 'Responses Chat bridge')
+    const app = createProxyServer({ logRequests: false })
+    listener = await listenRuntimeServer(app, { hostname: '127.0.0.1', port: 0 })
+    const port = listener.port
     const request = async (stage: string, body: Record<string, unknown>) => {
       try {
         const requestBody = JSON.stringify(body)
@@ -1280,12 +1216,7 @@ async function probeResponsesChatCompletionsBridge(): Promise<void> {
       delete cachedConfig[key]
     Object.assign(cachedConfig, configSnapshot)
     resetAccountRuntimes()
-    if (process.versions.bun) {
-      await app?.stop()
-    }
-    else {
-      await nodeListener?.raw.close(true)
-    }
+    await listener?.close(true)
   }
 }
 
