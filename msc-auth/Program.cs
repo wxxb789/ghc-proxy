@@ -141,18 +141,25 @@ internal static class Program
         AuthenticationResult result;
         try
         {
-            if (account is not null)
+            // `--interactive` wins over silent acquisition: its purpose is to repair a
+            // broker session that silent acquisition can no longer satisfy.
+            if (interactive)
+            {
+                var builder = app
+                    .AcquireTokenInteractive(new[] { ResourceScope })
+                    .WithParentActivityOrWindow(GetConsoleWindow())
+                    .WithUseEmbeddedWebView(false);
+                if (account is not null)
+                {
+                    builder = builder.WithAccount(account);
+                }
+
+                result = await builder.ExecuteAsync();
+            }
+            else if (account is not null)
             {
                 result = await app
                     .AcquireTokenSilent(new[] { ResourceScope }, account)
-                    .ExecuteAsync();
-            }
-            else if (interactive)
-            {
-                result = await app
-                    .AcquireTokenInteractive(new[] { ResourceScope })
-                    .WithParentActivityOrWindow(GetConsoleWindow())
-                    .WithUseEmbeddedWebView(false)
                     .ExecuteAsync();
             }
             else

@@ -100,7 +100,7 @@ msc-auth --accounts      # list broker accounts (username, home id, environment)
 msc-auth --account <id>  # pick the account by home account id (unambiguous)
 msc-auth --upn <upn>     # pick the account (default: lhan@microsoft.com)
 msc-auth --tenant <tid>  # pick the authority tenant
-msc-auth --interactive   # add an account to the WAM session once
+msc-auth --interactive   # sign in through WAM, even when an account is already selected
 msc-auth --verbose       # MSAL diagnostics on stderr
 ```
 
