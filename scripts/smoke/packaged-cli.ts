@@ -31,6 +31,7 @@ const EXPECTED_RUNTIME_PROBES = [
   'legacy-single-account-routing-migration',
   'dashboard-node-quota-projection',
   'responses-chat-completions-bridge',
+  'http-error-transport-contract',
 ]
 
 async function main() {

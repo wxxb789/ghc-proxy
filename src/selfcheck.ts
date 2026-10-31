@@ -10,6 +10,7 @@ import type { AccountRoutingConfig } from '~/lib/account-routing'
 import type { SSEStreamChunk } from '~/lib/execution-strategy'
 import type { CopilotUsageResponse, Model } from '~/types'
 
+import { deepStrictEqual } from 'node:assert'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
@@ -183,7 +184,10 @@ async function probeHttpErrorResponseContract(): Promise<void> {
  * therefore used to reach Node clients as `text/plain` `{ name, message }`
  * with `Retry-After` dropped, while Bun clients saw the correct envelope
  * (#92). Every assertion here is a client-visible contract at the transport
- * boundary, which is the only place that class of regression shows up.
+ * boundary, which is the only place that class of regression shows up: each
+ * case compares the received body to the stored envelope as a whole, because a
+ * boundary that rebuilds it from `name` and `message` still answers field
+ * spot-checks.
  */
 async function probeHttpErrorTransportContract(): Promise<void> {
   const runtime = createAccountRuntime('default')
@@ -195,12 +199,25 @@ async function probeHttpErrorTransportContract(): Promise<void> {
   }, ['default'])
   configureAccountRuntimes(routing, [runtime])
   // Retry-After only originates from an upstream response, and no local route
-  // emits one, so a synthetic ordinary route keeps that assertion hermetic.
+  // emits one, so synthetic routes keep those assertions hermetic.
   const app = createProxyServer({ logRequests: false })
     .get('/__selfcheck/http-error-headers', () => {
       throw new HTTPError(429, {
         error: { message: 'selfcheck rate limit', type: 'rate_limit_error' },
       }, { headers: { 'retry-after': '7' } })
+    })
+    // Generator routes are the second error shape a route can take, and the
+    // only one that streams. Throwing before the first yield leaves the
+    // response uncommitted, so it still owes the client the stored envelope.
+    .post('/__selfcheck/http-error-generator', async function* () {
+      throw new HTTPError(413, {
+        error: {
+          code: 'payload_too_large',
+          details: [{ message: 'serialized body exceeds the upstream limit', path: ['input'] }],
+          message: 'selfcheck payload too large',
+          type: 'invalid_request_error',
+        },
+      }, { headers: { 'retry-after': '11' } })
     })
   let listener: NodeDashboardListener | undefined
 
@@ -213,12 +230,27 @@ async function probeHttpErrorTransportContract(): Promise<void> {
     const port = await probeListenerPort(app, listener, 'http error transport')
 
     const ordinary = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/__selfcheck/http-error-headers')
-    assertProbe(ordinary.status === 429, `ordinary route returned ${ordinary.status}`)
-    assertHttpErrorEnvelope(ordinary, 'ordinary route', 'rate_limit_error')
-    assertProbe(
-      ordinary.headers.get('retry-after') === '7',
-      'ordinary route lost Retry-After at the transport boundary',
-    )
+    assertHttpErrorEnvelope(ordinary, 'ordinary route', {
+      body: { error: { message: 'selfcheck rate limit', type: 'rate_limit_error' } },
+      headers: { 'retry-after': '7' },
+      status: 429,
+    })
+
+    const syntheticGenerator = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/__selfcheck/http-error-generator', {
+      method: 'POST',
+    })
+    assertHttpErrorEnvelope(syntheticGenerator, 'synthetic async-generator route', {
+      body: {
+        error: {
+          code: 'payload_too_large',
+          details: [{ message: 'serialized body exceeds the upstream limit', path: ['input'] }],
+          message: 'selfcheck payload too large',
+          type: 'invalid_request_error',
+        },
+      },
+      headers: { 'retry-after': '11' },
+      status: 413,
+    })
 
     const generator = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/v1/responses', {
       body: JSON.stringify({
@@ -230,8 +262,16 @@ async function probeHttpErrorTransportContract(): Promise<void> {
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     })
-    assertHttpErrorEnvelope(generator, 'async-generator route', 'invalid_request_error', 'model')
-    assertProbe(generator.status === 400, `async-generator route returned ${generator.status}`)
+    assertHttpErrorEnvelope(generator, 'async-generator /v1/responses route', {
+      body: {
+        error: {
+          message: 'The selected model could not be resolved.',
+          param: 'model',
+          type: 'invalid_request_error',
+        },
+      },
+      status: 400,
+    })
   }
   finally {
     if (process.versions.bun) {
@@ -245,15 +285,16 @@ async function probeHttpErrorTransportContract(): Promise<void> {
 }
 
 /**
- * Assert the transport-level shape of a locally rejected request: JSON content
- * type, a preserved correlation header, and the stored OpenAI-compatible
- * envelope rather than the adapter's `{ name, message }` fallback.
+ * Assert the transport-level contract of a rejected request: JSON content
+ * type, a preserved correlation header, and the stored envelope as a whole
+ * rather than by spot-checked fields. A boundary that re-derived the body from
+ * `name` and `message` would satisfy any single-field assertion while still
+ * dropping `param`, `code`, `details`, or response headers.
  */
 function assertHttpErrorEnvelope(
   result: HttpProbeResult,
   name: string,
-  type: string,
-  param?: string,
+  expected: { body: unknown, headers?: Record<string, string>, status: number },
 ): void {
   const contentType = result.headers.get('content-type') ?? ''
   assertProbe(
@@ -264,24 +305,22 @@ function assertHttpErrorEnvelope(
     result.headers.get('x-request-id') !== null,
     `${name} lost x-request-id at the transport boundary`,
   )
-
-  const payload: unknown = JSON.parse(result.body)
-  assertProbe(typeof payload === 'object' && payload !== null, `${name} returned a non-object body`)
-  assertProbe(!('name' in payload), `${name} fell back to the adapter Error shape`)
-  assertProbe('error' in payload, `${name} returned a body without an error envelope`)
-  const error = payload.error
-  assertProbe(typeof error === 'object' && error !== null, `${name} returned a non-object error`)
-  assertProbe('type' in error && error.type === type, `${name} returned error type ${JSON.stringify('type' in error ? error.type : undefined)}`)
-  assertProbe(
-    'message' in error && typeof error.message === 'string' && error.message.length > 0,
-    `${name} returned an error envelope without a message`,
-  )
-  if (param !== undefined) {
+  assertProbe(result.status === expected.status, `${name} returned ${result.status}`)
+  for (const [header, value] of Object.entries(expected.headers ?? {})) {
     assertProbe(
-      'param' in error && error.param === param,
-      `${name} returned error param ${JSON.stringify('param' in error ? error.param : undefined)}`,
+      result.headers.get(header) === value,
+      `${name} lost ${header} at the transport boundary`,
     )
   }
+
+  let payload: unknown
+  try {
+    payload = JSON.parse(result.body)
+  }
+  catch {
+    throw new Error(`${name} returned a body that is not JSON: ${JSON.stringify(result.body)}`)
+  }
+  deepStrictEqual(payload, expected.body, `${name} changed the error envelope at the transport boundary`)
 }
 
 function probeConnectionErrorClassification(): void {
