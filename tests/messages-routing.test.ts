@@ -523,6 +523,45 @@ describe('messages routing', () => {
     expect(calls[0]?.payload.tools as unknown).toEqual([tool])
   })
 
+  // Issue #14: Anthropic's server tools carry no `input_schema`. The ingress
+  // must forward that shape instead of manufacturing its own 400 for it.
+  test('/v1/messages native path forwards the built-in web_search server tool unchanged', async () => {
+    const app = createApp()
+    const calls: Array<CapturedMessagesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildModel('claude-opus-5', { supported_endpoints: ['/v1/messages'] })))
+
+    CopilotClient.prototype.createMessages = mockMessages({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'native' }],
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, calls)
+
+    const tool = {
+      type: 'web_search_20250305',
+      name: 'web_search',
+      max_uses: 8,
+    }
+    const response = await app.handle(new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-opus-5',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: 'Search the web.' }],
+        tools: [tool],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.payload.tools as unknown).toEqual([tool])
+  })
+
   test('/v1/messages native path does not inject thinking or output_config', async () => {
     const app = createApp()
     const calls: Array<CapturedMessagesCall> = []
