@@ -4,6 +4,7 @@ import consola from 'consola'
 import {
   parseAnthropicCountTokensPayload,
   parseAnthropicMessagesPayload,
+  parseDecisionsRequest,
   parseEmbeddingRequest,
   parseOpenAIChatPayload,
   parseResponsesInputTokensPayload,
@@ -1119,6 +1120,151 @@ describe('Responses payload validation', () => {
 // ---------------------------------------------------------------------------
 // TranslationFailure -> HTTPError mapping
 // ---------------------------------------------------------------------------
+
+describe('Decisions payload validation', () => {
+  function decisionsRequest(overrides: Record<string, unknown> = {}) {
+    return {
+      model: 'microsoft-decision-1',
+      input: 'Customer wants a refund.',
+      questions: [{ type: 'predicate', instructions: 'Is the customer asking for a refund?' }],
+      ...overrides,
+    }
+  }
+
+  function expectDecisionsInvalid(payload: unknown, messageIncludes?: string) {
+    try {
+      parseDecisionsRequest(payload)
+    }
+    catch (error) {
+      expect(error).toBeInstanceOf(HTTPError)
+      const httpError = error as HTTPError
+      expect(httpError.status).toBe(400)
+      expect(httpError.body.error.type).toBe('invalid_request_error')
+      expect(httpError.body.error.param).toBe('openai.decisions')
+      if (messageIncludes) {
+        expect(httpError.body.error.details?.some(detail =>
+          detail.message.includes(messageIncludes),
+        )).toBe(true)
+      }
+      return
+    }
+
+    throw new Error('Expected Decisions payload validation to fail')
+  }
+
+  test('accepts a minimal Decisions request', () => {
+    const parsed = parseDecisionsRequest(decisionsRequest())
+
+    expect(parsed.model).toBe('microsoft-decision-1')
+    expect(parsed.questions).toEqual([
+      { type: 'predicate', instructions: 'Is the customer asking for a refund?' },
+    ])
+  })
+
+  test('accepts empty evidence, names, and instructions', () => {
+    const parsed = parseDecisionsRequest(decisionsRequest({
+      input: '',
+      questions: [{ type: 'predicate', name: '', instructions: '' }],
+    }))
+
+    expect(parsed.input).toBe('')
+    expect(parsed.questions[0]).toEqual({ type: 'predicate', name: '', instructions: '' })
+  })
+
+  test('rejects empty and over-limit question arrays', () => {
+    expectDecisionsInvalid(decisionsRequest({ questions: [] }))
+    expectDecisionsInvalid(decisionsRequest({
+      questions: Array.from({ length: 401 }).fill({
+        type: 'predicate',
+        instructions: 'Is it?',
+      }),
+    }))
+  })
+
+  test('rejects choice and score cardinality violations', () => {
+    expectDecisionsInvalid(decisionsRequest({
+      questions: [{
+        type: 'choice',
+        instructions: 'Pick one.',
+        choices: [{ value: 'only' }],
+      }],
+    }))
+    expectDecisionsInvalid(decisionsRequest({
+      questions: [{
+        type: 'choice',
+        instructions: 'Pick one.',
+        choices: Array.from({ length: 256 }, (_, index) => ({ value: `choice-${index}` })),
+      }],
+    }))
+    expectDecisionsInvalid(decisionsRequest({
+      questions: [{
+        type: 'score',
+        instructions: 'Rate it.',
+        levels: [{ label: 'only' }],
+      }],
+    }))
+    expectDecisionsInvalid(decisionsRequest({
+      questions: [{
+        type: 'score',
+        instructions: 'Rate it.',
+        levels: Array.from({ length: 11 }, (_, index) => ({ label: `level-${index}` })),
+      }],
+    }))
+  })
+
+  test('rejects stream, unknown fields, and box questions', () => {
+    expectDecisionsInvalid(decisionsRequest({ stream: false }))
+    expectDecisionsInvalid(decisionsRequest({
+      questions: [{ type: 'predicate', instructions: 'Is it?', extra: true }],
+    }))
+    expectDecisionsInvalid(decisionsRequest({
+      questions: [{ type: 'box', instructions: 'Where is it?' }],
+    }))
+  })
+
+  test('accepts the public optional fields for the policy layer', () => {
+    const parsed = parseDecisionsRequest(decisionsRequest({
+      safety_identifier: 'user-1',
+      prompt_cache_key: 'cache-key',
+      prompt_cache_options: { mode: 'explicit' },
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'hello', prompt_cache_breakpoint: { mode: 'explicit' } },
+          { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+        ],
+      }],
+    }))
+
+    expect(parsed.safety_identifier).toBe('user-1')
+    expect(parsed.prompt_cache_key).toBe('cache-key')
+    expect(parsed.input).toHaveLength(1)
+  })
+
+  test('accepts legal JSON evidence and rejects over-limit JSON', () => {
+    const parsed = parseDecisionsRequest(decisionsRequest({
+      input: [{
+        role: 'user',
+        content: [{ type: 'input_json', data: { ticket: { id: 1 }, tags: ['a', 'b'] } }],
+      }],
+    }))
+    expect(parsed.input).toHaveLength(1)
+
+    let nested: Record<string, unknown> = { leaf: true }
+    for (let index = 0; index < 33; index++)
+      nested = { nested }
+    expectDecisionsInvalid(decisionsRequest({
+      input: [{
+        role: 'user',
+        content: [{ type: 'input_json', data: nested }],
+      }],
+    }), 'container levels')
+  })
+
+  test('rejects an empty model after payload parsing', () => {
+    expectDecisionsInvalid(decisionsRequest({ model: '' }))
+  })
+})
 
 describe('withTranslationErrors', () => {
   // The kind was dropped on both the wire and the log, so a translation-path

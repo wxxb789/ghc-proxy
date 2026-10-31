@@ -7,6 +7,7 @@ export type ProtocolId
     | 'responses'
     | 'responses-input-tokens'
     | 'embeddings'
+    | 'openai-decisions'
 
 export interface RequestMeta {
   sessionId?: string

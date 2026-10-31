@@ -1,4 +1,5 @@
 import { anthropicCountTokensProtocol, anthropicMessagesProtocol } from './anthropic-messages'
+import { decisionsProtocol } from './decisions'
 import { embeddingsProtocol } from './embeddings'
 import { openaiChatProtocol } from './openai-chat'
 import { ProtocolRegistry } from './registry'
@@ -12,6 +13,7 @@ protocolRegistry.register('openai-chat', openaiChatProtocol)
 protocolRegistry.register('responses', responsesProtocol)
 protocolRegistry.register('responses-input-tokens', responsesInputTokensProtocol)
 protocolRegistry.register('embeddings', embeddingsProtocol)
+protocolRegistry.register('openai-decisions', decisionsProtocol)
 
 export { protocolRegistry }
 export type { IngestedRequest, ProtocolHandler, ProtocolId, RequestMeta } from './types'
