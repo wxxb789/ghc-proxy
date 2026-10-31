@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 
 import { parseDecisionsRequest } from '~/ingest/validation'
+import { HTTPError } from '~/lib/error'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
+import { normalizeDecisionsUpstreamError } from '~/translator/decisions/errors'
 import { translateDecisionsRequest } from '~/translator/decisions/openai-to-systemone'
 import { assertDecisionsRequestSupported } from '~/translator/decisions/policy'
+import { translateDecisionsResponse } from '~/translator/decisions/systemone-to-openai'
 
 function decisionsRequest(overrides: Record<string, unknown> = {}) {
   return {
@@ -236,6 +239,178 @@ describe('Decisions request translation', () => {
       { key: 'constructor', value: 'constructor' },
       { key: 'safe', value: 'safe' },
     ])
+  })
+})
+
+describe('Decisions response translation', () => {
+  function threeQuestionTranslation() {
+    return translateDecisionsRequest(parseDecisionsRequest(decisionsRequest({
+      questions: [
+        { type: 'predicate', name: 'refund', instructions: 'Is it a refund?' },
+        {
+          type: 'choice',
+          name: 'team',
+          instructions: 'Which team?',
+          choices: [{ value: true }, { value: false }],
+        },
+        {
+          type: 'score',
+          name: 'urgency',
+          instructions: 'How urgent?',
+          levels: [{ label: 'low' }, { label: 'high' }],
+        },
+      ],
+    })))
+  }
+
+  function validResponse() {
+    return {
+      model: 'actual-decision-1',
+      answers: {
+        q0: { type: 'noul', noul: 0.9 },
+        q1: {
+          type: 'choice',
+          choice: 'c1',
+          confidence: 0.8,
+          probabilities: { c0: 0.2, c1: 0.8 },
+        },
+        q2: {
+          type: 'score',
+          score: 1.1,
+          confidence: 0.7,
+          legend: {},
+          probabilities: { 0: 0.1, 1: 0.9 },
+        },
+      },
+      usage: { input_tokens: 12, output_tokens: 3 },
+    }
+  }
+
+  test('maps answers in request order with typed choices and labels', () => {
+    const translated = translateDecisionsResponse(validResponse(), threeQuestionTranslation())
+
+    expect(translated.model).toBe('actual-decision-1')
+    expect(translated.answers).toEqual([
+      { type: 'predicate', name: 'refund', probability: 0.9 },
+      {
+        type: 'choice',
+        name: 'team',
+        choice: false,
+        confidence: 0.8,
+        probabilities: [
+          { value: true, probability: 0.2 },
+          { value: false, probability: 0.8 },
+        ],
+      },
+      {
+        type: 'score',
+        name: 'urgency',
+        score: 1.1,
+        confidence: 0.7,
+        probabilities: [
+          { value: 0, label: 'low', probability: 0.1 },
+          { value: 1, label: 'high', probability: 0.9 },
+        ],
+      },
+    ])
+    expect(translated.usage).toEqual({
+      input_tokens: 12,
+      input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+      output_tokens: 3,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 15,
+    })
+  })
+
+  test('returns null for an unnamed question', () => {
+    const translated = translateDecisionsResponse({
+      model: 'actual-decision-1',
+      answers: { q0: { type: 'noul', noul: 0.5 } },
+      usage: { input_tokens: 1, output_tokens: 0 },
+    }, translateDecisionsRequest(parseDecisionsRequest(decisionsRequest({
+      questions: [{ type: 'predicate', instructions: 'Is it?' }],
+    }))))
+
+    expect(translated.answers[0]).toEqual({ type: 'predicate', name: null, probability: 0.5 })
+  })
+
+  test('maps an explicit refusal and never invents one', () => {
+    const translation = threeQuestionTranslation()
+    const response = validResponse() as Record<string, unknown>
+    const answers = response.answers as Record<string, unknown>
+    answers.q0 = { type: 'refusal' }
+    const translated = translateDecisionsResponse(response, translation)
+    expect(translated.answers[0]).toEqual({ type: 'refusal', name: 'refund' })
+
+    delete answers.q0
+    expect(() => translateDecisionsResponse(response, translation)).toThrow(TranslationFailure)
+  })
+
+  test('rejects missing, extra, and mismatched answers', () => {
+    const translation = threeQuestionTranslation()
+    const response = validResponse() as Record<string, unknown>
+    const answers = response.answers as Record<string, unknown>
+    answers.extra = { type: 'noul', noul: 0.5 }
+    expect(() => translateDecisionsResponse(response, translation)).toThrow(TranslationFailure)
+
+    delete answers.extra
+    answers.q1 = { type: 'choice', choice: 'c9', confidence: 0.8, probabilities: { c0: 0.2, c1: 0.8 } }
+    expect(() => translateDecisionsResponse(response, translation)).toThrow(TranslationFailure)
+  })
+
+  test('rejects out-of-range probabilities and malformed usage', () => {
+    const translation = threeQuestionTranslation()
+    const response = validResponse() as Record<string, unknown>
+    const answers = response.answers as Record<string, unknown>
+    answers.q0 = { type: 'noul', noul: 1.5 }
+    expect(() => translateDecisionsResponse(response, translation)).toThrow(TranslationFailure)
+
+    const usage = response.usage as Record<string, unknown>
+    usage.input_tokens = -1
+    expect(() => translateDecisionsResponse(response, translation)).toThrow(TranslationFailure)
+  })
+
+  test('normalizes a 422 detail array with public paths and no evidence', async () => {
+    const translation = threeQuestionTranslation()
+    const response = new Response(JSON.stringify({
+      detail: [{
+        loc: ['body', 'questions', 'q1', 'criteria', 'c1'],
+        msg: 'invalid choice',
+        type: 'value_error',
+        input: 'SENSITIVE-EVIDENCE',
+      }],
+    }), {
+      status: 422,
+      headers: { 'retry-after': '7' },
+    })
+
+    const error = await normalizeDecisionsUpstreamError('fallback', response, translation.questions)
+
+    expect(error).toBeInstanceOf(HTTPError)
+    expect(error.status).toBe(422)
+    expect(error.body.error.type).toBe('invalid_request_error')
+    expect(error.body.error.param).toBe('questions[1].choices[1]')
+    expect(error.body.error.code).toBe('upstream_validation_error')
+    expect(error.body.error.details?.[0]?.path).toBe('questions[1].choices[1]')
+    expect(error.headers.get('retry-after')).toBe('7')
+    expect(JSON.stringify(error.body)).not.toContain('SENSITIVE-EVIDENCE')
+  })
+
+  test('normalizes detail strings and structured errors', async () => {
+    const detailError = await normalizeDecisionsUpstreamError('fallback', new Response(
+      JSON.stringify({ detail: 'model refused the request' }),
+      { status: 400 },
+    ))
+    expect(detailError.status).toBe(400)
+    expect(detailError.body.error.message).toBe('model refused the request')
+
+    const structuredError = await normalizeDecisionsUpstreamError('fallback', new Response(
+      JSON.stringify({ error: { message: 'rate limited' } }),
+      { status: 429, headers: { 'retry-after': '3' } },
+    ))
+    expect(structuredError.status).toBe(429)
+    expect(structuredError.body.error.type).toBe('rate_limit_error')
+    expect(structuredError.headers.get('retry-after')).toBe('3')
   })
 })
 
