@@ -6,6 +6,8 @@ export class AuthStore {
   upstream: 'github' | 'm365' = 'github'
   /** Explicit helper path for the M365 upstream. */
   mscAuthExe?: string
+  /** Broker account (home account id) selected for the M365 upstream. */
+  mscAuthAccount?: string
   gheDomain?: string
   githubLogin?: string
   githubValidatedAt?: number

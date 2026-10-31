@@ -47,6 +47,7 @@ internal static class Program
         var listAccounts = HasFlag(args, "--accounts");
         var tenant = GetArgument(args, "--tenant") ?? DefaultTenantId;
         var upn = GetArgument(args, "--upn");
+        var accountId = GetArgument(args, "--account");
 
         var app = PublicClientApplicationBuilder
             .Create(ClientId)
@@ -78,7 +79,7 @@ internal static class Program
             foreach (var candidate in accounts)
             {
                 Console.Error.WriteLine(
-                    $"[msc-auth] {candidate.Username}  home={candidate.HomeAccountId}  env={candidate.Environment}");
+                    $"[msc-auth] {candidate.Username}  home={candidate.HomeAccountId.Identifier}  env={candidate.Environment}");
             }
         }
         catch (MsalException error)
@@ -91,34 +92,49 @@ internal static class Program
         {
             foreach (var candidate in accounts)
             {
-                Console.WriteLine($"{candidate.Username}\t{candidate.HomeAccountId}\t{candidate.Environment}");
+                Console.WriteLine($"{candidate.Username}\t{candidate.HomeAccountId.Identifier}\t{candidate.Environment}");
             }
 
             return 0;
         }
 
-        var target = upn ?? DefaultUpn;
-        account = accounts.FirstOrDefault(
-                candidate => candidate.Username.Equals(target, StringComparison.OrdinalIgnoreCase))
-            ?? accounts.FirstOrDefault(
-                candidate => candidate.Username.Contains(target, StringComparison.OrdinalIgnoreCase));
-
-        if (account is null && upn is null)
+        IAccount? selected = null;
+        if (accountId is not null)
         {
-            var preferred = GetArgument(args, "--prefer") ?? "microsoft.com";
-            account = accounts.FirstOrDefault(
-                candidate => candidate.Username.Contains(preferred, StringComparison.OrdinalIgnoreCase));
+            selected = accounts.FirstOrDefault(candidate =>
+                string.Equals(candidate.HomeAccountId.Identifier, accountId, StringComparison.OrdinalIgnoreCase));
+            if (selected is null)
+            {
+                Console.Error.WriteLine($"[msc-auth] no account matched --account {accountId}");
+                return 2;
+            }
+        }
+        else
+        {
+            var target = upn ?? DefaultUpn;
+            selected = accounts.FirstOrDefault(candidate =>
+                    candidate.Username.Equals(target, StringComparison.OrdinalIgnoreCase))
+                ?? accounts.FirstOrDefault(candidate =>
+                    candidate.Username.Contains(target, StringComparison.OrdinalIgnoreCase));
+            if (selected is null && upn is null)
+            {
+                var preferred = GetArgument(args, "--prefer") ?? "microsoft.com";
+                selected = accounts.FirstOrDefault(candidate =>
+                    candidate.Username.Contains(preferred, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (selected is null && accounts.Count == 1)
+            {
+                selected = accounts[0];
+            }
+
+            if (selected is null && accounts.Count > 1)
+            {
+                Console.Error.WriteLine("[msc-auth] no account matched; use --accounts to list and --upn to pick");
+            }
         }
 
-        if (account is null && accounts.Count == 1)
-        {
-            account = accounts[0];
-        }
-
-        if (account is null && accounts.Count > 1)
-        {
-            Console.Error.WriteLine("[msc-auth] no account matched; use --accounts to list and --upn to pick");
-        }
+        account = selected;
 
         Console.Error.WriteLine($"[msc-auth] selected: {account?.Username ?? "(none)"}  authority={tenant}");
 

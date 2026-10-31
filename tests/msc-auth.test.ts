@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 
 import {
   getMscToken,
+  listMscAccounts,
   MscAuthError,
   resetMscTokenCache,
   resolveMscAuthExe,
@@ -135,6 +136,28 @@ describe('getMscToken', () => {
 
     await Promise.all([getMscToken(), getMscToken(), getMscToken()])
     expect(calls).toBe(1)
+  })
+})
+
+describe('listMscAccounts', () => {
+  test('parses the tab-separated account listing', async () => {
+    process.env.GHC_MSC_AUTH_EXE = makeFile('unused')
+    setMscHelperRunner(fakeRunner(
+      'user@example.com\tuid.utid\tlogin.microsoftonline.com\n'
+      + 'other@example.com\tuid2.utid2\tlogin.microsoftonline.com\n',
+    ))
+
+    expect(await listMscAccounts()).toEqual([
+      { upn: 'user@example.com', homeAccountId: 'uid.utid', environment: 'login.microsoftonline.com' },
+      { upn: 'other@example.com', homeAccountId: 'uid2.utid2', environment: 'login.microsoftonline.com' },
+    ])
+  })
+
+  test('surfaces a helper failure', async () => {
+    process.env.GHC_MSC_AUTH_EXE = makeFile('unused')
+    setMscHelperRunner(fakeRunner('', 3, '[msc-auth] broker unavailable'))
+
+    await expect(listMscAccounts()).rejects.toThrow(MscAuthError)
   })
 })
 

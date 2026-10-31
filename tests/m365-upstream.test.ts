@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 
 import { copilotBaseUrl, copilotHeaders } from '~/clients/api-config'
-import { M365_BASE_URL, M365_FALLBACKS, M365_MODELS, m365FallbackFor, m365Headers } from '~/clients/m365-upstream'
+import { fetchM365Models, M365_BASE_URL, M365_FALLBACKS, M365_MODELS, m365FallbackFor, m365Headers } from '~/clients/m365-upstream'
 import { modelCache } from '~/state'
 
 afterEach(() => {
@@ -109,5 +109,33 @@ describe('m365 model catalog', () => {
     expect(ids.has(M365_FALLBACKS.claudeSonnet)).toBe(true)
     expect(ids.has(M365_FALLBACKS.claudeHaiku)).toBe(true)
     expect(M365_FALLBACKS.claudeSonnet).toBe('claude-sonnet-5.5')
+  })
+
+  test('maps the gateway catalog onto /v1/messages models only', async () => {
+    const gateway = {
+      data: [
+        {
+          id: 'claude-opus-5.5',
+          name: 'Claude Opus 5.5',
+          publisher: 'Anthropic',
+          supported_endpoints: ['/v1/messages'],
+          capabilities: { limits: { max_context_window_tokens: 1000000 } },
+        },
+        { id: 'gpt-6-sol', supported_endpoints: ['/responses'] },
+      ],
+    }
+    const models = await fetchM365Models('token', async () => Response.json(gateway))
+
+    expect(models.data.map(model => model.id)).toEqual(['claude-opus-5.5'])
+    const [model] = models.data
+    expect(model?.capabilities.limits.max_context_window_tokens).toBe(1_000_000)
+    expect(model?.capabilities.limits.max_output_tokens).toBe(128_000)
+    expect(model?.vendor).toBe('anthropic')
+  })
+
+  test('rejects a catalog without usable models', async () => {
+    await expect(
+      fetchM365Models('token', async () => Response.json({ data: [{ id: 'gpt-6-sol', supported_endpoints: ['/responses'] }] })),
+    ).rejects.toThrow('no /v1/messages models')
   })
 })

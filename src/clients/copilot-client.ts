@@ -76,7 +76,10 @@ export class CopilotClient {
     options: RequestOptions = {},
   ): Promise<QueuedUpstreamResponse> {
     if (this.config.upstream === 'm365') {
-      const token = await getMscToken({ exe: this.config.mscAuthExe })
+      const token = await getMscToken({
+        exe: this.config.mscAuthExe,
+        account: this.config.mscAuthAccount,
+      })
       this.auth.copilotToken = token.accessToken
     }
 

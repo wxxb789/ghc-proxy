@@ -29,11 +29,21 @@ Consequences:
   PKCE attempt fails with `AADSTS50011`, and the device-code grant is disabled by
   tenant policy). MSAL is not a cross-platform route here.
 
-## Static catalog
+## Catalog
 
-The gateway has no `/models` endpoint (`404 NonExistentApi`) and rejects unknown
-names with `403 model_not_allowed`, so `src/clients/m365-upstream.ts` carries the
-catalog. Only names verified against the live gateway are listed:
+`GET /api/v1/llmapi/models` exists (the earlier `404` came from probing
+`/v1/models`) and returns every model the gateway serves: five Anthropic entries on
+`/v1/messages` and five `gpt-*` entries on `/responses`. Query parameters
+(`keyword`, `q`, `search`, `filter`, `publisher`, `supported_endpoints`, `limit`,
+`$top`) are ignored — the response is identical — so discovery means fetching the
+whole list and filtering locally.
+
+At startup the proxy fetches that endpoint with the freshly acquired token and
+caches the `/v1/messages` subset, so context limits come from the gateway itself
+(1,000,000 today). Unknown names still return `403 model_not_allowed`.
+
+`src/clients/m365-upstream.ts` keeps a static list for the case where the catalog
+request fails; it is a fallback, not the source of truth:
 
 | Model | Status |
 | --- | --- |
@@ -59,15 +69,30 @@ established by bisection, not read from error text:
 
 - **Output:** `max_tokens: 128000` returns 200, `128001` returns 400 — the
   ceiling is exactly 128k. That value is advertised as `max_output_tokens`.
-- **Context:** a 546,008 input-token request succeeds, and the
-  `anthropic-beta: context-1m-2025-08-07` request is accepted, so the real
-  ceiling is at least 546k but has never been pinned. The catalog therefore
-  advertises **1,000,000** for the 5.5 series as an explicit operator assumption
-  (`ASSUMED_CONTEXT_TOKENS` in `src/clients/m365-upstream.ts`) rather than a
-  measurement. `claude-opus-5` and `claude-sonnet-5` advertise no context limit,
-  which consumers treat as "do not clamp".
-- If the assumption is ever wrong for a model, the failure mode is an upstream
-  `400` on an oversized prompt, not a silent truncation.
+- **Context:** `GET /api/v1/llmapi/models` reports
+  `capabilities.limits.max_context_window_tokens: 1000000` for all five Anthropic
+  models, which matches a live 546,008-token request and the accepted
+  `context-1m-2025-08-07` beta. The catalog takes the value from the gateway; the
+  static fallback carries the same 1,000,000. Models outside the fallback list
+  advertise no context limit when the gateway omits one, and consumers treat a
+  missing limit as "do not clamp".
+
+## Account selection
+
+The Windows broker usually exposes every signed-in work account, but only some
+carry the Copilot subscription that can mint gateway tokens. A consumer account
+(for example an MSA) fails at acquisition with a broker error, not an HTTP error.
+
+- `config.json#m365.account` stores the broker **home account id**
+  (`uid.utid`), which stays unambiguous when one UPN exists in several tenants.
+- Precedence: `--msc-auth-account` → `config.json#m365.account` → the helper's
+  default (`lhan@microsoft.com`, then `--prefer`).
+- The Dashboard's Accounts tab shows a picker (`GET /dashboard/api/m365`,
+  `POST /dashboard/api/m365/account`). Saving writes the config, drops the cached
+  token, and acquires a new one immediately so a rejected account surfaces the
+  helper's diagnostics in the panel instead of failing the next request.
+- `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`, and
+  `msc-auth --account <homeAccountId>` reproduces the selection from a shell.
 
 ## Family fallbacks
 

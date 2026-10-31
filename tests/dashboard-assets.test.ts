@@ -211,6 +211,7 @@ describe('dashboard embedded state', () => {
       { method: 'GET', path: '/dashboard/api/models' },
       { method: 'GET', path: '/dashboard/api/behavior' },
       { method: 'GET', path: '/dashboard/api/requests' },
+      { method: 'GET', path: '/dashboard/api/m365' },
     ])
     expect(elements.get('error-banner')).toMatchObject({
       hidden: false,
@@ -236,6 +237,8 @@ describe('dashboard embedded state', () => {
         }
         if (input === '/dashboard/api/accounts')
           return Response.json({ routingEnabled: true, accounts: [] })
+        if (input === '/dashboard/api/m365')
+          return Response.json({ enabled: false, selected: {}, accounts: [] })
         if (input === '/dashboard/api/models')
           return Response.json({ models: [] })
         if (input === '/dashboard/api/behavior')
@@ -251,7 +254,7 @@ describe('dashboard embedded state', () => {
     await runtime.refreshLiveViews()
 
     expect(requests).not.toContainEqual({ method: 'POST', path: '/dashboard/api/refresh' })
-    expect(requests.filter(request => request.method === 'GET')).toHaveLength(6)
+    expect(requests.filter(request => request.method === 'GET')).toHaveLength(7)
   })
 
   test('queues a manual metadata refresh requested while a view load is active', async () => {

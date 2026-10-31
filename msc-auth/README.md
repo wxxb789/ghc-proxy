@@ -97,6 +97,7 @@ runtime). It is not a single file, and it is win-x64 only.
 msc-auth --json          # { access_token, expires_on, tenant, username, scopes }
 msc-auth                 # access token only
 msc-auth --accounts      # list broker accounts (username, home id, environment)
+msc-auth --account <id>  # pick the account by home account id (unambiguous)
 msc-auth --upn <upn>     # pick the account (default: lhan@microsoft.com)
 msc-auth --tenant <tid>  # pick the authority tenant
 msc-auth --interactive   # add an account to the WAM session once
@@ -125,7 +126,10 @@ allow-list is discovered per exact name:
 | `claude-haiku-5.5` | 200, `end_turn` | — |
 | `claude-opus-4.6` / `4.7` / `4.8`, `claude-sonnet-4.6`, `claude-haiku-4.5`, `claude-sonnet-4-5-20250929` | 403 `model_not_allowed` | — |
 
-Limits, measured by bisection because the gateway reports only `invalid_body`:
+`GET /api/v1/llmapi/models` lists the whole catalog (query parameters are
+ignored); it reports `max_context_window_tokens: 1000000` for every Anthropic
+model. Limits, measured by bisection because the gateway reports only
+`invalid_body`:
 `max_tokens` 128,000 is accepted and 128,001 is rejected; a 546,008 input-token
 request succeeds, so the context window is at least 546k and its real ceiling is
 unknown.

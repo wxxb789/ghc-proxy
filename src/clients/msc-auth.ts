@@ -21,6 +21,8 @@ export interface MscToken {
 export interface MscTokenOptions {
   /** Explicit helper path; overrides GHC_MSC_AUTH_EXE and discovery. */
   exe?: string
+  /** Broker account (home account id) passed to the helper. */
+  account?: string
   /** Account UPN passed to the helper; the helper's own default applies when omitted. */
   upn?: string
   /** Authority tenant passed to the helper. */
@@ -130,16 +132,52 @@ export function setMscHelperRunner(runner?: MscHelperRunner): void {
 
 /** Keeps the diagnostic lines and drops MSAL's informational noise. */
 function describeFailure(code: number, stderr: string): string {
-  const lines = stderr
+  const lines = stderr.split(NEWLINE_RE).map(line => line.trim()).filter(Boolean)
+  const own = lines.filter(line => line.startsWith('[msc-auth]'))
+  const msal = lines.filter(line => line.startsWith('[msal:Error]'))
+  // Prefer the helper's own diagnostics; MSAL lines are the fallback because
+  // they describe the broker internals rather than the user-visible cause.
+  const detail = (own.length > 0 ? own : msal).slice(-3).join(' | ')
+  const hint = code === 2
+    ? ' (no broker account matched; run msc-auth --accounts or --interactive once)'
+    : code === 3
+      ? ' (the selected account could not obtain a gateway token; pick another account)'
+      : ''
+  return `msc-auth exited ${code}${hint}: ${detail || 'no diagnostics'}`.slice(0, 600)
+}
+
+export interface MscAccount {
+  upn: string
+  homeAccountId: string
+  environment: string
+}
+
+/**
+ * Lists the accounts the Windows token broker exposes. The helper prints
+ * `upn<TAB>homeAccountId<TAB>environment` on stdout; diagnostics stay on stderr.
+ */
+export async function listMscAccounts(
+  options: { exe?: string, timeoutMs?: number } = {},
+): Promise<MscAccount[]> {
+  const exe = resolveMscAuthExe(options.exe)
+  const { stdout, stderr, code } = await helperRunner(
+    exe,
+    ['--accounts'],
+    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  )
+  if (code !== 0) {
+    throw new MscAuthError(describeFailure(code, stderr), code)
+  }
+
+  return stdout
     .split(NEWLINE_RE)
     .map(line => line.trim())
-    .filter(line => line.startsWith('[msc-auth]') || line.startsWith('[msal:Error]'))
-    .slice(-3)
-  const detail = lines.length > 0 ? lines.join(' | ') : 'no diagnostics'
-  const hint = code === 2
-    ? ' (no broker account selected; run msc-auth --accounts, or --interactive once)'
-    : ''
-  return `msc-auth exited ${code}${hint}: ${detail}`.slice(0, 600)
+    .filter(Boolean)
+    .map((line) => {
+      const [upn, homeAccountId, environment] = line.split('\t')
+      return { upn: upn ?? '', homeAccountId: homeAccountId ?? '', environment: environment ?? '' }
+    })
+    .filter(account => account.upn && account.homeAccountId)
 }
 
 interface HelperPayload {
@@ -151,7 +189,10 @@ interface HelperPayload {
 async function acquire(options: MscTokenOptions): Promise<MscToken> {
   const exe = resolveMscAuthExe(options.exe)
   const args = ['--json']
-  if (options.upn) {
+  if (options.account) {
+    args.push('--account', options.account)
+  }
+  else if (options.upn) {
     args.push('--upn', options.upn)
   }
   if (options.tenant) {

@@ -13,7 +13,7 @@ import { generateEnvScript } from '~/cli/shell'
 import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
-import { M365_MODELS } from '~/clients/m365-upstream'
+import { fetchM365Models, M365_MODELS } from '~/clients/m365-upstream'
 import { getMscToken } from '~/clients/msc-auth'
 import { recoverAccountManagementTransaction } from '~/lib/account-management-transaction'
 import { compileAccountRouting, normalizeAccountName } from '~/lib/account-routing'
@@ -51,6 +51,8 @@ interface RunServerOptions {
   upstream?: string
   /** Explicit msc-auth helper path for the `m365` upstream. */
   mscAuthExe?: string
+  /** Broker account (home account id) for the `m365` upstream. */
+  mscAuthAccount?: string
   claudeCode: boolean
   showToken: boolean
   proxyEnv: boolean
@@ -174,6 +176,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
   const upstream = options.upstream === 'm365' ? 'm365' : 'github'
   authStore.upstream = upstream
   authStore.mscAuthExe = options.mscAuthExe
+  authStore.mscAuthAccount = options.mscAuthAccount ?? cachedConfig.m365?.account
   if (upstream === 'm365') {
     consola.info('Upstream: Microsoft 365 Copilot gateway')
   }
@@ -201,14 +204,24 @@ async function runServer(options: RunServerOptions): Promise<void> {
     // Windows token broker through msc-auth, and the catalog is static because
     // the gateway has no /models endpoint.
     applyServerAuthOptions(authStore, options, accountType)
-    modelCache.cacheModels(M365_MODELS)
     // Fail here, with the helper's own diagnostics, instead of surfacing a 500
     // on the first proxied request.
-    const credential = await getMscToken({ exe: options.mscAuthExe })
+    const credential = await getMscToken({
+      exe: options.mscAuthExe,
+      account: authStore.mscAuthAccount,
+    })
     consola.info(
-      `M365 credential acquired (tenant ${credential.tenant || 'unknown'}, `
+      `M365 credential acquired (account ${authStore.mscAuthAccount ?? 'default'}, `
+      + `tenant ${credential.tenant || 'unknown'}, `
       + `expires ${credential.expiresOn.toISOString()})`,
     )
+    // The gateway publishes its catalog (including the real context window), so
+    // the static list is only used when that call fails.
+    const catalog = await fetchM365Models(credential.accessToken).catch((error: unknown) => {
+      consola.warn(`Falling back to the static M365 catalog: ${(error as Error).message}`)
+      return M365_MODELS
+    })
+    modelCache.cacheModels(catalog)
     accountSetup = {
       accountManager: undefined,
       cleanup: () => {},
@@ -606,6 +619,11 @@ export const start = defineCommand({
       description:
         'Path to the msc-auth helper for the m365 upstream (default: bundled dist/msc-auth/msc-auth.exe)',
     },
+    'msc-auth-account': {
+      type: 'string',
+      description:
+        'Broker account (home account id from `msc-auth --accounts`) for the m365 upstream',
+    },
     'claude-code': {
       alias: 'c',
       type: 'boolean',
@@ -688,6 +706,7 @@ export const start = defineCommand({
       githubToken: args['github-token'],
       upstream: args.upstream,
       mscAuthExe: args['msc-auth-exe'],
+      mscAuthAccount: args['msc-auth-account'],
       claudeCode: args['claude-code'],
       showToken: args['show-token'],
       proxyEnv: args['proxy-env'],

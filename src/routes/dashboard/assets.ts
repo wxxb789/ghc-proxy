@@ -68,6 +68,15 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </div>
       <div class="table-scroll accounts-table"><table><thead><tr><th>Default</th><th>Name</th><th>Hostname</th><th>GitHub</th><th>Tenant</th><th>Copilot</th><th>Quota</th><th>Action</th></tr></thead><tbody id="accounts-body"></tbody></table></div>
 
+      <section id="m365-panel" class="panel full-width account-add-panel" hidden>
+        <div class="section-heading"><h2>M365 Copilot account</h2><span id="m365-status" class="muted" role="status" aria-live="polite"></span></div>
+        <form id="m365-form" class="account-form">
+          <label><span>Broker account</span><select id="m365-account"></select></label>
+          <button id="m365-save" type="submit" class="command primary">Use this account</button>
+        </form>
+        <div class="muted account-help">Accounts come from the Windows token broker. Only an account with an M365 Copilot subscription can mint gateway tokens; the selection is stored in config.json.</div>
+      </section>
+
       <section id="account-bootstrap-panel" class="panel full-width account-add-panel" hidden>
         <div class="section-heading"><h2>Enable named accounts</h2><span id="account-bootstrap-status" class="muted" role="status" aria-live="polite">The current account remains the default.</span></div>
         <form id="account-bootstrap-form" class="account-form bootstrap-form">
@@ -648,6 +657,54 @@ function renderAccountAuthentication(session) {
   byId('account-auth-message').textContent = session.message || (session.state === 'pending' ? 'Waiting for authorization' : '');
 }
 
+async function loadM365() {
+  const panel = byId('m365-panel');
+  try {
+    const state = await fetchJson('/dashboard/api/m365');
+    if (!state.enabled) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    const select = byId('m365-account');
+    clearNode(select);
+    for (const account of state.accounts) {
+      const option = document.createElement('option');
+      option.value = account.homeAccountId;
+      option.textContent = account.upn + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026 (' + account.environment + ')';
+      if (state.selected.account === account.homeAccountId) option.selected = true;
+      select.append(option);
+    }
+    byId('m365-save').disabled = state.accounts.length === 0;
+    if (state.error) byId('m365-status').textContent = state.error;
+    else if (state.selected.account) byId('m365-status').textContent = 'Using ' + state.selected.account.slice(0, 12) + '\u2026';
+    else byId('m365-status').textContent = 'No account selected; using the helper default';
+  } catch (error) {
+    panel.hidden = false;
+    byId('m365-status').textContent = error.message;
+  }
+}
+
+async function saveM365Selection(event) {
+  event.preventDefault();
+  const button = byId('m365-save');
+  const select = byId('m365-account');
+  button.disabled = true;
+  byId('m365-status').textContent = 'Acquiring a token for the selected account\u2026';
+  try {
+    const state = await fetchJson('/dashboard/api/m365/account', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: select.value || null }),
+    });
+    byId('m365-status').textContent = state.error || 'Saved; the next request uses this account.';
+  } catch (error) {
+    byId('m365-status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadAccounts() {
   try {
     renderAccounts(await fetchJson('/dashboard/api/accounts'));
@@ -659,6 +716,8 @@ async function loadAccounts() {
     byId('account-bootstrap-panel').hidden = true;
     byId('account-add-panel').hidden = true;
     byId('account-auth').hidden = true;
+  } finally {
+    await loadM365();
   }
 }
 
@@ -1176,6 +1235,7 @@ document.querySelectorAll('.tab').forEach(function (button) {
 });
 
 byId('refresh-button').addEventListener('click', refreshDashboardMetadata);
+byId('m365-form').addEventListener('submit', saveM365Selection);
 byId('theme-toggle').addEventListener('change', function (event) {
   storeTheme(event.currentTarget.checked ? 'dark' : 'light');
 });

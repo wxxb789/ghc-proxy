@@ -15,6 +15,8 @@ export interface ClientConfig {
   upstream?: UpstreamKind
   /** Helper path for the `m365` upstream; discovery applies when omitted. */
   mscAuthExe?: string
+  /** Broker account (home account id) to select; helper default applies when omitted. */
+  mscAuthAccount?: string
   vsCodeVersion?: string
   copilotApiBase?: string
   githubBaseUrl?: string

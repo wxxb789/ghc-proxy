@@ -8,7 +8,7 @@
  * `400 invalid_body`.
  */
 import type { ModelFallbackConfig } from '~/lib/model-resolver'
-import type { ModelsResponse } from '~/types'
+import type { Model, ModelsResponse } from '~/types'
 
 import { randomUUID } from 'node:crypto'
 
@@ -55,6 +55,81 @@ export const M365_FALLBACKS: ModelFallbackConfig = {
   claudeOpus: 'claude-opus-5.5',
   claudeSonnet: 'claude-sonnet-5.5',
   claudeHaiku: 'claude-haiku-5.5',
+}
+
+interface GatewayModel {
+  id?: unknown
+  name?: unknown
+  publisher?: unknown
+  supported_endpoints?: unknown
+  capabilities?: { limits?: { max_context_window_tokens?: unknown } }
+}
+
+function toCatalogModel(entry: GatewayModel): Model | undefined {
+  const id = typeof entry.id === 'string' ? entry.id : ''
+  const endpoints = Array.isArray(entry.supported_endpoints)
+    ? entry.supported_endpoints.filter((value): value is string => typeof value === 'string')
+    : []
+  if (!id || !endpoints.includes('/v1/messages')) {
+    return undefined
+  }
+  const contextTokens = entry.capabilities?.limits?.max_context_window_tokens
+  const name = typeof entry.name === 'string' ? entry.name : id
+  const publisher = typeof entry.publisher === 'string' ? entry.publisher.toLowerCase() : 'anthropic'
+  return {
+    id,
+    name,
+    object: 'model',
+    vendor: publisher,
+    version: id.split('-').at(-1) ?? '',
+    preview: false,
+    model_picker_enabled: true,
+    supported_endpoints: endpoints,
+    capabilities: {
+      family: id,
+      object: 'model_capabilities',
+      type: 'chat',
+      tokenizer: 'cl100k_base',
+      limits: {
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        ...(typeof contextTokens === 'number'
+          ? { max_context_window_tokens: contextTokens, max_prompt_tokens: contextTokens }
+          : {}),
+      },
+      supports: {
+        tool_calls: true,
+        parallel_tool_calls: true,
+        streaming: true,
+      },
+    },
+  }
+}
+
+/**
+ * Reads the gateway catalog (`GET /api/v1/llmapi/models`). The endpoint exists,
+ * returns every model regardless of query parameters, and reports the real
+ * context window, so the static list is only a fallback.
+ */
+export async function fetchM365Models(
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ModelsResponse> {
+  const response = await fetchImpl(`${M365_BASE_URL}/models`, {
+    method: 'GET',
+    headers: m365Headers(token),
+  })
+  if (!response.ok) {
+    throw new Error(`M365 model catalog request failed with ${response.status}`)
+  }
+  const payload = await response.json() as { data?: unknown }
+  const entries = Array.isArray(payload.data) ? payload.data as GatewayModel[] : []
+  const models = entries
+    .map(toCatalogModel)
+    .filter((model): model is Model => model !== undefined)
+  if (models.length === 0) {
+    throw new Error('M365 model catalog returned no /v1/messages models')
+  }
+  return { object: 'list', data: models }
 }
 
 const FALLBACK_BY_FAMILY: Array<{ prefix: string, key: keyof ModelFallbackConfig }> = [
