@@ -47,13 +47,18 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_BUFFER = 1024 * 1024
 const NEWLINE_RE = /\r?\n/
 
-let cachedToken: MscToken | undefined
-let inflight: Promise<MscToken> | undefined
+const cachedTokens = new Map<string, MscToken>()
+const inflightTokens = new Map<string, Promise<MscToken>>()
+let cacheGeneration = 0
 
-/** Test hook: drop the in-memory token and any in-flight acquisition. */
 export function resetMscTokenCache(): void {
-  cachedToken = undefined
-  inflight = undefined
+  cachedTokens.clear()
+  inflightTokens.clear()
+  cacheGeneration += 1
+}
+
+function credentialKey(options: MscTokenOptions): string {
+  return JSON.stringify([options.exe ?? '', options.account ?? '', options.upn ?? '', options.tenant ?? ''])
 }
 
 /**
@@ -114,8 +119,8 @@ function runHelper(exe: string, args: string[], timeoutMs: number): Promise<Help
         return
       }
       resolve({
-        stdout: String(stdout ?? ''),
-        stderr: String(stderr ?? ''),
+        stdout,
+        stderr,
         code: typeof rawCode === 'number' ? rawCode : 0,
       })
     },
@@ -230,23 +235,35 @@ async function acquire(options: MscTokenOptions): Promise<MscToken> {
   }
 }
 
+function startAcquisition(key: string, options: MscTokenOptions): Promise<MscToken> {
+  const generation = cacheGeneration
+  const promise = acquire(options).then((token) => {
+    if (generation === cacheGeneration) {
+      cachedTokens.set(key, token)
+    }
+    return token
+  })
+  inflightTokens.set(key, promise)
+  const clear = () => {
+    if (inflightTokens.get(key) === promise) {
+      inflightTokens.delete(key)
+    }
+  }
+  void promise.then(clear, clear)
+  return promise
+}
+
 /**
  * Returns a gateway token, re-acquiring through the helper when it is within
- * five minutes of expiry. Concurrent callers share one acquisition.
+ * five minutes of expiry. Concurrent callers with the same credential identity
+ * share one acquisition.
  */
 export async function getMscToken(options: MscTokenOptions = {}): Promise<MscToken> {
-  if (cachedToken && cachedToken.expiresOn.getTime() - Date.now() > REFRESH_SKEW_MS) {
-    return cachedToken
+  const key = credentialKey(options)
+  const cached = cachedTokens.get(key)
+  if (cached && cached.expiresOn.getTime() - Date.now() > REFRESH_SKEW_MS) {
+    return cached
   }
 
-  inflight ??= acquire(options)
-    .then((token) => {
-      cachedToken = token
-      return token
-    })
-    .finally(() => {
-      inflight = undefined
-    })
-
-  return inflight
+  return inflightTokens.get(key) ?? startAcquisition(key, options)
 }

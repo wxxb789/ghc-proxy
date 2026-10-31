@@ -55,7 +55,7 @@ afterEach(() => {
 describe('resolveMscAuthExe', () => {
   test('prefers an explicit path over the environment override', () => {
     const explicit = makeFile('#!/bin/sh\nexit 0\n')
-    process.env.GHC_MSC_AUTH_EXE = '/nope/ignored.exe'
+    process.env.GHC_MSC_AUTH_EXE = makeFile('#!/bin/sh\nexit 0\n')
     expect(resolveMscAuthExe(explicit)).toBe(explicit)
   })
 
@@ -136,6 +136,25 @@ describe('getMscToken', () => {
 
     await Promise.all([getMscToken(), getMscToken(), getMscToken()])
     expect(calls).toBe(1)
+  })
+
+  test('keeps tokens for different credential identities apart', async () => {
+    process.env.GHC_MSC_AUTH_EXE = makeFile('unused')
+    let calls = 0
+    setMscHelperRunner(async (_exe, args) => {
+      calls += 1
+      const index = args.indexOf('--account')
+      const account = index >= 0 ? args[index + 1] : 'default'
+      return { stdout: payload(THIRTY_MINUTES, `token-${account}`), stderr: '', code: 0 }
+    })
+
+    const first = await getMscToken({ account: 'account-a' })
+    const second = await getMscToken({ account: 'account-b' })
+    const again = await getMscToken({ account: 'account-a' })
+
+    expect(second.accessToken).toBe('token-account-b')
+    expect(again).toBe(first)
+    expect(calls).toBe(2)
   })
 })
 
