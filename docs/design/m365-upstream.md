@@ -136,8 +136,9 @@ behavior.
 
 - Account routing, the Dashboard account views, and GHE options are
   GitHub-specific and are not used here.
-- Unknown model names are not rejected up front; they fall through to the
-  upstream, which answers `400`.
+- Unknown model names are not rejected up front; the gateway answers
+  `403 model_not_allowed`, which the proxy returns unchanged (probed with
+  `claude-unknown-1`).
 - Request queue, retry, and timeout settings apply unchanged. Only 429 and 529
   are replayed, as for every other completion endpoint.
 
