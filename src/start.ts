@@ -201,8 +201,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
   }
   if (upstream === 'm365') {
     // No GitHub credentials, no account manager: the credential comes from the
-    // Windows token broker through msc-auth, and the catalog is static because
-    // the gateway has no /models endpoint.
+    // Windows token broker through msc-auth.
     applyServerAuthOptions(authStore, options, accountType)
     // Fail here, with the helper's own diagnostics, instead of surfacing a 500
     // on the first proxied request.

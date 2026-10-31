@@ -1,11 +1,9 @@
 /**
  * Microsoft 365 Copilot coding-agent gateway: transport constants, the
- * Anthropic-shaped header contract, and the static model catalog.
+ * Anthropic-shaped header contract, and the fallback model catalog.
  *
- * The gateway exposes no `/models` endpoint (`404 NonExistentApi`), so the
- * catalog is authored here from live probes. Names not listed are rejected with
- * `403 model_not_allowed`; `max_tokens` above the value below is rejected with
- * `400 invalid_body`.
+ * Names the gateway does not list are rejected with `403 model_not_allowed`;
+ * `max_tokens` above the value below is rejected with `400 invalid_body`.
  */
 import type { ModelFallbackConfig } from '~/lib/model-resolver'
 import type { Model, ModelsResponse } from '~/types'
@@ -36,14 +34,13 @@ const ASSUMED_CONTEXT_TOKENS = 1_000_000
 const VERIFIED_MODELS: Array<{
   id: string
   name: string
-  version: string
   contextTokens?: number
 }> = [
-  { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', version: '5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
-  { id: 'claude-opus-5', name: 'Claude Opus 5', version: '5' },
-  { id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', version: '5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
-  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', version: '5' },
-  { id: 'claude-haiku-5.5', name: 'Claude Haiku 5.5', version: '5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
+  { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
+  { id: 'claude-opus-5', name: 'Claude Opus 5' },
+  { id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
+  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
+  { id: 'claude-haiku-5.5', name: 'Claude Haiku 5.5', contextTokens: ASSUMED_CONTEXT_TOKENS },
 ]
 
 /**
@@ -105,24 +102,15 @@ function toCatalogModel(entry: GatewayModel): Model | undefined {
   }
 }
 
+const CATALOG_TIMEOUT_MS = 10_000
+
 /**
- * Reads the gateway catalog (`GET /api/v1/llmapi/models`). The endpoint exists,
- * returns every model regardless of query parameters, and reports the real
- * context window, so the static list is only a fallback.
+ * Normalizes a gateway catalog payload into the model list the proxy serves.
+ * Entries without a `/v1/messages` endpoint are dropped.
  */
-export async function fetchM365Models(
-  token: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<ModelsResponse> {
-  const response = await fetchImpl(`${M365_BASE_URL}/models`, {
-    method: 'GET',
-    headers: m365Headers(token),
-  })
-  if (!response.ok) {
-    throw new Error(`M365 model catalog request failed with ${response.status}`)
-  }
-  const payload = await response.json() as { data?: unknown }
-  const entries = Array.isArray(payload.data) ? payload.data as GatewayModel[] : []
+export function normalizeM365Catalog(payload: unknown): ModelsResponse {
+  const data = (payload as { data?: unknown } | null | undefined)?.data
+  const entries = Array.isArray(data) ? data as GatewayModel[] : []
   const models = entries
     .map(toCatalogModel)
     .filter((model): model is Model => model !== undefined)
@@ -130,6 +118,26 @@ export async function fetchM365Models(
     throw new Error('M365 model catalog returned no /v1/messages models')
   }
   return { object: 'list', data: models }
+}
+
+/**
+ * Reads the gateway catalog (`GET /api/v1/llmapi/models`). The endpoint exists,
+ * returns every model regardless of query parameters, and reports the real
+ * context window, so the static list is only a fallback.
+ */
+export async function fetchM365Models(
+  token: string,
+  fetchImpl: (input: string, init: RequestInit) => Promise<Response> = fetch,
+): Promise<ModelsResponse> {
+  const response = await fetchImpl(`${M365_BASE_URL}/models`, {
+    method: 'GET',
+    headers: m365Headers(token),
+    signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
+  })
+  if (!response.ok) {
+    throw new Error(`M365 model catalog request failed with ${response.status}`)
+  }
+  return normalizeM365Catalog(await response.json())
 }
 
 const FALLBACK_BY_FAMILY: Array<{ prefix: string, key: keyof ModelFallbackConfig }> = [
@@ -153,36 +161,17 @@ export function m365FallbackFor(modelId: string, knownModelIds: ReadonlyArray<st
 
 export const M365_MODELS: ModelsResponse = {
   object: 'list',
-  data: VERIFIED_MODELS.map(model => ({
-    id: model.id,
-    name: model.name,
-    object: 'model',
-    vendor: 'anthropic',
-    version: model.version,
-    preview: false,
-    model_picker_enabled: true,
-    supported_endpoints: ['/v1/messages'],
-    capabilities: {
-      family: model.id,
-      object: 'model_capabilities',
-      type: 'chat',
-      tokenizer: 'cl100k_base',
-      limits: {
-        max_output_tokens: MAX_OUTPUT_TOKENS,
-        ...(model.contextTokens
-          ? {
-              max_context_window_tokens: model.contextTokens,
-              max_prompt_tokens: model.contextTokens,
-            }
-          : {}),
-      },
-      supports: {
-        tool_calls: true,
-        parallel_tool_calls: true,
-        streaming: true,
-      },
-    },
-  })),
+  data: VERIFIED_MODELS
+    .map(model => toCatalogModel({
+      id: model.id,
+      name: model.name,
+      publisher: 'anthropic',
+      supported_endpoints: ['/v1/messages'],
+      capabilities: model.contextTokens === undefined
+        ? undefined
+        : { limits: { max_context_window_tokens: model.contextTokens } },
+    }))
+    .filter((model): model is Model => model !== undefined),
 }
 
 /**

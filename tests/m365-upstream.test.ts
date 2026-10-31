@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 
 import { copilotBaseUrl, copilotHeaders } from '~/clients/api-config'
-import { fetchM365Models, M365_BASE_URL, M365_FALLBACKS, M365_MODELS, m365FallbackFor, m365Headers } from '~/clients/m365-upstream'
+import { fetchM365Models, M365_FALLBACKS, M365_MODELS, m365FallbackFor, m365Headers } from '~/clients/m365-upstream'
 import { modelCache } from '~/state'
 
 afterEach(() => {
@@ -10,7 +10,8 @@ afterEach(() => {
 
 describe('m365 upstream transport', () => {
   test('routes the base URL to the gateway only for the m365 upstream', () => {
-    expect(copilotBaseUrl({ accountType: 'individual', upstream: 'm365' })).toBe(M365_BASE_URL)
+    expect(copilotBaseUrl({ accountType: 'individual', upstream: 'm365' }))
+      .toBe('https://msit.loki.delve.office.com/api/v1/llmapi')
     expect(copilotBaseUrl({ accountType: 'individual' })).toBe('https://api.githubcopilot.com')
     expect(
       copilotBaseUrl({ accountType: 'business', copilotApiBase: 'https://example.test/' }),
@@ -33,7 +34,6 @@ describe('m365 upstream transport', () => {
     expect(headers['X-Initiator']).toBe('user')
     expect(headers['X-ClientCallId']).toMatch(/^[\da-f-]{36}$/u)
 
-    // GitHub-only identity headers must not leak to the gateway.
     expect(headers['copilot-integration-id']).toBeUndefined()
     expect(headers['editor-version']).toBeUndefined()
     expect(headers['x-github-api-version']).toBeUndefined()

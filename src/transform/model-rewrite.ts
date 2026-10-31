@@ -37,7 +37,7 @@ export function rewriteModel(modelId: string): ModelRewriteResult {
 
   // 3. M365 upstream: map unadvertised families onto the catalog before model
   // selection, so the request never falls through to an unsupported strategy.
-  if (authStore.upstream === 'm365') {
+  if (normalized === undefined && authStore.upstream === 'm365') {
     const mapped = m365FallbackFor(modelId, modelCache.getModelIds())
     if (mapped) {
       return { originalModel: modelId, model: mapped, reason: 'AUTO_CORRECT' }

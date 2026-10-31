@@ -149,5 +149,6 @@ bun ./src/main.ts start --upstream m365 --port 4199
 curl -s http://127.0.0.1:4199/v1/models
 ```
 
-Expected: three models listed, `POST /v1/messages` returns `200`, streaming
-returns Anthropic SSE, and the listener binds `127.0.0.1` only.
+Expected: five models listed (the catalog's `/v1/messages` subset; the gateway
+also serves five `gpt-*` models on `/responses`), `POST /v1/messages` returns
+`200`, streaming returns Anthropic SSE, and the listener binds `127.0.0.1` only.
