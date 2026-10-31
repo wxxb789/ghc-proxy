@@ -7,7 +7,7 @@ This document describes the error handling strategy and validation architecture.
 ### Routing and Request-Shape Errors (404 / 400 / 422)
 
 Raised by Elysia before or around a route handler, and mapped by
-`handleRouteError` (`src/server.ts`):
+`toErrorResponse` (`src/server.ts`):
 
 | Condition | Elysia `code` | Status | Client `type` |
 |---|---|---|---|
@@ -15,7 +15,7 @@ Raised by Elysia before or around a route handler, and mapped by
 | Request body is not parseable | `PARSE` | 400 | `invalid_request_error` |
 | A route's own schema rejects the body | `VALIDATION` | 422 | `invalid_request_error` |
 
-`handleRouteError` reads the `status` the thrown error declares rather than
+`toErrorResponse` reads the `status` the thrown error declares rather than
 mapping Elysia's `code`: every built-in Elysia error class carries `status` as a
 public class contract, so the property covers these cases and whatever Elysia
 adds later. The read is guarded to an integer in 400-599, so a thrown value can
@@ -33,6 +33,34 @@ internal token and is replaced with a client-facing sentence.
 No route in this repo declares an Elysia/TypeBox body schema today — ingest
 validates with Zod and throws `HTTPError(400)` — so the 422 row is reachable only
 if a schema-bearing route is added later.
+
+### Wire Error Ownership
+
+`toErrorResponse` is total: every thrown value yields a `Response`, and
+`onError` derives `set.status` from that response before returning it, so the
+access log and the request record cannot disagree with the bytes the client
+receives.
+
+That totality is a contract, not a convenience. The proxy must not hand a
+thrown `Error` to the framework for serialization. Elysia's composed error
+handler pre-calls `error.toResponse()` and then maps the raw error anyway
+(`return mapResponse(context.response = error, set)`), and `@elysiajs/node`
+checks `response instanceof Error` before
+`typeof response.toResponse === 'function'`. On Node that combination replaced
+the stored envelope with `text/plain` `{ name, message }` and dropped headers
+such as `Retry-After`, while Bun produced the correct body (#92). Upgrading is
+not a fix: the latest published `elysia` (1.4.30, and the 2.0.0 beta line) still
+maps the raw error, and `@elysiajs/node` 1.4.5 is already current. The behavior
+is owned here.
+
+`.error({ HTTP: HTTPError })` stays registered, but only so `onError` receives
+`code: 'HTTP'` for observability classification (`sanitizeObservedError`). No
+serialization branch depends on that code.
+
+The packaged `selfcheck` probe `http-error-transport-contract` is the regression
+gate: it throws through a real listener on Bun and Node and asserts status, JSON
+content type, the full envelope, `Retry-After`, and `x-request-id`. See
+[HTTPError contract is lost before the HTTP boundary on Node](../solutions/integration-issues/http-error-contract-lost-before-node-boundary.md).
 
 ### Validation Errors (400)
 
@@ -170,7 +198,10 @@ Issue kinds used in the codebase:
 
 ### `HTTPError`
 
-Elysia-native error class with `status` property and `toResponse()`. Elysia auto-handles this via `toResponse()` when thrown in route handlers:
+Carries the status, structured body, and safe response headers of a failure.
+`toResponse()` defines the envelope, and `toErrorResponse` calls it; the
+framework never serializes this class on the proxy's behalf (see
+[Wire Error Ownership](#wire-error-ownership)):
 
 ```typescript
 class HTTPError extends Error {
@@ -182,7 +213,9 @@ class HTTPError extends Error {
 }
 ```
 
-`HTTPError.toResponse()` is the protocol boundary. Recovery diagnostics stay in structured logs; they are not appended to the JSON body, emitted as non-standard SSE events, or exposed as custom retry headers.
+The envelope is the protocol boundary. Recovery diagnostics stay in structured
+logs; they are not appended to the JSON body, emitted as non-standard SSE
+events, or exposed as custom retry headers.
 
 ### `TranslationFailure`
 
@@ -211,7 +244,7 @@ function throwInvalidRequestError(
 ): never
 ```
 
-Throws an `HTTPError` that Elysia converts to:
+Throws an `HTTPError` that the proxy's error mapper converts to:
 ```json
 {
   "error": {

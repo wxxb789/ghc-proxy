@@ -182,7 +182,7 @@ anything happened.
 
 **Local rejections were invisible in logs, which is what let this accumulate.**
 `HTTPError` carries its own `toResponse()`, and `onError` in `src/server.ts`
-returns early for it, so a request rejected at the proxy boundary produced no log
+only records it, so a request rejected at the proxy boundary produced no log
 line of its own — indistinguishable from one that reached upstream and
 succeeded. When your own rejections leave no trace, divergence has no feedback
 signal and compounds. `throwInvalidRequestError` and `fromTranslationFailure`
