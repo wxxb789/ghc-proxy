@@ -219,7 +219,7 @@ export interface SystemOneNoulQuestion {
 export interface SystemOneChoiceQuestion {
   type: 'choice'
   instructions?: string
-  criteria: Record<string, string>
+  criteria: Record<string, string | null>
 }
 
 export interface SystemOneScoreQuestion {
