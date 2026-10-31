@@ -35,8 +35,15 @@ export async function createRuntimeEnvironment(
 
   const executable = path.join(directories.bin, process.platform === 'win32' ? `${runtime}.exe` : runtime)
   await fs.copyFile(await resolveRuntimeExecutable(runtime, cwd), executable)
-  if (process.platform !== 'win32')
+  if (process.platform !== 'win32') {
     await fs.chmod(executable, 0o755)
+    // `npm exec` runs its launcher through `sh`. Copy a shell into the isolated
+    // bin so the trimmed PATH does not have to expose a system directory that
+    // may also contain the opposite runtime.
+    const shell = path.join(directories.bin, 'sh')
+    await fs.copyFile(await fs.realpath('/bin/sh'), shell)
+    await fs.chmod(shell, 0o755)
+  }
 
   // Keep package-manager configuration at its original path so registry auth
   // and relative CA paths survive HOME isolation without copying credentials.
