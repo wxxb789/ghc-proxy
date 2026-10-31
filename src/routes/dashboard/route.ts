@@ -21,6 +21,8 @@ import {
   getDashboardOverview,
   getDashboardRequests,
 } from './handler'
+
+import { getM365DashboardState, setM365Account } from './m365'
 import { dashboardMetadataRefresher } from './metadata-refresh'
 
 const DASHBOARD_CSP = [
@@ -59,6 +61,10 @@ const bootstrapAccountRoutingSchema = z.object({
 
 const setDefaultAccountSchema = z.object({
   accountName: z.string(),
+}).strict()
+
+const setM365AccountSchema = z.object({
+  account: z.string().nullable(),
 }).strict()
 
 export interface DashboardAccountManagement {
@@ -129,6 +135,19 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         ...snapshot.routing,
         accounts: await getDashboardAccounts(snapshot.accounts, quotaCache),
       })
+    })
+    .get('/dashboard/api/m365', async () => apiResponse(await getM365DashboardState()))
+    .post('/dashboard/api/m365/account', async ({ body }) => {
+      const parsed = setM365AccountSchema.safeParse(body)
+      if (!parsed.success) {
+        return apiResponse({ error: { message: 'Invalid account selection payload.' } }, 400)
+      }
+      try {
+        return apiResponse(await setM365Account(parsed.data.account))
+      }
+      catch (error) {
+        return apiResponse({ error: { message: (error as Error).message } }, 400)
+      }
     })
     .post('/dashboard/api/refresh', async () => {
       if (!accountManager)

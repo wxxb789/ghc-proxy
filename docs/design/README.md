@@ -15,6 +15,7 @@ Architecture and design documentation for ghc-proxy.
 | [Error Handling](error-handling.md) | Error classification, validation, translation policy, and error flow |
 | [Upstream Request Queue](upstream-request-queue.md) | Global Copilot back-pressure, 429 retry, and stream-aware queue slot ownership |
 | [State and Configuration](state-and-config.md) | Global state management, config file, CLI flags, and startup sequence |
+| [M365 Upstream](m365-upstream.md) | The optional `--upstream m365` provider: Windows broker credential path, live gateway catalog with a static fallback, header contract, and loopback boundary |
 | [Dashboard Observability](dashboard-observability.md) | Local Dashboard projections, access control, lifecycle events, and data-minimization boundaries |
 | [Migration: Hono → Elysia](migration-hono-to-elysia.md) | Historical completion record for the 2026-03-13 framework migration; verification counts are snapshot evidence, not current totals |
 

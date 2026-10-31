@@ -127,6 +127,9 @@ bunx --bun ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node
 | `--wait` | `-w` | `false` | Queue requests instead of rejecting with 429 when `--rate-limit` cooldown has not elapsed (requires `--rate-limit`) |
 | `--manual` | -- | `false` | Manually approve each request |
 | `--github-token` | `-g` | -- | Use a GitHub token for this process only (normally obtained with `auth`); this flag does not persist it to `config.json` |
+| `--upstream` | -- | `github` | Upstream API: `github`, or `m365` for the Microsoft 365 Copilot gateway (Windows only; always binds `127.0.0.1`) |
+| `--msc-auth-exe` | -- | bundled helper | Path to the `msc-auth` helper used by `--upstream m365` |
+| `--msc-auth-account` | -- | broker default | Broker account for `--upstream m365`, as the home account id printed by `msc-auth --accounts` |
 | `--claude-code` | `-c` | `false` | Generate a Claude Code launch command |
 | `--show-token` | -- | `false` | Display tokens on auth and refresh |
 | `--dump-failed-payloads` | `-D` | `false` | Dump failed `/responses` payloads on upstream 400 errors for debugging. Can also be enabled with `DUMP_FAILED_PAYLOADS=1`. |
@@ -189,6 +192,21 @@ bunx --bun ghc-proxy@latest start --account-type enterprise
 The proxy normalizes and persists the GHE domain automatically after a successful authentication, so you only need to pass `--ghe-domain` on the first run or when switching tenants.
 
 > **Note:** `--account-type enterprise` alone is not sufficient for GHE.com login — the proxy needs the company domain to construct the correct device login URL (`https://<company>.ghe.com/login/device`). GHE.com support is scoped to `*.ghe.com` only and does not apply to self-hosted GitHub Enterprise Server instances.
+
+### Microsoft 365 Copilot (`--upstream m365`)
+
+A second upstream for the Microsoft 365 Copilot gateway, which serves the Anthropic Messages protocol directly. It uses your own work account through the Windows token broker instead of a GitHub credential.
+
+```bash
+bunx --bun ghc-proxy@latest start --upstream m365
+```
+
+- **Windows only.** The credential comes from the bundled `msc-auth` helper over WAM/MSAL; the client has no device-code or loopback flow. The helper ships in the npm artifact (`dist/msc-auth/`); `bun run build:msc-auth` rebuilds it from source and `GHC_MSC_AUTH_EXE` overrides the path.
+- **Broker accounts.** `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`. Pin one with `--msc-auth-account <homeAccountId>`, or with the Dashboard Accounts tab, which persists `m365.account`. Only accounts carrying the Copilot subscription can mint gateway tokens; consumer accounts (MSA) are out of scope.
+- **Live catalog.** Startup reads `GET /api/v1/llmapi/models` and serves its `/v1/messages` subset, so context limits come from the gateway (1M today). The built-in list is a fallback for when that request fails.
+- **Loopback only.** The listener binds `127.0.0.1` in this mode, because the credential spends your own account's quota.
+
+See [M365 Upstream](./docs/design/m365-upstream.md) for the header contract, measured limits, and the family fallbacks applied to unadvertised model names.
 
 ## Configuration
 
@@ -324,6 +342,7 @@ All fields are optional. The full schema:
 | `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream retry backoff when `Retry-After` is absent |
 | `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum computed backoff (seconds); does not clamp `Retry-After` |
 | `gheDomain` | `string` | unset | GitHub Enterprise Cloud company domain (persisted automatically after GHE.com auth) |
+| `m365` | `{ account?, upn? }` | unset | Broker account for `--upstream m365`; `account` is the home account id from `msc-auth --accounts` |
 | `accountRouting` | `{ baseHostname, defaultAccount, hostnames }` | unset | Automatically created for legacy single-account installs; exact DNS hostname routing rejects unknown hosts |
 
 Example:

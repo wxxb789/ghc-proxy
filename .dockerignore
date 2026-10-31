@@ -4,6 +4,8 @@
 !bun.lock
 !tsconfig.json
 !tsdown.config.ts
+!scripts/
+!scripts/**
 !src/
 !src/**
 !entrypoint.sh

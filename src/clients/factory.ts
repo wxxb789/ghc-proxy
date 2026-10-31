@@ -44,6 +44,9 @@ export function getClientConfig(): ClientConfig {
   const { baseUrl, apiBaseUrl } = buildGitHubUrls(runtime.auth.gheDomain)
   return {
     accountType: runtime.auth.accountType,
+    upstream: runtime.auth.upstream,
+    mscAuthExe: runtime.auth.mscAuthExe,
+    mscAuthAccount: runtime.auth.mscAuthAccount,
     vsCodeVersion: runtime.models.getVSCodeVersion(),
     copilotApiBase: runtime.auth.copilotApiBase,
     githubBaseUrl: baseUrl,

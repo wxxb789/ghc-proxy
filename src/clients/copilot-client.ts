@@ -26,6 +26,8 @@ import { events } from 'fetch-event-stream'
 import { HTTPError, throwUpstreamError } from '~/lib/error'
 
 import { copilotBaseUrl, copilotHeaders } from './api-config'
+import { normalizeM365Catalog } from './m365-upstream'
+import { getMscToken } from './msc-auth'
 import { TerminalUpstreamRecoveryError } from './upstream-queue'
 
 interface RequestOptions {
@@ -74,6 +76,14 @@ export class CopilotClient {
     errorMessage: string,
     options: RequestOptions = {},
   ): Promise<QueuedUpstreamResponse> {
+    if (this.config.upstream === 'm365') {
+      const token = await getMscToken({
+        exe: this.config.mscAuthExe,
+        account: this.config.mscAuthAccount,
+      })
+      this.auth.copilotToken = token.accessToken
+    }
+
     this.requireToken()
 
     const headers = options.extraHeaders
@@ -253,11 +263,14 @@ export class CopilotClient {
   }
 
   async getModels(options: { signal?: AbortSignal } = {}): Promise<ModelsResponse> {
-    return this.requestJson<ModelsResponse>(
+    const payload = await this.requestJson<unknown>(
       '/models',
       'Failed to get models',
       { retryable: true, signal: options.signal },
     )
+    return this.config.upstream === 'm365'
+      ? normalizeM365Catalog(payload)
+      : payload as ModelsResponse
   }
 
   async createResponses(

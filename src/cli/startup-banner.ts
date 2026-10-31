@@ -2,6 +2,7 @@ import type { Model } from '~/types'
 
 import { colorize } from 'consola/utils'
 
+import { M365_FALLBACKS } from '~/clients/m365-upstream'
 import { getModelFallbackConfig } from '~/lib/model-resolver'
 import { authStore, modelCache } from '~/state'
 import { VERSION } from '~/util/version'
@@ -48,7 +49,9 @@ export function printStartupBanner(serverUrl: string): void {
   const knownModelIds = cachedModels
     ? new Set(models.map(model => model.id))
     : undefined
-  const fallbacks = getModelFallbackConfig(knownModelIds)
+  const fallbacks = authStore.upstream === 'm365'
+    ? M365_FALLBACKS
+    : getModelFallbackConfig(knownModelIds)
   lines.push('')
   lines.push(`  ${colorize('bold', 'Fallbacks')}`)
   lines.push(`    ${colorize('dim', 'claude-opus-*')}    -> ${fallbacks.claudeOpus}`)

@@ -20,14 +20,16 @@
   },
   "files": [
     "THIRD_PARTY_NOTICES.md",
-    "dist/**/*.mjs"
+    "dist/**/*.mjs",
+    "dist/msc-auth/**"
   ],
   "engines": {
     "bun": ">=1.4.0",
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && bun run build:msc-auth",
+    "build:msc-auth": "node scripts/build-msc-auth.mjs",
     "dev": "bun run --watch ./src/main.ts start",
     "knip": "knip-bun",
     "lint": "eslint --cache",

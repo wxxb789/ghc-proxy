@@ -1,6 +1,7 @@
 import consola from 'consola'
 
-import { configStore, modelCache } from '~/state'
+import { m365FallbackFor } from '~/clients/m365-upstream'
+import { authStore, configStore, modelCache } from '~/state'
 
 // ── Types ──
 
@@ -34,7 +35,16 @@ export function rewriteModel(modelId: string): ModelRewriteResult {
     return { originalModel: modelId, model: normalized, reason: 'AUTO_CORRECT' }
   }
 
-  // 3. Pass-through
+  // 3. M365 upstream: map unadvertised families onto the catalog before model
+  // selection, so the request never falls through to an unsupported strategy.
+  if (normalized === undefined && authStore.upstream === 'm365') {
+    const mapped = m365FallbackFor(modelId, modelCache.getModelIds())
+    if (mapped) {
+      return { originalModel: modelId, model: mapped, reason: 'AUTO_CORRECT' }
+    }
+  }
+
+  // 4. Pass-through
   return { originalModel: modelId, model: modelId }
 }
 

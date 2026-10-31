@@ -13,6 +13,8 @@ import { generateEnvScript } from '~/cli/shell'
 import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
+import { fetchM365Models, M365_MODELS } from '~/clients/m365-upstream'
+import { getMscToken } from '~/clients/msc-auth'
 import { recoverAccountManagementTransaction } from '~/lib/account-management-transaction'
 import { compileAccountRouting, normalizeAccountName } from '~/lib/account-routing'
 import {
@@ -45,6 +47,12 @@ interface RunServerOptions {
   rateLimit?: number
   rateLimitWait: boolean
   githubToken?: string
+  /** `github` (default) or `m365`; the latter needs no GitHub credentials. */
+  upstream?: string
+  /** Explicit msc-auth helper path for the `m365` upstream. */
+  mscAuthExe?: string
+  /** Broker account (home account id) for the `m365` upstream. */
+  mscAuthAccount?: string
   claudeCode: boolean
   showToken: boolean
   proxyEnv: boolean
@@ -165,6 +173,14 @@ async function runServer(options: RunServerOptions): Promise<void> {
   await readConfig()
   const cachedConfig = getCachedConfig()
 
+  const upstream = options.upstream === 'm365' ? 'm365' : 'github'
+  authStore.upstream = upstream
+  authStore.mscAuthExe = options.mscAuthExe
+  authStore.mscAuthAccount = options.mscAuthAccount ?? cachedConfig.m365?.account
+  if (upstream === 'm365') {
+    consola.info('Upstream: Microsoft 365 Copilot gateway')
+  }
+
   const upstreamQueueConcurrency = options.upstreamQueueConcurrency ?? cachedConfig.upstreamQueueConcurrency
   const upstreamQueueMaxRetries = options.upstreamQueueMaxRetries ?? cachedConfig.upstreamQueueMaxRetries
   const upstreamRecoveryBudgetSeconds = options.upstreamRecoveryBudgetSeconds ?? cachedConfig.upstreamRecoveryBudgetSeconds
@@ -183,7 +199,34 @@ async function runServer(options: RunServerOptions): Promise<void> {
     accountManager?: AccountManager
     cleanup: () => void | Promise<void>
   }
-  if (cachedConfig.accountRouting) {
+  if (upstream === 'm365') {
+    // No GitHub credentials, no account manager: the credential comes from the
+    // Windows token broker through msc-auth.
+    applyServerAuthOptions(authStore, options, accountType)
+    // Fail here, with the helper's own diagnostics, instead of surfacing a 500
+    // on the first proxied request.
+    const credential = await getMscToken({
+      exe: options.mscAuthExe,
+      account: authStore.mscAuthAccount,
+    })
+    consola.info(
+      `M365 credential acquired (account ${authStore.mscAuthAccount ?? 'default'}, `
+      + `tenant ${credential.tenant || 'unknown'}, `
+      + `expires ${credential.expiresOn.toISOString()})`,
+    )
+    // The gateway publishes its catalog (including the real context window), so
+    // the static list is only used when that call fails.
+    const catalog = await fetchM365Models(credential.accessToken).catch((error: unknown) => {
+      consola.warn(`Falling back to the static M365 catalog: ${(error as Error).message}`)
+      return M365_MODELS
+    })
+    modelCache.cacheModels(catalog)
+    accountSetup = {
+      accountManager: undefined,
+      cleanup: () => {},
+    }
+  }
+  else if (cachedConfig.accountRouting) {
     accountSetup = await setupRoutedAccounts(
       options,
       accountType,
@@ -207,8 +250,9 @@ async function runServer(options: RunServerOptions): Promise<void> {
     }
   }
 
-  const serverHostname = accountSetup.accountManager?.getRoutingSummary().baseHostname
-    ?? 'localhost'
+  const serverHostname = upstream === 'm365'
+    ? '127.0.0.1'
+    : accountSetup.accountManager?.getRoutingSummary().baseHostname ?? 'localhost'
   const serverUrl = `http://${serverHostname}:${options.port}`
 
   try {
@@ -225,7 +269,14 @@ async function runServer(options: RunServerOptions): Promise<void> {
       accountManager: accountSetup.accountManager,
       idleTimeout: options.idleTimeoutSeconds,
     })
-    app.listen(options.port)
+    // The M365 upstream authenticates with the user's own Microsoft credential,
+    // so it must not be reachable from the network by default.
+    if (upstream === 'm365') {
+      app.listen({ port: options.port, hostname: '127.0.0.1' })
+    }
+    else {
+      app.listen(options.port)
+    }
 
     const shutdown = async () => {
       consola.info('Shutting down gracefully...')
@@ -556,6 +607,22 @@ export const start = defineCommand({
       description:
         'Provide GitHub token directly (must be generated using the `auth` subcommand)',
     },
+    'upstream': {
+      type: 'string',
+      default: 'github',
+      description:
+        'Upstream API: github (default) or m365 (Microsoft 365 Copilot gateway, Windows only)',
+    },
+    'msc-auth-exe': {
+      type: 'string',
+      description:
+        'Path to the msc-auth helper for the m365 upstream (default: bundled dist/msc-auth/msc-auth.exe)',
+    },
+    'msc-auth-account': {
+      type: 'string',
+      description:
+        'Broker account (home account id from `msc-auth --accounts`) for the m365 upstream',
+    },
     'claude-code': {
       alias: 'c',
       type: 'boolean',
@@ -636,6 +703,9 @@ export const start = defineCommand({
       rateLimit,
       rateLimitWait: args.wait,
       githubToken: args['github-token'],
+      upstream: args.upstream,
+      mscAuthExe: args['msc-auth-exe'],
+      mscAuthAccount: args['msc-auth-account'],
       claudeCode: args['claude-code'],
       showToken: args['show-token'],
       proxyEnv: args['proxy-env'],

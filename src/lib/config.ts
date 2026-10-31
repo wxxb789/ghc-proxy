@@ -58,6 +58,10 @@ const configFileSchema = z.object({
   upstreamQueueBaseDelaySeconds: z.number().int().nonnegative().optional(),
   upstreamQueueMaxDelaySeconds: z.number().int().positive().optional(),
   gheDomain: z.string().optional(),
+  m365: z.object({
+    account: z.string().optional(),
+    upn: z.string().optional(),
+  }).optional(),
   accountRouting: accountRoutingSchema.optional(),
 }).passthrough()
 

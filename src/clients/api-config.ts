@@ -3,6 +3,8 @@ import type { CapiRequestContext } from '~/core/capi'
 
 import { randomUUID } from 'node:crypto'
 
+import { M365_BASE_URL, m365Headers } from './m365-upstream'
+
 export function standardHeaders() {
   return {
     'content-type': 'application/json',
@@ -29,6 +31,9 @@ function editorHeaders(config: ClientConfig) {
 }
 
 export function copilotBaseUrl(config: ClientConfig) {
+  if (config.upstream === 'm365') {
+    return M365_BASE_URL
+  }
   if (config.copilotApiBase) {
     return config.copilotApiBase.replace(TRAILING_SLASHES_RE, '')
   }
@@ -47,6 +52,10 @@ export function copilotHeaders(
   config: ClientConfig,
   options: CopilotHeaderOptions = {},
 ) {
+  if (config.upstream === 'm365') {
+    return m365Headers(auth.copilotToken ?? '')
+  }
+
   const requestContext = options.requestContext
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${auth.copilotToken}`,
