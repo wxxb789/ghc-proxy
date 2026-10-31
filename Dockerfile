@@ -5,6 +5,7 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
 COPY tsconfig.json tsdown.config.ts ./
+COPY scripts/build-msc-auth.mjs ./scripts/build-msc-auth.mjs
 COPY src ./src
 RUN bun run build
 
