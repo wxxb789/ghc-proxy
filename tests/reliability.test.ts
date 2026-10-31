@@ -6,7 +6,7 @@ import consola from 'consola'
 import { CopilotClient } from '~/clients'
 import { HTTPError } from '~/lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
-import { createServer, handleRouteError } from '~/server'
+import { createServer, toErrorResponse } from '~/server'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { createApp } from './helpers'
 
@@ -303,7 +303,7 @@ describe('Error classification in onError handler', () => {
 
 // ── Errors carry their own status ──
 //
-// `handleRouteError` used to flatten every non-HTTPError to 500. On an
+// `toErrorResponse` used to flatten every non-HTTPError to 500. On an
 // OpenAI-compatible surface that turned an unknown path into a 500 (the
 // reported `500 NaNs` lines) where the client is owed a 404, and it hid
 // `TranslationFailure`'s 502 behind a generic 500. The cases below exercise the
@@ -319,12 +319,33 @@ async function drainAccessLog() {
   await new Promise(resolve => setTimeout(resolve, 50))
 }
 
-describe('handleRouteError honors an error that carries its own status', () => {
+describe('toErrorResponse maps every thrown value to a client response', () => {
   function mapError(code: string, error: unknown) {
-    const set: { status?: number | string } = {}
-    const response = handleRouteError({ code, error, set })
-    return { set, response }
+    return toErrorResponse({ code, error })
   }
+
+  test('is total: every thrown shape produces a Response, never undefined', () => {
+    // `undefined` was the old return for HTTPError, which is how Node lost the
+    // envelope without any test noticing.
+    const hostile = new Proxy({}, {
+      has() {
+        throw new TypeError('has trap blew up')
+      },
+    })
+    const shapes: unknown[] = [
+      undefined,
+      null,
+      'boom',
+      42,
+      new Error('Something went wrong'),
+      new HTTPError(400, { error: { message: 'bad', type: 'invalid_request_error' } }),
+      { status: 502, message: 'bad gateway' },
+      hostile,
+    ]
+
+    for (const shape of shapes)
+      expect(mapError('UNKNOWN', shape)).toBeInstanceOf(Response)
+  })
 
   test('an unmatched route returns 404 through the real server', async () => {
     const response = await createServer().handle(
@@ -345,19 +366,19 @@ describe('handleRouteError honors an error that carries its own status', () => {
   })
 
   test('a 4xx from a thrown error is classified as invalid_request_error', () => {
-    const { response } = mapError('PARSE', { status: 400, message: 'bad json' })
+    const response = mapError('PARSE', { status: 400, message: 'bad json' })
 
-    expect(response?.status).toBe(400)
-    return response?.json().then((body) => {
+    expect(response.status).toBe(400)
+    return response.json().then((body) => {
       expect(body).toMatchObject({ error: { type: 'invalid_request_error' } })
     })
   })
 
   test('a 5xx keeps the generic error type', () => {
-    const { response } = mapError('UNKNOWN', new Error('Something went wrong'))
+    const response = mapError('UNKNOWN', new Error('Something went wrong'))
 
-    expect(response?.status).toBe(500)
-    return response?.json().then((body) => {
+    expect(response.status).toBe(500)
+    return response.json().then((body) => {
       expect(body).toMatchObject({ error: { message: 'Something went wrong', type: 'error' } })
     })
   })
@@ -379,14 +400,13 @@ describe('handleRouteError honors an error that carries its own status', () => {
     // No route here declares a TypeBox body schema — ingest validates with Zod
     // and throws HTTPError(400) — so Elysia never builds one on a live path.
     // The generic status read covers it for free if a validator is ever added.
-    const { set, response } = mapError('VALIDATION', { status: 422, message: 'bad' })
+    const response = mapError('VALIDATION', { status: 422, message: 'bad' })
 
-    expect(set.status).toBe(422)
-    expect(response?.status).toBe(422)
+    expect(response.status).toBe(422)
   })
 
   test('an unwrapped TranslationFailure surfaces its own 502, not 500', () => {
-    const { set, response } = mapError(
+    const response = mapError(
       'UNKNOWN',
       new TranslationFailure('Upstream response contained no choices', {
         status: 502,
@@ -394,47 +414,42 @@ describe('handleRouteError honors an error that carries its own status', () => {
       }),
     )
 
-    expect(set.status).toBe(502)
-    expect(response?.status).toBe(502)
+    expect(response.status).toBe(502)
   })
 
   test('a plain Error with no status still returns 500', () => {
-    const { set, response } = mapError('UNKNOWN', new Error('Something went wrong'))
+    const response = mapError('UNKNOWN', new Error('Something went wrong'))
 
-    expect(set.status).toBe(500)
-    expect(response?.status).toBe(500)
+    expect(response.status).toBe(500)
   })
 
   test('a thrown non-Error value returns 500, never undefined', () => {
-    const { set, response } = mapError('UNKNOWN', 'boom')
+    const response = mapError('UNKNOWN', 'boom')
 
-    expect(set.status).toBe(500)
-    expect(response?.status).toBe(500)
+    expect(response.status).toBe(500)
   })
 
   test('an out-of-range or non-integer status never reaches the client', () => {
     // An error must not be able to report success, or a nonsense number.
     for (const status of [200, 302, 99, 600, 404.5, Number.NaN]) {
-      const { set, response } = mapError('UNKNOWN', { status, message: 'nope' })
+      const response = mapError('UNKNOWN', { status, message: 'nope' })
 
-      expect(set.status).toBe(500)
-      expect(response?.status).toBe(500)
+      expect(response.status).toBe(500)
     }
   })
 
   test('a non-numeric status is ignored', () => {
-    const { set, response } = mapError('UNKNOWN', { status: '404', message: 'nope' })
+    const response = mapError('UNKNOWN', { status: '404', message: 'nope' })
 
-    expect(set.status).toBe(500)
-    expect(response?.status).toBe(500)
+    expect(response.status).toBe(500)
   })
 
   // Reading `status` runs inside the error handler, so this repo's own read
-  // must not be the thing that throws. Note this hardens `handleRouteError`
-  // only: Elysia itself does `set.status = error.status` after `onError`
-  // returns (`elysia/dist/compose.mjs`), so a hostile getter still escapes
-  // `app.handle()` end-to-end. Measured on the pre-fix tree too — that escape
-  // predates this change and is not ours to fix here.
+  // must not be the thing that throws. Note this hardens `toErrorResponse`
+  // only: Elysia reads `error.status` before any `onError` hook runs
+  // (`if(!set.status||set.status<300)set.status=error?.status||500` in
+  // `elysia/dist/compose.mjs`), so a hostile getter still escapes
+  // `app.handle()` end-to-end — Elysia's read, not this mapping's.
   test('a status getter that throws degrades to 500 instead of escaping', () => {
     class ThrowingStatusError extends Error {
       get status(): number {
@@ -442,10 +457,9 @@ describe('handleRouteError honors an error that carries its own status', () => {
       }
     }
 
-    const { set, response } = mapError('UNKNOWN', new ThrowingStatusError('boom'))
+    const response = mapError('UNKNOWN', new ThrowingStatusError('boom'))
 
-    expect(set.status).toBe(500)
-    expect(response?.status).toBe(500)
+    expect(response.status).toBe(500)
   })
 
   test('a Proxy whose has-trap throws degrades to 500 instead of escaping', () => {
@@ -455,21 +469,25 @@ describe('handleRouteError honors an error that carries its own status', () => {
       },
     })
 
-    const { set, response } = mapError('UNKNOWN', hostile)
+    const response = mapError('UNKNOWN', hostile)
 
-    expect(set.status).toBe(500)
-    expect(response?.status).toBe(500)
+    expect(response.status).toBe(500)
   })
 
-  test('code === HTTP still passes through untouched', () => {
-    const { set, response } = mapError(
-      'HTTP',
-      new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
-    )
+  test('a thrown HTTPError keeps its envelope and headers', async () => {
+    const error = new HTTPError(429, {
+      error: { message: 'Upstream error', type: 'rate_limit_error' },
+    }, { headers: { 'retry-after': '7' } })
 
-    // HTTPError carries its own toResponse(); the handler must not intercept it.
-    expect(response).toBeUndefined()
-    expect(set.status).toBeUndefined()
+    const response = mapError('HTTP', error)
+
+    // Returning `undefined` here let `@elysiajs/node` map the raw `Error`
+    // value: `text/plain`, `{ name, message }`, no `Retry-After`.
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe('7')
+    expect(await response.json()).toEqual({
+      error: { message: 'Upstream error', type: 'rate_limit_error' },
+    })
   })
 })
 

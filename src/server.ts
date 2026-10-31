@@ -72,10 +72,11 @@ const MAX_ERROR_STATUS = 599
  *
  * The read is wrapped because this runs inside the error handler: `status` may
  * be a getter and `error` may be a Proxy, either of which can throw. This
- * hardens this function only — Elysia itself does `set.status = error.status`
- * after `onError` returns (`elysia/dist/compose.mjs`), so a hostile getter
- * still escapes `app.handle()`. Measured on the pre-fix tree as well, so that
- * escape is Elysia's, not something reading the property here introduced.
+ * hardens this function only — Elysia reads `error.status` itself before any
+ * `onError` hook runs (`if(!set.status||set.status<300)set.status=error?.status||500`
+ * in `elysia/dist/compose.mjs`), so a hostile getter still escapes
+ * `app.handle()`. Measured on the pre-fix tree as well, so that escape is
+ * Elysia's, not something reading the property here introduced.
  * `isTimeoutLikeError` guards its own traversal the same way.
  */
 function claimedErrorStatus(error: unknown): number | undefined {
@@ -129,13 +130,24 @@ function localErrorType(status: number): string {
 const NOT_FOUND_MESSAGE = 'Unknown endpoint. Check the request path.'
 
 /**
- * Maps a thrown error to a client response.
+ * Map a thrown value to the response the client receives.
  *
- * `set.status` is written on every branch because `onError` returns a fresh
- * `Response` instead of falling through Elysia's normal path — `set.status`
- * would otherwise still hold whatever it was before the throw, and the access
- * log in `onAfterResponse` reads it. Without the write-back, a 504 is logged
- * as a 500.
+ * Total by design: every input produces a `Response`, so no thrown error is
+ * left for a framework or adapter to serialize. That ownership matters because
+ * neither layer is a trustworthy serializer:
+ *
+ * - Elysia's composed error handler pre-calls `error.toResponse()` but then
+ *   maps the raw error value anyway (`return mapResponse(context.response =
+ *   error, set)` in `elysia/dist/compose.mjs`, 1.4.30).
+ * - `@elysiajs/node` maps a value by checking `response instanceof Error`
+ *   before `typeof response.toResponse === 'function'`.
+ *
+ * Together those two turned a locally rejected request into `text/plain`
+ * `{ name, message }` with `body.type`, `body.param`, and headers such as
+ * `Retry-After` dropped on Node, while Bun clients saw the stored envelope
+ * (#92). The proxy's public error contract is not a dependency's behavior, so
+ * this function — not `HTTPError.toResponse()`, which only defines the envelope
+ * — is the protocol boundary.
  *
  * Errors that carry their own plausible status keep it. Flattening every
  * non-HTTPError to 500 turned an unmatched route into `500 NaNs` on an
@@ -144,19 +156,16 @@ const NOT_FOUND_MESSAGE = 'Unknown endpoint. Check the request path.'
  *
  * Exported so tests exercise this mapping rather than a copy of it.
  */
-export function handleRouteError(
-  { code, error, set }: {
+export function toErrorResponse(
+  { code, error }: {
     code: string | number
     error: unknown
-    set: { status?: number | string }
   },
-): Response | undefined {
-  // HTTPError is auto-handled via toResponse() — just let it through
-  if (code === 'HTTP')
-    return
+): Response {
+  if (error instanceof HTTPError)
+    return error.toResponse()
 
   if (isTimeoutLikeError(error)) {
-    set.status = 504
     return Response.json(
       {
         error: {
@@ -171,7 +180,6 @@ export function handleRouteError(
   const status = claimedErrorStatus(error) ?? 500
   const rawMessage = error instanceof Error ? error.message : String(error)
   const message = code === 'NOT_FOUND' ? NOT_FOUND_MESSAGE : rawMessage
-  set.status = status
   return Response.json(
     { error: { message, type: localErrorType(status) } },
     { status },
@@ -186,6 +194,9 @@ export function createServer(options?: ServerOptions) {
       : undefined,
   })
     .wrap(accountRoutingWrapper)
+    // Names the class for `code`-based observability classification only
+    // (`sanitizeObservedError`). The client response is built by
+    // `toErrorResponse`; nothing relies on Elysia serializing the error.
     .error({ HTTP: HTTPError })
     // Block body, not a concise arrow: Elysia turns any non-undefined
     // `onRequest` return into the response, and a WeakMap setter returns the
@@ -247,13 +258,16 @@ export function createServer(options?: ServerOptions) {
       )
     })
     .onError(({ code, error, request, set }) => {
-      const response = handleRouteError({ code, error, set })
-      const status = response?.status
-        ?? (error instanceof HTTPError ? error.status : 500)
+      const response = toErrorResponse({ code, error })
+      // `onAfterResponse` logs `set.status`, and the request record stores it,
+      // so derive it from the response that is actually sent. Writing it in
+      // the mapper's branches made the two drift whenever a branch was added
+      // or bypassed.
+      set.status = response.status
       if (!isClientAbortError(error)) {
         runtimeStore.requests.recordError(
           getOrCreateRequestCorrelation(request).requestId,
-          sanitizeObservedError(error, code, status),
+          sanitizeObservedError(error, code, response.status),
         )
       }
       return response

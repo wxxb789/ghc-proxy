@@ -10,6 +10,7 @@ import type { AccountRoutingConfig } from '~/lib/account-routing'
 import type { SSEStreamChunk } from '~/lib/execution-strategy'
 import type { CopilotUsageResponse, Model } from '~/types'
 
+import { deepStrictEqual } from 'node:assert'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
@@ -73,6 +74,7 @@ interface NodeDashboardListener {
 
 interface HttpProbeResult {
   body: string
+  headers: Headers
   status: number
 }
 
@@ -168,6 +170,157 @@ async function probeHttpErrorResponseContract(): Promise<void> {
   assertProbe(response.headers.get('retry-after') === '17', 'Retry-After was not preserved')
   const payload = await response.json() as { error?: { type?: string } }
   assertProbe(payload.error?.type === 'overloaded_error', 'error payload changed during toResponse()')
+}
+
+/**
+ * Exercise a thrown `HTTPError` over a real listener.
+ *
+ * The probe above only proves `toResponse()` itself serializes correctly; it
+ * cannot catch an adapter that never calls it. Elysia's composed error handler
+ * discards the `toResponse()` result and maps the raw error instead
+ * (`return mapResponse(context.response = error, set)`), and
+ * `@elysiajs/node` checks `response instanceof Error` before
+ * `typeof response.toResponse === 'function'`. A locally rejected request
+ * therefore used to reach Node clients as `text/plain` `{ name, message }`
+ * with `Retry-After` dropped, while Bun clients saw the correct envelope
+ * (#92). Every assertion here is a client-visible contract at the transport
+ * boundary, which is the only place that class of regression shows up: each
+ * case compares the received body to the stored envelope as a whole, because a
+ * boundary that rebuilds it from `name` and `message` still answers field
+ * spot-checks.
+ */
+async function probeHttpErrorTransportContract(): Promise<void> {
+  const runtime = createAccountRuntime('default')
+  runtime.auth.copilotToken = 'selfcheck-http-error-token'
+  const routing = compileAccountRouting({
+    baseHostname: 'localhost',
+    defaultAccount: 'default',
+    hostnames: { [DEFAULT_ACCOUNT_HOSTNAME]: 'default' },
+  }, ['default'])
+  configureAccountRuntimes(routing, [runtime])
+  // Retry-After only originates from an upstream response, and no local route
+  // emits one, so synthetic routes keep those assertions hermetic.
+  const app = createProxyServer({ logRequests: false })
+    .get('/__selfcheck/http-error-headers', () => {
+      throw new HTTPError(429, {
+        error: { message: 'selfcheck rate limit', type: 'rate_limit_error' },
+      }, { headers: { 'retry-after': '7' } })
+    })
+    // Generator routes are the second error shape a route can take, and the
+    // only one that streams. Throwing before the first yield leaves the
+    // response uncommitted, so it still owes the client the stored envelope.
+    .post('/__selfcheck/http-error-generator', async function* () {
+      throw new HTTPError(413, {
+        error: {
+          code: 'payload_too_large',
+          details: [{ message: 'serialized body exceeds the upstream limit', path: ['input'] }],
+          message: 'selfcheck payload too large',
+          type: 'invalid_request_error',
+        },
+      }, { headers: { 'retry-after': '11' } })
+    })
+  let listener: NodeDashboardListener | undefined
+
+  try {
+    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
+      if (!process.versions.bun) {
+        listener = server as unknown as NodeDashboardListener
+      }
+    })
+    const port = await probeListenerPort(app, listener, 'http error transport')
+
+    const ordinary = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/__selfcheck/http-error-headers')
+    assertHttpErrorEnvelope(ordinary, 'ordinary route', {
+      body: { error: { message: 'selfcheck rate limit', type: 'rate_limit_error' } },
+      headers: { 'retry-after': '7' },
+      status: 429,
+    })
+
+    const syntheticGenerator = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/__selfcheck/http-error-generator', {
+      method: 'POST',
+    })
+    assertHttpErrorEnvelope(syntheticGenerator, 'synthetic async-generator route', {
+      body: {
+        error: {
+          code: 'payload_too_large',
+          details: [{ message: 'serialized body exceeds the upstream limit', path: ['input'] }],
+          message: 'selfcheck payload too large',
+          type: 'invalid_request_error',
+        },
+      },
+      headers: { 'retry-after': '11' },
+      status: 413,
+    })
+
+    const generator = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/v1/responses', {
+      body: JSON.stringify({
+        input: 'probe',
+        max_output_tokens: 1,
+        model: '__selfcheck_missing_model__',
+        stream: true,
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+    assertHttpErrorEnvelope(generator, 'async-generator /v1/responses route', {
+      body: {
+        error: {
+          message: 'The selected model could not be resolved.',
+          param: 'model',
+          type: 'invalid_request_error',
+        },
+      },
+      status: 400,
+    })
+  }
+  finally {
+    if (process.versions.bun) {
+      await app.stop()
+    }
+    else {
+      await listener?.raw.close(true)
+    }
+    resetAccountRuntimes()
+  }
+}
+
+/**
+ * Assert the transport-level contract of a rejected request: JSON content
+ * type, a preserved correlation header, and the stored envelope as a whole
+ * rather than by spot-checked fields. A boundary that re-derived the body from
+ * `name` and `message` would satisfy any single-field assertion while still
+ * dropping `param`, `code`, `details`, or response headers.
+ */
+function assertHttpErrorEnvelope(
+  result: HttpProbeResult,
+  name: string,
+  expected: { body: unknown, headers?: Record<string, string>, status: number },
+): void {
+  const contentType = result.headers.get('content-type') ?? ''
+  assertProbe(
+    contentType.startsWith('application/json'),
+    `${name} returned content type ${JSON.stringify(contentType)}`,
+  )
+  assertProbe(
+    result.headers.get('x-request-id') !== null,
+    `${name} lost x-request-id at the transport boundary`,
+  )
+  assertProbe(result.status === expected.status, `${name} returned ${result.status}`)
+  for (const [header, value] of Object.entries(expected.headers ?? {})) {
+    assertProbe(
+      result.headers.get(header) === value,
+      `${name} lost ${header} at the transport boundary`,
+    )
+  }
+
+  let payload: unknown
+  try {
+    payload = JSON.parse(result.body)
+  }
+  catch {
+    throw new Error(`${name} returned a body that is not JSON: ${JSON.stringify(result.body)}`)
+  }
+  deepStrictEqual(payload, expected.body, `${name} changed the error envelope at the transport boundary`)
 }
 
 function probeConnectionErrorClassification(): void {
@@ -1321,15 +1474,25 @@ async function requestAccountRoute(
   port: number,
   hostname: string,
   requestPath = '/token',
+  options: LocalRequestOptions = {},
 ): Promise<HttpProbeResult> {
   try {
     if (process.versions.bun) {
       const response = await fetch(`http://127.0.0.1:${port}${requestPath}`, {
-        headers: { host: `${hostname}:${port}` },
+        body: options.body,
+        headers: {
+          ...options.headers,
+          host: `${hostname}:${port}`,
+        },
+        method: options.method ?? 'GET',
       })
-      return { body: await response.text(), status: response.status }
+      return {
+        body: await response.text(),
+        headers: response.headers,
+        status: response.status,
+      }
     }
-    return await requestLocal('127.0.0.1', port, `${hostname}:${port}`, requestPath)
+    return await requestLocal('127.0.0.1', port, `${hostname}:${port}`, requestPath, options)
   }
   catch (error) {
     throw new Error(`account-routing request for ${hostname} failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -1372,10 +1535,14 @@ function requestLocal(
       port,
     }, (response) => {
       let body = ''
+      const headers = new Headers()
+      for (let index = 0; index < response.rawHeaders.length; index += 2)
+        headers.append(response.rawHeaders[index]!, response.rawHeaders[index + 1]!)
       response.setEncoding('utf8')
       response.on('data', chunk => body += chunk)
       response.on('end', () => resolve({
         body,
+        headers,
         status: response.statusCode ?? 0,
       }))
     })
@@ -1423,6 +1590,8 @@ async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
     await runRuntimeProbe('legacy-single-account-routing-migration', probeLegacySingleAccountRoutingMigration),
     await runRuntimeProbe('dashboard-node-quota-projection', probeDashboardNodeQuotaProjection),
     await runRuntimeProbe('responses-chat-completions-bridge', probeResponsesChatCompletionsBridge),
+    // Runs last: it swaps the global account runtimes for its own listener.
+    await runRuntimeProbe('http-error-transport-contract', probeHttpErrorTransportContract),
   ]
   const failed = [...probes, ...runtimeProbes].filter(p => !p.ok)
 

@@ -26,7 +26,7 @@ import { createEmbeddingRoutes } from '~/routes/embeddings/route'
 import { createMessageRoutes } from '~/routes/messages/route'
 import { createModelRoutes } from '~/routes/models/route'
 import { createResponsesRoutes } from '~/routes/responses/route'
-import { handleRouteError } from '~/server'
+import { toErrorResponse } from '~/server'
 import { authStore, modelCache, rateLimiter, responsesEmulatorState, runtimeStore } from '~/state'
 
 const SSE_BLOCK_SEPARATOR_RE = /\r?\n\r?\n/
@@ -204,9 +204,11 @@ export function createApp(
 ) {
   const app = new Elysia()
     .error({ HTTP: HTTPError })
-    // Call the real handler rather than restating it — a copy here is how a
-    // test suite stays green while production error mapping drifts.
-    .onError(({ code, error, set }) => handleRouteError({ code, error, set }))
+    // Call the real mapper rather than restating it — a copy here is how a
+    // test suite stays green while production error mapping drifts. The
+    // production hook derives `set.status` from the response too; no test
+    // here reads `set`, so only the response contract is exercised.
+    .onError(({ code, error }) => toErrorResponse({ code, error }))
 
   if (routes === 'all') {
     return app.group('/v1', a => a

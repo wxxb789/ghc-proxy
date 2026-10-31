@@ -38,6 +38,12 @@ export class HTTPError extends Error {
     this.headers = new Headers(options.headers)
   }
 
+  /**
+   * The envelope for this failure. Called by `toErrorResponse` in
+   * `src/server.ts`, which owns serialization at the HTTP boundary. Elysia's
+   * own `toResponse()` handling is not relied on — it differs between the Bun
+   * and Node adapters. See `docs/design/error-handling.md`.
+   */
   toResponse() {
     return Response.json(this.body, { status: this.status, headers: this.headers })
   }
@@ -100,11 +106,11 @@ export function isRetryableConnectionEstablishmentError(
 /**
  * Reject a request locally with a 400.
  *
- * Logs on the way out. `onError` in `src/server.ts` returns early for
- * `code === 'HTTP'` (HTTPError carries its own `toResponse`), so nothing
- * downstream reports these — without this line a locally rejected request is
- * indistinguishable in the logs from one that reached upstream and came back
- * fine, leaving only the access-log status to go on.
+ * Logs on the way out. `onError` in `src/server.ts` only records the failure
+ * for observability; nothing there logs a human-readable line for a rejected
+ * request, so without this one a locally rejected request is indistinguishable
+ * in the logs from one that reached upstream and came back fine, leaving only
+ * the access-log status to go on.
  */
 export function throwInvalidRequestError(
   message: string,

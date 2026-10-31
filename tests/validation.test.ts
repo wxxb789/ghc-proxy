@@ -1123,7 +1123,8 @@ describe('Responses payload validation', () => {
 describe('withTranslationErrors', () => {
   // The kind was dropped on both the wire and the log, so a translation-path
   // 400 was indistinguishable from any other and left no trace at all —
-  // onError returns early for HTTPError, so nothing downstream reported it.
+  // onError records the failure but logs no line of its own for a local
+  // rejection, so nothing downstream reported it.
   test('carries the TranslationFailure kind into the error body', () => {
     const thrown = (() => {
       try {

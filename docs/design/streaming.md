@@ -243,7 +243,7 @@ or `code`. The `.errors` walk is load-bearing rather than defensive: on a dual-s
 connect Node's `NodeAggregateError` takes its `code` from `errors[0]`, so when the
 refused leg loses the race first, the `ETIMEDOUT` leaf is the *only* evidence of a
 timeout and it sits two levels down. The classifier is used before and after the
-stream boundary: `handleRouteError` in `src/server.ts` maps a pre-first-byte
+stream boundary: `toErrorResponse` in `src/server.ts` maps a pre-first-byte
 timeout to a `504`, while the Anthropic Chat and Responses translators receive
 the same timeout object through their `onStreamError()` hooks and emit SSE
 `error` frames. Protocol-preserving paths still record the sanitized stream
