@@ -101,6 +101,12 @@ bunx --bun ghc-proxy@latest start
 
 > **Tip:** The model names above (e.g. `claude-opus-5.5`) are mapped to actual Copilot models by the proxy. See [Model Mapping](#model-mapping) below for details.
 
+### Web search
+
+Anthropic server tools (for example `web_search_20250305`, `web_fetch_20250910`) carry no `input_schema`. The proxy accepts that shape at ingress and forwards it unchanged on the native Messages path; it returns no error of its own.
+
+A `400` still appears when the request reaches Copilot: `/v1/messages` answers `The use of the web search tool is not supported.` for the Claude family. The `deny` entry in the config above avoids that upstream error. Pointing Claude Code at a GPT model returns `unsupported_server_tool` instead, because the translated Responses/Chat paths cannot preserve server-side tool execution. OpenAI `web_search` remains available on the native `/responses` boundary.
+
 See the [Claude Code settings docs](https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables) for more options.
 
 ## CLI Reference
