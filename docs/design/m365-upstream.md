@@ -81,7 +81,12 @@ established by bisection, not read from error text:
 
 The Windows broker usually exposes every signed-in work account, but only some
 carry the Copilot subscription that can mint gateway tokens. A consumer account
-(for example an MSA) fails at acquisition with a broker error, not an HTTP error.
+(for example an MSA) fails at acquisition with a broker error (`0x80070057`)
+rather than an HTTP error.
+
+Consumer accounts are **out of scope**: the picker lists whatever the broker
+returns so the operator can see why an account cannot be used, but no path is
+planned for minting gateway tokens for an MSA.
 
 - `config.json#m365.account` stores the broker **home account id**
   (`uid.utid`), which stays unambiguous when one UPN exists in several tenants.

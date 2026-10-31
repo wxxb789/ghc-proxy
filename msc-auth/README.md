@@ -108,14 +108,16 @@ Exit codes: `0` success, `2` no account selected or interaction required,
 `3` broker/MSAL failure. Diagnostics go to stderr; stdout carries only the
 payload.
 
-The default account is `lhan@microsoft.com` (the subscription account). The
-broker usually also lists an MSA; passing that one to this client fails with
-`unknown_broker_error` (`0x80070057`).
+The default account is `lhan@microsoft.com` (the subscription account). Consumer
+accounts (MSA) are **out of scope**: the broker lists them, but acquiring a
+gateway token for one fails with `unknown_broker_error` (`0x80070057`) and no
+support is planned. Use `--accounts` to confirm which entry you are pointing at.
 
 ## Verified models
 
-`GET /v1/llmapi/v1/models` does not exist (`404 NonExistentApi`), so the
-allow-list is discovered per exact name:
+`GET /api/v1/llmapi/models` returns the served catalog (query parameters are
+ignored). The table below records the per-name checks that preceded it and still
+constrain the proxy's own fallback list:
 
 | Model | Non-stream | Stream |
 | --- | --- | --- |
