@@ -73,6 +73,7 @@ interface NodeDashboardListener {
 
 interface HttpProbeResult {
   body: string
+  headers: Headers
   status: number
 }
 
@@ -168,6 +169,119 @@ async function probeHttpErrorResponseContract(): Promise<void> {
   assertProbe(response.headers.get('retry-after') === '17', 'Retry-After was not preserved')
   const payload = await response.json() as { error?: { type?: string } }
   assertProbe(payload.error?.type === 'overloaded_error', 'error payload changed during toResponse()')
+}
+
+/**
+ * Exercise a thrown `HTTPError` over a real listener.
+ *
+ * The probe above only proves `toResponse()` itself serializes correctly; it
+ * cannot catch an adapter that never calls it. Elysia's composed error handler
+ * discards the `toResponse()` result and maps the raw error instead
+ * (`return mapResponse(context.response = error, set)`), and
+ * `@elysiajs/node` checks `response instanceof Error` before
+ * `typeof response.toResponse === 'function'`. A locally rejected request
+ * therefore used to reach Node clients as `text/plain` `{ name, message }`
+ * with `Retry-After` dropped, while Bun clients saw the correct envelope
+ * (#92). Every assertion here is a client-visible contract at the transport
+ * boundary, which is the only place that class of regression shows up.
+ */
+async function probeHttpErrorTransportContract(): Promise<void> {
+  const runtime = createAccountRuntime('default')
+  runtime.auth.copilotToken = 'selfcheck-http-error-token'
+  const routing = compileAccountRouting({
+    baseHostname: 'localhost',
+    defaultAccount: 'default',
+    hostnames: { [DEFAULT_ACCOUNT_HOSTNAME]: 'default' },
+  }, ['default'])
+  configureAccountRuntimes(routing, [runtime])
+  // Retry-After only originates from an upstream response, and no local route
+  // emits one, so a synthetic ordinary route keeps that assertion hermetic.
+  const app = createProxyServer({ logRequests: false })
+    .get('/__selfcheck/http-error-headers', () => {
+      throw new HTTPError(429, {
+        error: { message: 'selfcheck rate limit', type: 'rate_limit_error' },
+      }, { headers: { 'retry-after': '7' } })
+    })
+  let listener: NodeDashboardListener | undefined
+
+  try {
+    app.listen({ hostname: '127.0.0.1', port: 0 }, (server) => {
+      if (!process.versions.bun) {
+        listener = server as unknown as NodeDashboardListener
+      }
+    })
+    const port = await probeListenerPort(app, listener, 'http error transport')
+
+    const ordinary = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/__selfcheck/http-error-headers')
+    assertProbe(ordinary.status === 429, `ordinary route returned ${ordinary.status}`)
+    assertHttpErrorEnvelope(ordinary, 'ordinary route', 'rate_limit_error')
+    assertProbe(
+      ordinary.headers.get('retry-after') === '7',
+      'ordinary route lost Retry-After at the transport boundary',
+    )
+
+    const generator = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/v1/responses', {
+      body: JSON.stringify({
+        input: 'probe',
+        max_output_tokens: 1,
+        model: '__selfcheck_missing_model__',
+        stream: true,
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+    assertHttpErrorEnvelope(generator, 'async-generator route', 'invalid_request_error', 'model')
+    assertProbe(generator.status === 400, `async-generator route returned ${generator.status}`)
+  }
+  finally {
+    if (process.versions.bun) {
+      await app.stop()
+    }
+    else {
+      await listener?.raw.close(true)
+    }
+    resetAccountRuntimes()
+  }
+}
+
+/**
+ * Assert the transport-level shape of a locally rejected request: JSON content
+ * type, a preserved correlation header, and the stored OpenAI-compatible
+ * envelope rather than the adapter's `{ name, message }` fallback.
+ */
+function assertHttpErrorEnvelope(
+  result: HttpProbeResult,
+  name: string,
+  type: string,
+  param?: string,
+): void {
+  const contentType = result.headers.get('content-type') ?? ''
+  assertProbe(
+    contentType.startsWith('application/json'),
+    `${name} returned content type ${JSON.stringify(contentType)}`,
+  )
+  assertProbe(
+    result.headers.get('x-request-id') !== null,
+    `${name} lost x-request-id at the transport boundary`,
+  )
+
+  const payload: unknown = JSON.parse(result.body)
+  assertProbe(typeof payload === 'object' && payload !== null, `${name} returned a non-object body`)
+  assertProbe(!('name' in payload), `${name} fell back to the adapter Error shape`)
+  assertProbe('error' in payload, `${name} returned a body without an error envelope`)
+  const error = payload.error
+  assertProbe(typeof error === 'object' && error !== null, `${name} returned a non-object error`)
+  assertProbe('type' in error && error.type === type, `${name} returned error type ${JSON.stringify('type' in error ? error.type : undefined)}`)
+  assertProbe(
+    'message' in error && typeof error.message === 'string' && error.message.length > 0,
+    `${name} returned an error envelope without a message`,
+  )
+  if (param !== undefined) {
+    assertProbe(
+      'param' in error && error.param === param,
+      `${name} returned error param ${JSON.stringify('param' in error ? error.param : undefined)}`,
+    )
+  }
 }
 
 function probeConnectionErrorClassification(): void {
@@ -1321,15 +1435,25 @@ async function requestAccountRoute(
   port: number,
   hostname: string,
   requestPath = '/token',
+  options: LocalRequestOptions = {},
 ): Promise<HttpProbeResult> {
   try {
     if (process.versions.bun) {
       const response = await fetch(`http://127.0.0.1:${port}${requestPath}`, {
-        headers: { host: `${hostname}:${port}` },
+        body: options.body,
+        headers: {
+          ...options.headers,
+          host: `${hostname}:${port}`,
+        },
+        method: options.method ?? 'GET',
       })
-      return { body: await response.text(), status: response.status }
+      return {
+        body: await response.text(),
+        headers: response.headers,
+        status: response.status,
+      }
     }
-    return await requestLocal('127.0.0.1', port, `${hostname}:${port}`, requestPath)
+    return await requestLocal('127.0.0.1', port, `${hostname}:${port}`, requestPath, options)
   }
   catch (error) {
     throw new Error(`account-routing request for ${hostname} failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -1372,10 +1496,14 @@ function requestLocal(
       port,
     }, (response) => {
       let body = ''
+      const headers = new Headers()
+      for (let index = 0; index < response.rawHeaders.length; index += 2)
+        headers.append(response.rawHeaders[index]!, response.rawHeaders[index + 1]!)
       response.setEncoding('utf8')
       response.on('data', chunk => body += chunk)
       response.on('end', () => resolve({
         body,
+        headers,
         status: response.statusCode ?? 0,
       }))
     })
@@ -1423,6 +1551,8 @@ async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
     await runRuntimeProbe('legacy-single-account-routing-migration', probeLegacySingleAccountRoutingMigration),
     await runRuntimeProbe('dashboard-node-quota-projection', probeDashboardNodeQuotaProjection),
     await runRuntimeProbe('responses-chat-completions-bridge', probeResponsesChatCompletionsBridge),
+    // Runs last: it swaps the global account runtimes for its own listener.
+    await runRuntimeProbe('http-error-transport-contract', probeHttpErrorTransportContract),
   ]
   const failed = [...probes, ...runtimeProbes].filter(p => !p.ok)
 
