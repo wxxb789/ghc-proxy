@@ -1,15 +1,17 @@
 import type { Dispatcher } from 'undici'
 import consola from 'consola'
 import { getProxyForUrl } from 'proxy-from-env'
-import { Agent, ProxyAgent, setGlobalDispatcher } from 'undici'
 
-export function initProxyFromEnv(): void {
+export async function initProxyFromEnv(): Promise<void> {
   if (typeof Bun !== 'undefined')
     return
 
   try {
+    // Lazily resolved so the Bun runtime never evaluates undici's Node HTTP
+    // stack; Bun already dispatches through its own fetch implementation.
+    const { Agent, ProxyAgent, setGlobalDispatcher } = await import('undici')
     const direct = new Agent()
-    const proxies = new Map<string, ProxyAgent>()
+    const proxies = new Map<string, InstanceType<typeof ProxyAgent>>()
 
     // We only need a minimal dispatcher that implements `dispatch` at runtime.
     // Typing the object as `Dispatcher` forces TypeScript to require many

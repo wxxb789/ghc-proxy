@@ -1,10 +1,9 @@
+import type { Elysia } from 'elysia'
 import type { DashboardAccountManagement } from './routes/dashboard/route'
 import { cors } from '@elysiajs/cors'
-import { node } from '@elysiajs/node'
-
-import { Elysia } from 'elysia'
 import { HTTPError } from './lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
+import { createRuntimeApp } from './lib/server-runtime'
 import { isTimeoutLikeError } from './lib/timeout-error'
 import { isClientAbortError } from './lib/upstream-signal'
 import { classifyObservedEndpoint, sanitizeObservedError } from './observability/request-store'
@@ -18,8 +17,6 @@ import { createTokenRoute } from './routes/token/route'
 import { createUsageRoute } from './routes/usage/route'
 import { authStore, getRequestAccountName, modelCache, resolveRequestAccountRuntime, runtimeStore, runWithAccountRuntime } from './state'
 import { VERSION } from './util/version'
-
-const isBun = typeof globalThis.Bun !== 'undefined'
 
 // Elysia higher-order wrappers cover both the general fetch handler and Bun's
 // per-path system router, keeping every public path inside the same account
@@ -187,12 +184,7 @@ export function toErrorResponse(
 }
 
 export function createServer(options?: ServerOptions) {
-  const app = new Elysia({
-    adapter: isBun ? undefined : node(),
-    serve: options?.idleTimeout !== undefined
-      ? { idleTimeout: options.idleTimeout }
-      : undefined,
-  })
+  const app = createRuntimeApp({ idleTimeout: options?.idleTimeout })
     .wrap(accountRoutingWrapper)
     // Names the class for `code`-based observability classification only
     // (`sanitizeObservedError`). The client response is built by

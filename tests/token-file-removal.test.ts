@@ -46,14 +46,19 @@ let listenFailure: unknown
 await mock.module('../src/server', () => ({
   createServer: (options?: unknown) => {
     serverOptions.push(options)
+    return {}
+  },
+}))
+
+await mock.module('../src/lib/server-runtime', () => ({
+  listenRuntimeServer: async (_app: unknown, options: { port: number }) => {
+    if (listenFailure)
+      throw listenFailure
+    listenCalls.push(options.port)
     return {
-      listen: (port: number) => {
-        if (listenFailure) {
-          throw listenFailure
-        }
-        listenCalls.push(port)
-      },
-      stop: async () => {},
+      port: options.port,
+      url: new URL(`http://localhost:${options.port}`),
+      close: async () => {},
     }
   },
 }))

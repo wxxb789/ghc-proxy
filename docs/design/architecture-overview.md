@@ -12,7 +12,7 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 |-----------------|---------------------------------|
 | Runtime         | Bun >= 1.4 (first-class), Node.js >= 24 via `@elysiajs/node`; CI tracks latest LTS and Current |
 | Language        | TypeScript (ESNext, strict)     |
-| HTTP Framework  | Elysia (`@elysiajs/node` adapter for Node.js) |
+| HTTP Framework  | Elysia (`Bun.serve` on Bun; lazily loaded `@elysiajs/node` adapter on Node.js) |
 | CLI Framework   | citty                           |
 | Validation      | Zod                             |
 | Token Counting  | gpt-tokenizer                   |
@@ -20,6 +20,36 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 | Build Tool      | tsdown                          |
 | Linting         | ESLint (@antfu/eslint-config)   |
 | Published As    | `ghc-proxy` npm package          |
+
+### Runtime Isolation
+
+Either runtime must run the packaged CLI without the other runtime installed.
+Node-compatible APIs such as `node:fs` are implemented by Bun itself; using them
+does not require a Node executable. The source build/test toolchain is separate
+from this consumer contract.
+
+`src/lib/server-runtime.ts` owns HTTP runtime differences. `createRuntimeApp()`
+uses Elysia's default Bun adapter or lazily loads `@elysiajs/node` once on Node.
+The outbound proxy setup in `src/cli/proxy.ts` likewise loads `undici` only on
+Node. Both optional import paths ship as separate `dist/` chunks.
+
+Production startup and listener-based selfchecks call `listenRuntimeServer()`.
+It resolves only after binding and returns the actual `port`, `url`, and an
+idempotent `close()` that drains connections by default (`close(true)` forces
+closure). Node adapter callback details and its `raw.ready()`/`raw.close()` stay
+inside this module; callers do not use Elysia's `app.server` or `app.stop()`.
+The Node adapter's automatic signal handling is disabled: `src/start.ts` is the
+sole signal owner, so dependency and application shutdowns cannot race each other.
+The `--idle-timeout` option remains explicitly Bun-only, not a Node socket timeout.
+
+The `server-lifecycle-contract` selfcheck verifies readiness and that a fresh
+connection is refused or reset after graceful closure. `smoke:packaged` runs the
+installed artifact's selfcheck and debug commands under each runtime with isolated
+executable paths and application configuration directories, proves the opposite
+executable cannot be spawned, and verifies Bun and Node package launchers.
+Package-manager config files remain readable at their original paths to preserve
+registry/auth/CA settings. This is executable isolation, not an OS sandbox or
+proof of every upstream/route behavior.
 
 ## High-Level Model Request Flow
 
@@ -221,7 +251,7 @@ Every request is assigned an `x-request-id`. If the client supplies one in the r
 
 ### Graceful Shutdown
 
-The server registers `SIGTERM` and `SIGINT` handlers (`src/start.ts`). On signal receipt the shutdown sequence stops the Copilot token refresh timer, calls `app.stop()` to drain in-flight connections, and exits cleanly.
+The server registers `SIGTERM` and `SIGINT` handlers (`src/start.ts`). On signal receipt the shutdown sequence cleans up account resources and token refresh timers, awaits the runtime listener's `close()` to drain in-flight connections, and exits cleanly. The startup banner is printed only after the listener is ready.
 
 ### Resource Limits
 

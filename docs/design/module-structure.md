@@ -8,7 +8,7 @@ This document describes the source code organization and the responsibility of e
 src/
 ├── main.ts                    # CLI entry point (citty commands)
 ├── start.ts                   # Server startup logic
-├── server.ts                  # Elysia app factory (Bun-native or @elysiajs/node adapter)
+├── server.ts                  # Elysia app factory (Bun-native or lazily loaded @elysiajs/node adapter)
 ├── accounts/                  # Named-account auth and Dashboard lifecycle management
 ├── routes/                    # HTTP route handlers
 │   ├── chat-completions/      # POST /chat/completions (+ /v1 alias)
@@ -212,6 +212,7 @@ direct and do not pass through this model.
 | `upstream-signal.ts`        | AbortSignal management for upstream requests         |
 | `retry.ts`                  | Retry logic with exponential backoff                 |
 | `request-timeout.ts`        | Request timeout helpers                              |
+| `server-runtime.ts`         | Runtime adapter selection and shared HTTP listener readiness, address, and closure |
 | `sse-adapter.ts`            | SSE stream adapter helpers                            |
 | `tokenizer.ts`              | Local token estimation for Messages `count_tokens`, emulator `responses/input_tokens`, and packaged selfcheck probes; bundled from a dev dependency and never loaded by Chat generation or used to manufacture response usage |
 | `request-logger.ts`         | Structured request/response logging                  |

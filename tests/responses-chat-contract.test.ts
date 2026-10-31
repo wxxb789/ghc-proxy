@@ -11,6 +11,7 @@ import { TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
 import { compileAccountRouting } from '~/lib/account-routing'
 import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
+import { listenRuntimeServer } from '~/lib/server-runtime'
 import { createServer } from '~/server'
 import {
   authStore,
@@ -964,14 +965,13 @@ describe('Responses Chat bridge streaming contract', () => {
       })())
     }) as typeof CopilotClient.prototype.createChatCompletions
 
-    const app = createServer().listen({ hostname: '127.0.0.1', port: 0 })
+    const listener = await listenRuntimeServer(createServer(), { hostname: '127.0.0.1', port: 0 })
     try {
-      const port = app.server?.port
-      expect(port).toBeNumber()
+      const { port } = listener
       const body = JSON.stringify({ model: 'chat-only', store: false, stream: true, input: 'cancel me' })
       let received = ''
       await new Promise<void>((resolve, reject) => {
-        const socket = createConnection({ host: '127.0.0.1', port: port! }, () => {
+        const socket = createConnection({ host: '127.0.0.1', port }, () => {
           socket.write([
             'POST /v1/responses HTTP/1.1',
             `Host: 127.0.0.1:${port}`,
@@ -1002,7 +1002,7 @@ describe('Responses Chat bridge streaming contract', () => {
       })
     }
     finally {
-      await app.stop(true)
+      await listener.close(true)
     }
   })
 
@@ -1036,14 +1036,13 @@ describe('Responses Chat bridge streaming contract', () => {
       })())
     }) as typeof CopilotClient.prototype.createChatCompletions
 
-    const app = createServer().listen({ hostname: '127.0.0.1', port: 0 })
+    const listener = await listenRuntimeServer(createServer(), { hostname: '127.0.0.1', port: 0 })
     try {
-      const port = app.server?.port
-      expect(port).toBeNumber()
+      const { port } = listener
       const body = JSON.stringify({ model: 'chat-only', stream: true, input: 'cancel cleanly' })
       let received = ''
       await new Promise<void>((resolve, reject) => {
-        const socket = createConnection({ host: '127.0.0.1', port: port! }, () => {
+        const socket = createConnection({ host: '127.0.0.1', port }, () => {
           socket.write([
             'POST /v1/responses HTTP/1.1',
             `Host: 127.0.0.1:${port}`,
@@ -1075,7 +1074,7 @@ describe('Responses Chat bridge streaming contract', () => {
       })
     }
     finally {
-      await app.stop(true)
+      await listener.close(true)
     }
   })
 })

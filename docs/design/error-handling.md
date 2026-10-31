@@ -338,8 +338,8 @@ The Responses emulator state store enforces a hard cap of **10,000 total entries
 
 The server registers `SIGTERM` and `SIGINT` handlers in `src/start.ts`. On either signal, the shutdown sequence:
 
-1. Calls `tokenCleanup()` to stop the Copilot token refresh interval
-2. Calls `app.stop()` to close the HTTP server
+1. Cleans up account resources and Copilot token refresh timers
+2. Awaits the runtime listener's `close()` to drain the HTTP server on either Bun or Node
 3. Exits with code 0
 
 This ensures no orphaned timers or dangling connections survive a clean shutdown.
