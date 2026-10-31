@@ -17,10 +17,8 @@ import { createServer as createHttpServer, request as httpRequest } from 'node:h
 import { networkInterfaces, tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
-import { node } from '@elysiajs/node'
 import { defineCommand } from 'citty'
 import { Elysia } from 'elysia'
-import { Agent } from 'undici'
 
 import { AccountManager } from '~/accounts/manager'
 import { CopilotClient } from '~/clients'
@@ -38,7 +36,7 @@ import { HTTPError, isRetryableConnectionEstablishmentError } from '~/lib/error'
 import { getTokenCount } from '~/lib/tokenizer'
 import { DashboardQuotaCache } from '~/routes/dashboard/handler'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
-import { createServer as createProxyServer } from '~/server'
+import { createServer as createProxyServer, serverAdapter } from '~/server'
 import { DEFAULT_ACCOUNT_HOSTNAME, prepareLegacySingleAccountRoutingMigration } from '~/start'
 import {
   configureAccountRuntimes,
@@ -348,7 +346,7 @@ function probeConnectionErrorClassification(): void {
 
 async function probeResponseBodyCancellation(): Promise<void> {
   const queue = createRuntimeProbeQueue({ maxRetries: 1 })
-  const dispatcher = process.versions.bun ? undefined : new Agent({ connections: 1 })
+  const dispatcher = process.versions.bun ? undefined : new (await import('undici')).Agent({ connections: 1 })
   const sockets = new Set<Socket>()
   let requests = 0
   let firstResponseClosed = false
@@ -741,7 +739,7 @@ async function probeDashboardNodeListenerBoundary(): Promise<void> {
   if (process.versions.bun)
     return
 
-  const app = new Elysia({ adapter: node() }).use(createDashboardRoutes())
+  const app = new Elysia({ adapter: serverAdapter }).use(createDashboardRoutes())
   let listener: NodeDashboardListener | undefined
 
   try {
@@ -872,7 +870,7 @@ async function probeDashboardNodeQuotaProjection(): Promise<void> {
   })
   const app = process.versions.bun
     ? createDashboardRoutes({ accountManager: manager, quotaCache })
-    : new Elysia({ adapter: node() }).use(createDashboardRoutes({
+    : new Elysia({ adapter: serverAdapter }).use(createDashboardRoutes({
         accountManager: manager,
         quotaCache,
       }))

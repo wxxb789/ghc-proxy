@@ -12,7 +12,7 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 |-----------------|---------------------------------|
 | Runtime         | Bun >= 1.4 (first-class), Node.js >= 24 via `@elysiajs/node`; CI tracks latest LTS and Current |
 | Language        | TypeScript (ESNext, strict)     |
-| HTTP Framework  | Elysia (`@elysiajs/node` adapter for Node.js) |
+| HTTP Framework  | Elysia (`Bun.serve` on Bun; lazily loaded `@elysiajs/node` adapter on Node.js) |
 | CLI Framework   | citty                           |
 | Validation      | Zod                             |
 | Token Counting  | gpt-tokenizer                   |
@@ -20,6 +20,10 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 | Build Tool      | tsdown                          |
 | Linting         | ESLint (@antfu/eslint-config)   |
 | Published As    | `ghc-proxy` npm package          |
+
+### Runtime Isolation
+
+Either runtime must run the packaged CLI on its own. `src/server.ts` resolves `serverAdapter` once at module scope: `undefined` on Bun (Elysia serves through `Bun.serve`), otherwise the `@elysiajs/node` adapter via `await import()`. `undici` and the Node adapter are likewise behind dynamic imports guarded by `typeof Bun`, so Bun never evaluates the Node HTTP stack (`node:http`, `node:https`, `node:http2` through crossws/srvx) and Node never touches a Bun API. Both imports ship as separate `dist/` chunks; `smoke:packaged` exercises the artifact under `bun` and `node`.
 
 ## High-Level Model Request Flow
 

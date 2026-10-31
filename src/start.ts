@@ -154,7 +154,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
   }
 
   if (options.proxyEnv) {
-    initProxyFromEnv()
+    await initProxyFromEnv()
   }
 
   if (options.verbose) {
