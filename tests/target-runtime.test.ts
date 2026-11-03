@@ -1,6 +1,6 @@
 import type { ModelsResponse } from '~/types'
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 
 import { createTargetRuntime, initializeM365Target } from '~/accounts/target-runtime'
 import { M365_MODELS } from '~/clients/m365-upstream'
@@ -11,6 +11,7 @@ import {
   createAccountRuntime,
   getTargetAvailability,
   isM365OnlyRouting,
+  resetAccountRuntimes,
 } from '~/state/account-runtime'
 
 function catalog(ids: Array<string>): ModelsResponse {
@@ -158,4 +159,8 @@ describe('target runtime factory', () => {
     expect(state.availability?.status).toBe('ready')
     expect(state.onboarding.status).toBe('unavailable')
   })
+})
+
+afterAll(() => {
+  resetAccountRuntimes()
 })

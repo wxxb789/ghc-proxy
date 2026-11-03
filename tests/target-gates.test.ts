@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { createTargetRuntime } from '~/accounts/target-runtime'
 import { resetMscTokenCache, setMscHelperRunner } from '~/clients/msc-auth'
@@ -11,6 +11,7 @@ import { enforceTargetGates } from '~/lib/target-gates'
 import {
   configureAccountRuntimes,
   createAccountRuntime,
+  resetAccountRuntimes,
   runWithAccountRuntime,
   setTargetAvailability,
 } from '~/state/account-runtime'
@@ -194,4 +195,8 @@ describe('per-target gates', () => {
     expect(refusal).toBeUndefined()
     expect(m365.models.getModelIds()).toEqual(['claude-opus-5.5'])
   })
+})
+
+afterAll(() => {
+  resetAccountRuntimes()
 })
