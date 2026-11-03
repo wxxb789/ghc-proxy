@@ -26,8 +26,8 @@ runtime-neutral and talks to it over stdout JSON.
 
 Consequences:
 
-- No GitHub credential is read, no account manager is created, and `/models` is
-  never fetched from GitHub.
+- The M365 target does not use a GitHub credential, and its model discovery
+  never targets GitHub. Mixed routing retains the normal account manager.
 - The access token lives only in memory. Nothing is written to disk.
 - Windows is mandatory: there is no non-broker flow for this client (a loopback
   PKCE attempt fails with `AADSTS50011`, and the device-code grant is disabled by
@@ -43,11 +43,16 @@ Consequences:
 whole list and filtering locally.
 
 At startup the proxy fetches that endpoint with the freshly acquired token and
-caches the `/v1/messages` subset, so context limits come from the gateway itself
-(1,000,000 today). Unknown names still return `403 model_not_allowed`.
+caches the `/v1/messages` subset. On 2026-11-03 a live GET returned 200 and ten
+entries: five Anthropic Messages models and five GPT Responses models. The
+proxy's M365 target supports Messages inference only, so `GET /models` and
+`GET /v1/models` on its hostname expose the five supported models rather than
+advertising unavailable Responses dispatch.
 
-`src/clients/m365-upstream.ts` keeps a static list for the case where the catalog
-request fails; it is a fallback, not the source of truth:
+`src/clients/m365-upstream.ts` retains a static catalog for transient discovery
+failures. A catalog 401/403 is an authorization failure, not a discovery outage:
+initialization and later metadata refreshes retain `unavailable` and ask the
+operator to select an account with gateway access and a Copilot subscription.
 
 | Model | Status |
 | --- | --- |
@@ -62,9 +67,10 @@ request fails; it is a fallback, not the source of truth:
 `403 model_not_allowed`. The host offers those older names in its own picker, so
 the service-side allow-list is narrower than the client-side list.
 
-Every catalog entry advertises only `/v1/messages`. That keeps
-`resolveMessagesStrategyName()` on `native-messages`; the Responses and Chat
-Completions strategies must never be selected because the gateway serves neither.
+Every entry in the proxy's supported M365 catalog advertises `/v1/messages`.
+That keeps `resolveMessagesStrategyName()` on `native-messages`. The upstream's
+Responses models are filtered out because this target does not yet admit
+Responses or Chat Completions inference.
 
 ## Measured limits
 
@@ -94,18 +100,28 @@ planned for minting gateway tokens for an MSA.
 
 - `config.json#m365.account` stores the broker **home account id**
   (`uid.utid`), which stays unambiguous when one UPN exists in several tenants.
-- Precedence: `--msc-auth-account` → `config.json#m365.account` → the helper's
-  default (`lhan@microsoft.com`, then `--prefer`).
-- The Dashboard's Accounts view shows the target in both states. `GET
-  /dashboard/api/m365` projects the committed routing table and availability;
-  `POST /dashboard/api/m365/register`, `/remove`, `/account`, and `/hostname`
-  run through the account manager's transaction, and `POST
-  /dashboard/api/m365/probe` is the only call that lists broker accounts.
-  Registration, removal, and identity changes apply without a restart.
+- Precedence: `--msc-auth-account` → `config.json#m365.account` →
+  `config.json#m365.upn` → a unique broker account in the authority tenant, or
+  the only broker account. There is no hard-coded email or substring fallback;
+  an ambiguous selector requires a home account ID.
+- The Dashboard displays the selected email and Microsoft tenant ID instead of
+  a GitHub tenant. It discovers broker accounts on the first Accounts visit and
+  on explicit probes, not on every Live poll. Empty broker usernames retain
+  their stable IDs and display as unavailable rather than shifting TSV columns.
+- `GET /dashboard/api/m365` reads the committed routing table and availability.
+  `/register`, `/remove`, `/account`, and `/hostname` mutations use the account
+  manager. `POST /dashboard/api/m365/sign-in` opens WAM only on an explicit user
+  action, returns identity fields without tokens, and leaves target selection
+  unchanged until applied. Copilot app profiles absent from WAM need this
+  sign-in; listing accounts is not proof of subscription access.
+- `DELETE /dashboard/api/accounts/:accountName` removes a non-default proxy
+  account or target; the sole remaining target cannot be removed. Removing M365
+  does not remove a Windows/WAM account.
 - The target name `m365` is reserved: routing rejects a GitHub account that
   claims it, and credential creation refuses to write it.
-- `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`, and
-  `msc-auth --account <homeAccountId>` reproduces the selection from a shell.
+- `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`.
+  `msc-auth --account <homeAccountId-or-exact-email>` selects it from a shell;
+  duplicate email matches require the home ID.
 
 ## Family fallbacks
 
@@ -166,10 +182,13 @@ handlers.
 ## Verification
 
 ```bash
-bun run build:msc-auth            # Windows: publish the helper into dist/msc-auth
-bun ./src/main.ts start --upstream m365 --port 4199
+bun run start --upstream m365 --msc-auth-account you@company.com --port 4199
 curl -s http://127.0.0.1:4199/v1/models
 ```
+
+On Windows, source `start` prepares the native helper before the CLI loads.
+Local compilation requires the .NET 10 SDK, C++ tools, and Windows SDK; a complete
+explicit helper or `MSC_AUTH_DIR` prebuilt payload avoids that toolchain.
 
 Expected: five models listed (the catalog's `/v1/messages` subset; the gateway
 also serves five `gpt-*` models on `/responses`), `POST /v1/messages` returns

@@ -4,6 +4,9 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, test } from 'bun:test'
 
+import { createTargetRuntime } from '~/accounts/target-runtime'
+import { CopilotClient } from '~/clients'
+import { M365_MODELS } from '~/clients/m365-upstream'
 import {
   getMscToken,
   listMscAccounts,
@@ -12,6 +15,9 @@ import {
   resolveMscAuthExe,
   setMscHelperRunner,
 } from '~/clients/msc-auth'
+import { getDashboardOverview } from '~/routes/dashboard/handler'
+
+import { getTargetAvailability, runWithAccountRuntime } from '~/state/account-runtime'
 
 const temporaryDirs: Array<string> = []
 const originalExe = process.env.GHC_MSC_AUTH_EXE
@@ -63,6 +69,10 @@ describe('resolveMscAuthExe', () => {
     const fromEnv = makeFile('#!/bin/sh\nexit 0\n')
     process.env.GHC_MSC_AUTH_EXE = fromEnv
     expect(resolveMscAuthExe()).toBe(fromEnv)
+  })
+  test('does not silently replace a missing explicit helper with another account source', () => {
+    process.env.GHC_MSC_AUTH_EXE = makeFile('unused')
+    expect(() => resolveMscAuthExe(`${makeFile('unused')}.missing`)).toThrow(MscAuthError)
   })
 })
 
@@ -158,6 +168,27 @@ describe('getMscToken', () => {
   })
 })
 
+test('a forbidden catalog refresh keeps a cached M365 target unavailable', async () => {
+  const exe = makeFile('unused')
+  setMscHelperRunner(fakeRunner(payload()))
+  const runtime = createTargetRuntime('m365', 'm365', { mscAuthExe: exe })
+  runtime.models.cacheModels(M365_MODELS)
+  const client = new CopilotClient(runtime.auth, {
+    upstream: 'm365',
+    accountType: 'individual',
+    mscAuthExe: exe,
+  }, {
+    fetch: Object.assign(
+      async () => Response.json({ error: { message: 'Gateway access denied' } }, { status: 403 }),
+      { preconnect: fetch.preconnect },
+    ),
+  })
+
+  await expect(runWithAccountRuntime(runtime, () => client.getModels())).rejects.toMatchObject({ status: 403 })
+  expect(getTargetAvailability(runtime)).toMatchObject({ status: 'unavailable' })
+  expect(await runWithAccountRuntime(runtime, () => getDashboardOverview())).toMatchObject({ status: 'degraded' })
+})
+
 describe('listMscAccounts', () => {
   test('parses the tab-separated account listing', async () => {
     process.env.GHC_MSC_AUTH_EXE = makeFile('unused')
@@ -169,6 +200,19 @@ describe('listMscAccounts', () => {
     expect(await listMscAccounts()).toEqual([
       { upn: 'user@example.com', homeAccountId: 'uid.utid', environment: 'login.microsoftonline.com' },
       { upn: 'other@example.com', homeAccountId: 'uid2.utid2', environment: 'login.microsoftonline.com' },
+    ])
+  })
+
+  test('preserves broker IDs when an account has no published UPN', async () => {
+    process.env.GHC_MSC_AUTH_EXE = makeFile('unused')
+    setMscHelperRunner(fakeRunner(
+      '\tuid.utid\tlogin.microsoftonline.com\r\n'
+      + 'user@example.com\tuid2.utid2\tlogin.microsoftonline.com\r\n',
+    ))
+
+    expect(await listMscAccounts()).toEqual([
+      { upn: '', homeAccountId: 'uid.utid', environment: 'login.microsoftonline.com' },
+      { upn: 'user@example.com', homeAccountId: 'uid2.utid2', environment: 'login.microsoftonline.com' },
     ])
   })
 

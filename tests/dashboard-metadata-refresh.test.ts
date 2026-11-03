@@ -53,6 +53,37 @@ describe('DashboardMetadataRefresher', () => {
     expect(JSON.stringify(result)).not.toContain('github-work')
   })
 
+  test('refreshes M365 models without requesting GitHub identity or quota', async () => {
+    const runtime = createAccountRuntime('m365', { upstream: 'm365' })
+    runtime.models.cacheModels({ object: 'list', data: [model('previous-model')] })
+    const accounts: RoutedAccountDescriptor[] = [{
+      name: 'm365',
+      hostname: 'm365.localhost',
+      isDefault: true,
+      runtime,
+    }]
+    const refresher = new DashboardMetadataRefresher({
+      refreshGitHubIdentity: async () => { throw new Error('GitHub is not configured') },
+      refreshModels: async () => {
+        modelCache.cacheModels({ object: 'list', data: [model('fresh-model')] })
+      },
+    })
+    const quotaCache = new DashboardQuotaCache(async () => {
+      throw new Error('GitHub quota is not applicable')
+    })
+
+    expect(await refresher.refresh(accounts, quotaCache)).toMatchObject({
+      status: 'ok',
+      accounts: [{
+        name: 'm365',
+        github: { status: 'not_applicable' },
+        quota: { status: 'not_applicable' },
+        models: { status: 'ok' },
+      }],
+    })
+    expect(runtime.models.getModels()?.data.map(model => model.id)).toEqual(['fresh-model'])
+  })
+
   test('times out a hung metadata source without blocking later refreshes', async () => {
     const runtime = createAccountRuntime('default', { githubToken: 'github-default' })
     runtime.models.cacheModels({ object: 'list', data: [model('previous-model')] })
@@ -87,6 +118,32 @@ describe('DashboardMetadataRefresher', () => {
       status: 'ok',
       accounts: [{ models: { status: 'ok' } }],
     })
+  })
+
+  test('refreshes a replaced M365 runtime even when its name and hostname are unchanged', async () => {
+    const previous = createAccountRuntime('m365', { upstream: 'm365', mscAuthAccount: 'previous' })
+    const replacement = createAccountRuntime('m365', { upstream: 'm365', mscAuthAccount: 'replacement' })
+    const release = Promise.withResolvers<void>()
+    const refresher = new DashboardMetadataRefresher({
+      refreshModels: async () => {
+        if (authStore.mscAuthAccount === 'previous')
+          await release.promise
+        modelCache.cacheModels({ object: 'list', data: [model(`${authStore.mscAuthAccount}-model`)] })
+      },
+    })
+    const descriptor = (runtime: typeof previous): RoutedAccountDescriptor => ({
+      name: 'm365',
+      hostname: 'm365.localhost',
+      isDefault: true,
+      runtime,
+    })
+    const quotaCache = new DashboardQuotaCache(async () => usage())
+    const first = refresher.refresh([descriptor(previous)], quotaCache)
+    const latest = refresher.refresh([descriptor(replacement)], quotaCache)
+    release.resolve()
+
+    await Promise.all([first, latest])
+    expect(replacement.models.getModelIds()).toEqual(['replacement-model'])
   })
 
   test('runs the newest account snapshot after an active refresh completes', async () => {

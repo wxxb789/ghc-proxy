@@ -66,14 +66,19 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <div class="toolbar">
         <div><h1>Accounts</h1><span id="accounts-summary" class="muted"></span></div>
       </div>
-      <div class="table-scroll accounts-table"><table><thead><tr><th>Default</th><th>Name</th><th>Hostname</th><th>GitHub</th><th>Tenant</th><th>Copilot</th><th>Quota</th><th>Action</th></tr></thead><tbody id="accounts-body"></tbody></table></div>
+      <div class="table-scroll accounts-table"><table><thead><tr><th>Default</th><th>Name</th><th>Hostname</th><th>Identity</th><th>Tenant</th><th>Copilot</th><th>Quota</th><th>Action</th></tr></thead><tbody id="accounts-body"></tbody></table></div>
 
       <section id="m365-panel" class="panel full-width account-add-panel" hidden>
         <div class="section-heading"><h2>M365 Copilot target</h2><span id="m365-status" class="muted" role="status" aria-live="polite"></span></div>
+        <div id="m365-readiness" class="muted account-help" role="status" aria-live="polite"></div>
+        <form id="m365-sign-in-form" class="account-form">
+          <label><span>Account email (optional)</span><input id="m365-sign-in-upn" type="email" autocomplete="username" placeholder="you@company.com"></label>
+          <button id="m365-sign-in" type="submit" class="command">Sign in another M365 account</button>
+        </form>
+        <div class="muted account-help">Only Windows broker accounts can be discovered. If an account is missing, sign in above, then select the work account with a Copilot subscription. This is separate from GitHub authentication.</div>
 
         <div id="m365-absent" hidden>
           <div class="muted account-help">Serve the M365 Copilot gateway next to your GitHub accounts on this same port. Requires Windows, the msc-auth helper, and a work account with an M365 Copilot subscription.</div>
-          <div id="m365-readiness" class="muted account-help"></div>
           <div class="account-form"><button id="m365-probe" type="button" class="command">Check prerequisites</button></div>
           <form id="m365-register-form" class="account-form" hidden>
             <label><span>Broker account</span><select id="m365-register-account"></select></label>
@@ -109,12 +114,12 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </section>
 
       <section id="account-add-panel" class="panel full-width account-add-panel" hidden>
-        <div class="section-heading"><h2>Add account</h2><span id="account-add-status" class="muted" role="status" aria-live="polite"></span></div>
+        <div class="section-heading"><h2>Add GitHub account</h2><span id="account-add-status" class="muted" role="status" aria-live="polite"></span></div>
         <form id="account-add-form" class="account-form">
           <label><span>Name</span><input id="account-name" name="accountName" required maxlength="64" autocomplete="off"></label>
           <label><span>Hostname</span><input id="account-hostname" name="hostname" required maxlength="253" placeholder="account.localhost" autocomplete="off"></label>
           <label><span>GHE tenant</span><input id="account-ghe-domain" name="gheDomain" placeholder="company.ghe.com" autocomplete="off"></label>
-          <button id="account-add-button" type="submit" class="command primary">Authenticate</button>
+          <button id="account-add-button" type="submit" class="command primary">Authenticate with GitHub</button>
         </form>
         <div id="account-auth" class="account-auth" hidden>
           <span id="account-auth-state" class="badge">pending</span>
@@ -481,7 +486,7 @@ function appendKv(list, label, value) {
 }
 
 function makeBadge(value) {
-  return createElement('span', 'badge ' + String(value || 'unknown'), value || 'unknown');
+  return createElement('span', 'badge ' + String(value || 'unknown'), value === 'not_applicable' ? 'not applicable' : value || 'unknown');
 }
 
 function formatDuration(ms) {
@@ -562,8 +567,12 @@ function renderOverview(data) {
   const github = data.auth.github || {};
   const copilot = data.auth.copilot || {};
   const accounts = data.auth.accounts || {};
-  appendAuthRow(authBody, 'GitHub', github.status, github.login || github.accountType, github.lastValidatedAt);
-  appendAuthRow(authBody, 'Copilot', copilot.status, copilot.modelsLoaded ? 'models loaded' : 'models unavailable', copilot.lastRefreshAt);
+  if (data.auth.upstream === 'm365') {
+    appendAuthRow(authBody, 'Microsoft 365', copilot.status, data.auth.identity || 'Broker account', copilot.lastRefreshAt);
+  } else {
+    appendAuthRow(authBody, 'GitHub', github.status, github.login || github.accountType, github.lastValidatedAt);
+    appendAuthRow(authBody, 'Copilot', copilot.status, copilot.modelsLoaded ? 'models loaded' : 'models unavailable', copilot.lastRefreshAt);
+  }
   if (Number.isFinite(accounts.totalAccounts)) {
     appendAuthRow(
       authBody,
@@ -574,7 +583,9 @@ function renderOverview(data) {
   }
 
   const quota = data.quota || { status: 'unavailable' };
-  byId('quota-status').textContent = quota.status + (quota.resetDate ? ' / resets ' + formatDate(quota.resetDate) : '');
+  byId('quota-status').textContent = quota.status === 'not_applicable'
+    ? 'Not applicable: Microsoft 365 does not expose GitHub quota'
+    : quota.status + (quota.resetDate ? ' / resets ' + formatDate(quota.resetDate) : '');
   const quotaBody = byId('quota-body');
   clearNode(quotaBody);
   appendQuotaRow(quotaBody, 'Premium', quota.premiumInteractions);
@@ -635,8 +646,8 @@ function renderAccounts(data) {
     appendCell(row, account.name, 'mono');
     appendCell(row, account.hostname, 'mono');
     const githubCell = createElement('td');
-    githubCell.appendChild(makeBadge(account.github?.status));
-    githubCell.appendChild(createElement('div', 'muted mono', account.github?.login || '-'));
+    githubCell.appendChild(makeBadge(account.upstream === 'm365' ? 'M365' : account.github?.status));
+    githubCell.appendChild(createElement('div', 'muted mono', account.identity || account.github?.login || '-'));
     row.appendChild(githubCell);
     appendCell(row, account.tenant || '-', 'mono');
     const copilotCell = createElement('td');
@@ -645,10 +656,12 @@ function renderAccounts(data) {
     row.appendChild(copilotCell);
     const quotaCell = createElement('td');
     quotaCell.appendChild(makeBadge(account.quota?.status));
-    quotaCell.appendChild(createElement('div', 'muted mono', 'Premium ' + formatQuotaPool(account.quota?.premiumInteractions)));
-    quotaCell.appendChild(createElement('div', 'muted mono', 'Chat ' + formatQuotaPool(account.quota?.chat)));
-    quotaCell.appendChild(createElement('div', 'muted mono', 'Completions ' + formatQuotaPool(account.quota?.completions)));
-    if (account.quota?.resetDate) quotaCell.appendChild(createElement('div', 'muted', 'Resets ' + formatDate(account.quota.resetDate)));
+    if (account.quota?.status !== 'not_applicable') {
+      quotaCell.appendChild(createElement('div', 'muted mono', 'Premium ' + formatQuotaPool(account.quota?.premiumInteractions)));
+      quotaCell.appendChild(createElement('div', 'muted mono', 'Chat ' + formatQuotaPool(account.quota?.chat)));
+      quotaCell.appendChild(createElement('div', 'muted mono', 'Completions ' + formatQuotaPool(account.quota?.completions)));
+      if (account.quota?.resetDate) quotaCell.appendChild(createElement('div', 'muted', 'Resets ' + formatDate(account.quota.resetDate)));
+    }
     row.appendChild(quotaCell);
     const actionCell = createElement('td');
     const button = createElement('button', 'command', account.isDefault ? 'Default' : 'Set default');
@@ -656,9 +669,37 @@ function renderAccounts(data) {
     button.disabled = Boolean(account.isDefault);
     button.addEventListener('click', function () { setDefaultAccount(account.name, button); });
     actionCell.appendChild(button);
+    const removeButton = createElement('button', 'command', 'Remove');
+    removeButton.type = 'button';
+    removeButton.disabled = account.isDefault || dashboardState.accounts.length <= 1;
+    removeButton.title = account.isDefault ? 'Choose another default account before removing this one.' : 'Remove this account from ghc-proxy';
+    removeButton.addEventListener('click', function () { removeAccount(account.name, removeButton); });
+    actionCell.appendChild(removeButton);
     row.appendChild(actionCell);
     body.appendChild(row);
   });
+}
+
+async function removeAccount(accountName, button) {
+  if (!window.confirm('Remove ' + accountName + ' from ghc-proxy? This removes proxy configuration, not the upstream or Windows account.')) return;
+  button.disabled = true;
+  const removedAccount = dashboardState.accounts.find(account => account.name === accountName);
+  try {
+    const routing = await fetchJson('/dashboard/api/accounts/' + encodeURIComponent(accountName), { method: 'DELETE' });
+    dashboardState.errors.delete('accounts');
+    const dashboardUrl = new URL('/dashboard', window.location.href);
+    if (removedAccount?.hostname === dashboardUrl.hostname) {
+      dashboardUrl.hostname = routing.baseHostname;
+      window.location.replace(dashboardUrl.href);
+      return;
+    }
+    await loadAllViews();
+  } catch (error) {
+    dashboardState.errors.set('accounts', error);
+  } finally {
+    button.disabled = false;
+    renderErrors();
+  }
 }
 
 function formatQuotaPool(quota) {
@@ -681,6 +722,7 @@ function renderAccountAuthentication(session) {
 
 let m365Snapshot;
 let m365ProbeAccounts;
+let m365ProbeStarted = false;
 let m365HostnameDirty = false;
 
 function fillM365Accounts(select, accounts) {
@@ -689,8 +731,9 @@ function fillM365Accounts(select, accounts) {
   for (const account of accounts) {
     const option = document.createElement('option');
     option.value = account.homeAccountId;
-    option.textContent = account.upn + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026 (' + account.environment + ')';
+    option.textContent = (account.upn || 'Email unavailable') + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026 (' + account.environment + ')';
     if (current === account.homeAccountId) option.selected = true;
+    option.title = account.homeAccountId;
     select.append(option);
   }
 }
@@ -699,6 +742,7 @@ function renderM365(state) {
   const onboarding = state.onboarding || { status: 'available' };
   const panel = byId('m365-panel');
   panel.hidden = false;
+  byId('m365-sign-in-form').hidden = onboarding.status !== 'available';
   const absent = byId('m365-absent');
   const active = byId('m365-active');
   absent.hidden = state.registered;
@@ -724,7 +768,8 @@ function renderM365(state) {
   byId('m365-probe').disabled = false;
   const availability = state.availability;
   const parts = [state.hostname];
-  if (state.account) parts.push('account ' + state.account.slice(0, 12) + '\u2026');
+  if (state.username) parts.push(state.username);
+  else if (state.account) parts.push(state.account.includes('@') ? state.account : 'account ' + state.account.slice(0, 12) + '\u2026');
   parts.push(state.modelCount + ' models');
   if (state.tokenExpiresAt) {
     parts.push('token until ' + new Date(state.tokenExpiresAt).toLocaleTimeString());
@@ -740,16 +785,13 @@ function renderM365(state) {
   if (!m365HostnameDirty) byId('m365-hostname').value = state.hostname || '';
   const select = byId('m365-account');
   const previous = select.value;
-  clearNode(select);
-  const candidates = m365ProbeAccounts || (state.account
-    ? [{ homeAccountId: state.account, upn: 'Current selection', environment: 'broker' }]
-    : []);
-  for (const account of candidates) {
-    const option = document.createElement('option');
-    option.value = account.homeAccountId;
-    option.textContent = account.upn + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026';
-    if ((previous || state.account) === account.homeAccountId) option.selected = true;
-    select.append(option);
+  const candidates = [...(m365ProbeAccounts || [])];
+  if (state.account && !candidates.some(account => account.homeAccountId === state.account || account.upn === state.account)) {
+    candidates.unshift({ homeAccountId: state.account, upn: state.username || (state.account.includes('@') ? state.account : ''), environment: 'broker' });
+  }
+  fillM365Accounts(select, candidates);
+  if (!candidates.some(account => account.homeAccountId === previous)) {
+    select.value = candidates.find(account => account.homeAccountId === state.account || account.upn === state.account)?.homeAccountId || '';
   }
   byId('m365-save').disabled = candidates.length === 0;
 
@@ -758,7 +800,7 @@ function renderM365(state) {
   byId('m365-client').textContent = 'ANTHROPIC_BASE_URL=' + baseUrl + '\n'
     + 'ANTHROPIC_AUTH_TOKEN=dummy-token\n'
     + 'ANTHROPIC_MODEL=' + model;
-  byId('m365-remove').disabled = routing.length <= 1;
+  byId('m365-remove').disabled = routing.length <= 1 || routing.some(row => row.kind === 'm365' && row.isDefault);
 }
 
 async function loadM365() {
@@ -768,6 +810,9 @@ async function loadM365() {
       state.registered,
       state.hostname,
       state.account,
+      state.username,
+      state.tenant,
+      state.tokenExpiresAt,
       state.modelCount,
       state.models,
       state.availability && { status: state.availability.status, cause: state.availability.cause },
@@ -775,9 +820,13 @@ async function loadM365() {
       state.client,
       state.onboarding,
     ]);
-    if (snapshot === m365Snapshot) return;
-    m365Snapshot = snapshot;
-    renderM365(state);
+    if (snapshot !== m365Snapshot) {
+      m365Snapshot = snapshot;
+      renderM365(state);
+    }
+    if (dashboardState.activeView === 'accounts' && !m365ProbeStarted && state.onboarding?.status === 'available') {
+      await probeM365();
+    }
   } catch (error) {
     byId('m365-panel').hidden = false;
     m365Snapshot = undefined;
@@ -786,14 +835,17 @@ async function loadM365() {
 }
 
 async function probeM365() {
+  m365ProbeStarted = true;
   const button = byId('m365-probe');
   button.disabled = true;
+  byId('m365-probe-active').disabled = true;
   byId('m365-readiness').textContent = 'Checking prerequisites\u2026';
   try {
     const readiness = await fetchJson('/dashboard/api/m365/probe', { method: 'POST' });
     const lines = [];
     lines.push(readiness.platformSupported ? 'Windows platform: ok' : 'Windows platform: required');
     lines.push(readiness.helperAvailable ? 'msc-auth helper: found' : 'msc-auth helper: not found');
+    byId('m365-sign-in').disabled = !readiness.platformSupported || !readiness.helperAvailable;
     if (readiness.accountCount !== undefined) lines.push('Broker accounts: ' + readiness.accountCount);
     if (readiness.error) lines.push(readiness.error);
     byId('m365-readiness').textContent = lines.join('\n');
@@ -812,6 +864,29 @@ async function probeM365() {
     byId('m365-readiness').textContent = error.message;
   } finally {
     button.disabled = false;
+    byId('m365-probe-active').disabled = false;
+  }
+}
+
+async function signInM365(event) {
+  event.preventDefault();
+  const button = byId('m365-sign-in');
+  button.disabled = true;
+  byId('m365-readiness').textContent = 'Complete sign-in in the Windows account dialog\u2026';
+  try {
+    const upn = byId('m365-sign-in-upn').value.trim();
+    const result = await fetchJson('/dashboard/api/m365/sign-in', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(upn ? { upn } : {}),
+    });
+    await probeM365();
+    for (const id of ['m365-register-account', 'm365-account']) byId(id).value = result.account.homeAccountId;
+    byId('m365-readiness').textContent = 'Signed in as ' + (result.account.upn || result.account.homeAccountId) + '. Select Add M365 target or Use this account to apply it.';
+  } catch (error) {
+    byId('m365-readiness').textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -825,6 +900,7 @@ async function postM365(path, body) {
     });
     m365Snapshot = undefined;
     renderM365(state);
+    await loadAccounts();
     if (!state.availability || state.availability.status !== 'unavailable') {
       byId('m365-status').textContent = 'Saved.';
     }
@@ -871,13 +947,7 @@ async function saveM365Hostname(event) {
 }
 
 async function removeM365() {
-  const button = byId('m365-remove');
-  button.disabled = true;
-  try {
-    await postM365('/dashboard/api/m365/remove', {});
-  } finally {
-    button.disabled = false;
-  }
+  await removeAccount('m365', byId('m365-remove'));
 }
 
 async function loadAccounts() {
@@ -1347,7 +1417,14 @@ async function refreshDashboardMetadata() {
   try {
     const refresh = await fetchJson('/dashboard/api/refresh', { method: 'POST' });
     if (refresh.status === 'ok') dashboardState.errors.delete('metadata');
-    else dashboardState.errors.set('metadata', new Error('Some account metadata could not be refreshed'));
+    else {
+      const failures = (refresh.accounts || []).flatMap(function (account) {
+        return ['github', 'models', 'quota'].filter(function (field) {
+          return account[field]?.status === 'stale' || account[field]?.status === 'unavailable';
+        }).map(function (field) { return account.name + ': ' + field + ' (' + account[field].status + ')'; });
+      });
+      dashboardState.errors.set('metadata', new Error('Metadata refresh incomplete' + (failures.length ? ': ' + failures.join('; ') : '.')));
+    }
     await settleLoads(allViewLoads());
   } catch (error) {
     dashboardState.errors.set('metadata', error);
@@ -1416,6 +1493,7 @@ document.querySelectorAll('.tab').forEach(function (button) {
 
 byId('refresh-button').addEventListener('click', refreshDashboardMetadata);
 byId('m365-form').addEventListener('submit', saveM365Selection);
+byId('m365-sign-in-form').addEventListener('submit', signInM365);
 byId('m365-probe').addEventListener('click', probeM365);
 byId('m365-probe-active').addEventListener('click', probeM365);
 byId('m365-hostname').addEventListener('input', function () { m365HostnameDirty = true; });

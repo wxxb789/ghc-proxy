@@ -39,6 +39,8 @@ export interface M365DashboardState {
   registered: boolean
   hostname?: string
   account?: string
+  username?: string
+  tenant?: string
   tokenExpiresAt?: string
   modelCount: number
   models: string[]
@@ -104,6 +106,8 @@ export function getM365DashboardState(
       registered: true,
       hostname: running.hostname,
       account: running.runtime.auth.mscAuthAccount ?? getCachedConfig().m365?.account,
+      username: running.runtime.auth.mscAuthUsername ?? running.runtime.auth.mscAuthUpn,
+      tenant: running.runtime.auth.mscAuthTenant,
       tokenExpiresAt: running.runtime.auth.copilotTokenExpiresAt
         ? new Date(running.runtime.auth.copilotTokenExpiresAt).toISOString()
         : undefined,
@@ -140,6 +144,8 @@ export function getM365DashboardState(
     registered: true,
     hostname: target.hostname,
     account: target.runtime.auth.mscAuthAccount ?? getCachedConfig().m365?.account,
+    username: target.runtime.auth.mscAuthUsername ?? target.runtime.auth.mscAuthUpn,
+    tenant: target.runtime.auth.mscAuthTenant,
     tokenExpiresAt: target.runtime.auth.copilotTokenExpiresAt
       ? new Date(target.runtime.auth.copilotTokenExpiresAt).toISOString()
       : undefined,

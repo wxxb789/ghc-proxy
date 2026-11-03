@@ -7,6 +7,10 @@ export interface ClientAuth {
   githubToken?: string
   copilotToken?: string
   copilotTokenExpiresAt?: number
+  copilotTokenLastRefreshAt?: number
+  copilotTokenLastRefreshSucceeded?: boolean
+  mscAuthUsername?: string
+  mscAuthTenant?: string
   copilotApiBase?: string
 }
 
@@ -16,7 +20,7 @@ export interface ClientConfig {
   upstream?: UpstreamKind
   /** Helper path for the `m365` upstream; discovery applies when omitted. */
   mscAuthExe?: string
-  /** Broker account (home account id) to select; helper default applies when omitted. */
+  /** Broker home account id or exact email; otherwise select an unambiguous broker account. */
   mscAuthAccount?: string
   /** Broker account UPN to select when no home account id is set. */
   mscAuthUpn?: string

@@ -7,7 +7,7 @@ import { authStore, modelCache, runWithAccountRuntime } from '~/state'
 
 const DEFAULT_METADATA_TIMEOUT_MS = 5_000
 
-export type DashboardMetadataStatus = 'ok' | 'stale' | 'unavailable'
+export type DashboardMetadataStatus = 'ok' | 'stale' | 'unavailable' | 'not_applicable'
 
 export interface DashboardAccountMetadataRefresh {
   github: { status: DashboardMetadataStatus }
@@ -42,6 +42,7 @@ export class DashboardMetadataRefresher implements DashboardMetadataRefreshServi
   private readonly dependencies: DashboardMetadataRefreshDependencies
   private readonly timeoutMs: number
   private inFlight?: {
+    accounts: RoutedAccountDescriptor[]
     fingerprint: string
     promise: Promise<DashboardMetadataRefresh>
   }
@@ -68,8 +69,10 @@ export class DashboardMetadataRefresher implements DashboardMetadataRefreshServi
     quotaCache: DashboardQuotaCache,
   ): Promise<DashboardMetadataRefresh> {
     const fingerprint = accountFingerprint(accounts)
-    if (this.inFlight?.fingerprint === fingerprint)
+    if (this.inFlight?.fingerprint === fingerprint
+      && this.inFlight.accounts.every((account, index) => account.runtime === accounts[index]?.runtime)) {
       return this.inFlight.promise
+    }
     if (this.pending) {
       this.pending.accounts = accounts
       this.pending.fingerprint = fingerprint
@@ -97,7 +100,7 @@ export class DashboardMetadataRefresher implements DashboardMetadataRefreshServi
         account.github.status,
         account.models.status,
         account.quota.status,
-      ])
+      ]).filter(status => status !== 'not_applicable')
       return {
         accounts: refreshedAccounts,
         status: statuses.every(status => status === 'ok')
@@ -107,7 +110,7 @@ export class DashboardMetadataRefresher implements DashboardMetadataRefreshServi
             : 'unavailable',
       }
     })
-    this.inFlight = { fingerprint, promise: refresh }
+    this.inFlight = { accounts, fingerprint, promise: refresh }
     void refresh.then(
       () => this.startPendingRefresh(refresh),
       () => this.startPendingRefresh(refresh),
@@ -136,16 +139,19 @@ export class DashboardMetadataRefresher implements DashboardMetadataRefreshServi
       const timeout = setTimeout(() => {
         controller.abort(new DOMException('Dashboard metadata refresh timed out.', 'TimeoutError'))
       }, this.timeoutMs)
+      const isM365 = authStore.upstream === 'm365'
       const [github, quota, models] = await Promise.allSettled([
-        this.dependencies.refreshGitHubIdentity(controller.signal),
-        quotaCache.refresh(),
+        isM365 ? undefined : this.dependencies.refreshGitHubIdentity(controller.signal),
+        isM365 ? { status: 'not_applicable' as const } : quotaCache.refresh(),
         this.dependencies.refreshModels(controller.signal),
       ]).finally(() => {
         clearTimeout(timeout)
       })
       return {
         name: account.name,
-        github: { status: refreshStatus(github, authStore.githubValidatedAt !== undefined) },
+        github: {
+          status: isM365 ? 'not_applicable' : refreshStatus(github, authStore.githubValidatedAt !== undefined),
+        },
         models: { status: refreshStatus(models, modelCache.getModels() !== undefined) },
         quota: {
           status: quota.status === 'fulfilled'

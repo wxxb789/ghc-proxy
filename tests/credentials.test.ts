@@ -9,6 +9,7 @@ import {
   finalizeGitHubCredentialMigration,
   prepareGitHubCredential,
   readGitHubCredential,
+  removeGitHubCredential,
   replaceGitHubCredentialDuringMigration,
   writeGitHubCredential,
   writeNewGitHubCredential,
@@ -164,6 +165,71 @@ describe('credential store', () => {
       'selects missing account "missing"',
     )
     expect(await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')).toBe(original)
+  })
+
+  test('removes a named credential without changing the active account or unknown fields', async () => {
+    const active = { githubToken: Buffer.from('default-token').toString('base64'), custom: { keep: true } }
+    await fs.writeFile(credentialPaths.CREDENTIALS_PATH, JSON.stringify({
+      version: 1,
+      activeAccount: 'default',
+      customStore: { keep: 'value' },
+      accounts: {
+        default: active,
+        work: { githubToken: Buffer.from('work-token').toString('base64') },
+      },
+    }))
+
+    await removeGitHubCredential('work', credentialPaths)
+
+    expect(JSON.parse(await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8'))).toEqual({
+      version: 1,
+      activeAccount: 'default',
+      customStore: { keep: 'value' },
+      accounts: { default: active },
+    })
+    expect(await readGitHubCredential(credentialPaths)).toMatchObject({ accountName: 'default' })
+  })
+
+  test('selects a surviving credential deterministically when removing the active account', async () => {
+    await writeGitHubCredential('work-token', undefined, credentialPaths, 'work')
+    await writeGitHubCredential('z-token', 'corp.ghe.com', credentialPaths, 'z-account')
+    await writeGitHubCredential('a-token', undefined, credentialPaths, 'a-account')
+
+    await removeGitHubCredential('work', credentialPaths)
+
+    expect(await readGitHubCredential(credentialPaths)).toMatchObject({
+      accountName: 'a-account',
+      githubToken: 'a-token',
+    })
+    expect(await readGitHubCredential(credentialPaths, 'z-account')).toMatchObject({
+      githubToken: 'z-token',
+      gheDomain: 'corp.ghe.com',
+    })
+  })
+
+  test('removes the store instead of leaving a dangling active account after the last deletion', async () => {
+    await writeGitHubCredential('last-token', undefined, credentialPaths, 'last')
+    const config = JSON.stringify({ m365: { account: 'broker-account' }, custom: true })
+    await fs.writeFile(credentialPaths.CONFIG_PATH, config)
+
+    await removeGitHubCredential('last', credentialPaths)
+
+    expect(await readGitHubCredential(credentialPaths)).toBeUndefined()
+    expect(await fs.readFile(credentialPaths.CONFIG_PATH, 'utf8')).toBe(config)
+    await expect(fs.stat(credentialPaths.CREDENTIALS_PATH)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  test('leaves credentials untouched when deleting a missing account or an invalid active store', async () => {
+    await writeGitHubCredential('default-token', undefined, credentialPaths)
+    const original = await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')
+
+    await expect(removeGitHubCredential('missing', credentialPaths)).rejects.toThrow('does not contain account')
+    expect(await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')).toBe(original)
+
+    const invalid = original.replace('"activeAccount": "default"', '"activeAccount": "missing"')
+    await fs.writeFile(credentialPaths.CREDENTIALS_PATH, invalid)
+    await expect(removeGitHubCredential('default', credentialPaths)).rejects.toThrow('selects missing account')
+    expect(await fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')).toBe(invalid)
   })
 
   test('stages a legacy token with an exact config backup and leaves config untouched', async () => {

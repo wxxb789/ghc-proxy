@@ -3,18 +3,20 @@ import type {
   AccountManagerPersistence,
 } from '~/accounts/manager'
 
+import type { ConfigFile } from '~/lib/config'
 import type { AccountRuntime } from '~/state'
 
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 
 import { AccountManager, createAccountManagerPersistence } from '~/accounts/manager'
 import { createTargetRuntime } from '~/accounts/target-runtime'
 import { resetMscTokenCache, setMscHelperRunner } from '~/clients/msc-auth'
 import { compileAccountRouting } from '~/lib/account-routing'
+import { getCachedConfig } from '~/lib/config'
 import { readGitHubCredentials, writeGitHubCredential } from '~/lib/credentials'
 import { createServer } from '~/server'
 import {
@@ -23,6 +25,7 @@ import {
   getCurrentAccountName,
   resetAccountRuntimes,
   resolveRequestAccountRuntime,
+  runWithAccountRuntime,
 } from '~/state'
 
 function runtime(name: string, login: string, token = `github-${name}`): AccountRuntime {
@@ -67,11 +70,12 @@ function bootstrapState(accountName = 'default') {
 function dependencies(overrides: Partial<AccountManagerDependencies> = {}) {
   const persistence: AccountManagerPersistence = {
     addAccount: async (_input, applyRuntime) => applyRuntime(),
+    removeAccount: async (_accountName, _routing, applyRuntime) => applyRuntime(),
     persistRouting: async (_routing, applyRuntime) => applyRuntime(),
   }
   return {
-    beginAuthentication: async () => {
-      const added = runtime('account2', 'carol')
+    beginAuthentication: async ({ accountName }: Parameters<AccountManagerDependencies['beginAuthentication']>[0]) => {
+      const added = runtime(accountName, 'carol')
       return {
         authorization: {
           userCode: 'ABCD-1234',
@@ -80,7 +84,7 @@ function dependencies(overrides: Partial<AccountManagerDependencies> = {}) {
           pollIntervalSeconds: 5,
         },
         completion: Promise.resolve({
-          githubToken: 'github-account2',
+          githubToken: `github-${accountName}`,
           runtime: added,
           stopRefresh: mock(() => {}),
         }),
@@ -135,6 +139,7 @@ describe('AccountManager', () => {
     const manager = new AccountManager(bootstrapState(), dependencies({
       persistence: {
         addAccount: async (_input, applyRuntime) => applyRuntime(),
+        removeAccount: async (_accountName, _routing, applyRuntime) => applyRuntime(),
         persistRouting: async (_routing, applyRuntime) => {
           applyRuntime()
           throw new Error('disk failure')
@@ -206,6 +211,7 @@ describe('AccountManager', () => {
     const manager = new AccountManager(state, dependencies({
       persistence: {
         addAccount,
+        removeAccount: async (_accountName, _routing, applyRuntime) => applyRuntime(),
         persistRouting: async (_routing, applyRuntime) => applyRuntime(),
       },
     }))
@@ -247,6 +253,7 @@ describe('AccountManager', () => {
       }),
       persistence: {
         addAccount,
+        removeAccount: async (_accountName, _routing, applyRuntime) => applyRuntime(),
         persistRouting: async (_routing, applyRuntime) => applyRuntime(),
       },
     }))
@@ -289,6 +296,7 @@ describe('AccountManager', () => {
           throw new Error('disk failed with private-token')
         },
         persistRouting: async (_routing, applyRuntime) => applyRuntime(),
+        removeAccount: async (_accountName, _routing, applyRuntime) => applyRuntime(),
       },
     }))
 
@@ -326,6 +334,7 @@ describe('AccountManager', () => {
     const manager = new AccountManager(state, dependencies({
       persistence: {
         addAccount: async (_input, applyRuntime) => applyRuntime(),
+        removeAccount: async (_accountName, _routing, applyRuntime) => applyRuntime(),
         persistRouting: async () => {
           throw new Error('disk failure')
         },
@@ -377,6 +386,8 @@ describe('AccountManager', () => {
       accountName: 'other',
       hostname: 'account2.localhost',
     })).rejects.toThrow('already configured or reserved')
+    await expect(manager.removeAccount('account2')).rejects.toMatchObject({ status: 409 })
+    expect(manager.getAuthenticationSession(session.id)?.state).toBe('pending')
 
     finish({
       githubToken: 'github-account2',
@@ -713,11 +724,254 @@ describe('AccountManager', () => {
   })
 })
 
+describe('account removal', () => {
+  let savedConfig: ConfigFile
+
+  beforeEach(() => {
+    savedConfig = structuredClone(getCachedConfig())
+  })
+
+  afterEach(() => {
+    const config = getCachedConfig()
+    for (const key of Object.keys(config)) {
+      Reflect.deleteProperty(config, key)
+    }
+    Object.assign(config, savedConfig)
+  })
+
+  async function persistedFixture() {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ghc-proxy-account-removal-'))
+    const paths = {
+      ACCOUNT_MANAGEMENT_JOURNAL_PATH: path.join(tempDir, 'account-management-transaction.json'),
+      CONFIG_PATH: path.join(tempDir, 'config.json'),
+      CONFIG_MIGRATION_BACKUP_PATH: path.join(tempDir, 'config.json.github-token-migration.bak'),
+      CREDENTIALS_PATH: path.join(tempDir, 'credentials.json'),
+    }
+    const state = initialState()
+    await writeGitHubCredential('github-account1', undefined, paths, 'account1')
+    await writeGitHubCredential('github-default', undefined, paths, 'default')
+    await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({
+      smallModel: 'unchanged-model',
+      m365: { account: 'unchanged-broker' },
+      accountRouting: {
+        baseHostname: state.routing.baseHostname,
+        defaultAccount: state.routing.defaultAccount,
+        hostnames: Object.fromEntries(state.routing.hostnames),
+      },
+    }))
+    return { paths, state, tempDir }
+  }
+
+  test('deletes routing and credentials together, preserves in-flight ownership, and cleans up only after commit', async () => {
+    const { paths, state, tempDir } = await persistedFixture()
+    const cleanupDefault = mock(() => {})
+    const cleanupAccount1 = mock(() => {})
+    const manager = new AccountManager({
+      ...state,
+      refreshCleanups: new Map([['default', cleanupDefault], ['account1', cleanupAccount1]]),
+    }, dependencies({ persistence: createAccountManagerPersistence(paths) }))
+    const { promise: waiting, resolve: release } = Promise.withResolvers<void>()
+    const { promise: entered, resolve: started } = Promise.withResolvers<void>()
+    const removedRuntime = state.runtimes[1]!
+    const inFlight = runWithAccountRuntime(removedRuntime, async () => {
+      started()
+      await waiting
+      return getCurrentAccountName()
+    })
+    try {
+      await entered
+      await manager.removeAccount(' account1 ')
+
+      expect(manager.getAccountSnapshot().accounts.map(account => account.name)).toEqual(['default'])
+      expect(resolveRequestAccountRuntime(new Request('http://account1.localhost/token'))).toBeUndefined()
+      expect(resolveRequestAccountRuntime(new Request('http://default.localhost/token'))).toBe(state.runtimes[0])
+      expect(removedRuntime.auth.githubToken).toBe('github-account1')
+      const credentials = await readGitHubCredentials(paths)
+      expect(credentials?.activeAccount).toBe('default')
+      expect(Object.keys(credentials!.accounts)).toEqual(['default'])
+      const config = JSON.parse(await fs.readFile(paths.CONFIG_PATH, 'utf8')) as Record<string, unknown>
+      expect(config).toEqual({
+        smallModel: 'unchanged-model',
+        m365: { account: 'unchanged-broker' },
+        accountRouting: {
+          baseHostname: 'localhost',
+          defaultAccount: 'default',
+          hostnames: { 'default.localhost': 'default' },
+        },
+      })
+      await expect(fs.stat(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(cleanupAccount1).toHaveBeenCalledTimes(1)
+      expect(cleanupDefault).not.toHaveBeenCalled()
+      release()
+      expect(await inFlight).toBe('account1')
+
+      const session = await manager.beginAddAccount({ accountName: 'account1', hostname: 'account1.localhost' })
+      expect(await manager.waitForAuthentication(session.id)).toMatchObject({ state: 'succeeded' })
+      await manager.stop()
+      expect(cleanupAccount1).toHaveBeenCalledTimes(1)
+      expect(cleanupDefault).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      release()
+      await inFlight
+      await manager.stop()
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('protects the default and only target and rejects missing or stopped accounts', async () => {
+    const manager = new AccountManager(initialState(), dependencies())
+    await expect(manager.removeAccount('missing')).rejects.toMatchObject({ status: 404 })
+    await expect(manager.removeAccount('default')).rejects.toMatchObject({ status: 409 })
+    await expect(manager.removeAccount('invalid/name')).rejects.toMatchObject({ status: 400 })
+    await manager.removeAccount('account1')
+    await expect(manager.removeAccount('default')).rejects.toMatchObject({ status: 409 })
+    await manager.stop()
+    await expect(manager.removeAccount('default')).rejects.toMatchObject({ status: 503 })
+    await expect(manager.removeAccount('m365')).rejects.toMatchObject({ status: 503 })
+  })
+
+  for (const failure of ['runtime apply', 'journal commit'] as const) {
+    test(`rolls back files and live routing when ${failure} fails after runtime apply`, async () => {
+      const { paths, state, tempDir } = await persistedFixture()
+      const originalConfig = await fs.readFile(paths.CONFIG_PATH, 'utf8')
+      const originalCredentials = await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')
+      const originalCachedConfig = structuredClone(getCachedConfig())
+      const cleanup = mock(() => {})
+      const persistence = createAccountManagerPersistence(paths)
+      const originalRemove = persistence.removeAccount
+      let applied = false
+      persistence.removeAccount = (accountName, routing, applyRuntime) => originalRemove(accountName, routing, () => {
+        applyRuntime()
+        applied = true
+        expect(resolveRequestAccountRuntime(new Request('http://account1.localhost/token'))).toBeUndefined()
+        expect(cleanup).not.toHaveBeenCalled()
+        if (failure === 'runtime apply') {
+          throw new Error('failure after runtime apply')
+        }
+      })
+      const manager = new AccountManager({
+        ...state,
+        refreshCleanups: new Map([['account1', cleanup]]),
+      }, dependencies({ persistence }))
+      const removeFile = fs.rm.bind(fs)
+      let commitFailed = false
+      const removeSpy = failure === 'journal commit'
+        ? spyOn(fs, 'rm').mockImplementation(async (filePath, options) => {
+            if (filePath === paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH && !commitFailed) {
+              expect(applied).toBe(true)
+              expect(await fs.readFile(paths.CONFIG_PATH, 'utf8')).not.toBe(originalConfig)
+              expect(await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')).not.toBe(originalCredentials)
+              commitFailed = true
+              throw new Error('journal commit failed')
+            }
+            return removeFile(filePath, options)
+          })
+        : undefined
+      try {
+        await expect(manager.removeAccount('account1')).rejects.toMatchObject({ status: 500 })
+        expect(applied).toBe(true)
+        expect(commitFailed).toBe(failure === 'journal commit')
+        expect(await fs.readFile(paths.CONFIG_PATH, 'utf8')).toBe(originalConfig)
+        expect(await fs.readFile(paths.CREDENTIALS_PATH, 'utf8')).toBe(originalCredentials)
+        expect(getCachedConfig()).toEqual(originalCachedConfig)
+        expect(resolveRequestAccountRuntime(new Request('http://account1.localhost/token'))).toBe(state.runtimes[1])
+        expect(resolveRequestAccountRuntime(new Request('http://localhost/token'))).toBe(state.runtimes[0])
+        expect(manager.getAccountSnapshot().accounts.map(account => account.name)).toEqual(['account1', 'default'])
+        expect(cleanup).not.toHaveBeenCalled()
+        await expect(manager.beginAddAccount({ accountName: 'account1', hostname: 'other.localhost' }))
+          .rejects
+          .toMatchObject({ status: 409 })
+        await expect(fs.stat(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toMatchObject({ code: 'ENOENT' })
+      }
+      finally {
+        removeSpy?.mockRestore()
+        await manager.stop()
+        await fs.rm(tempDir, { recursive: true, force: true })
+      }
+      expect(cleanup).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  test('removes every persisted hostname alias for the deleted account', async () => {
+    const { paths, state, tempDir } = await persistedFixture()
+    try {
+      await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({
+        accountRouting: {
+          baseHostname: state.routing.baseHostname,
+          defaultAccount: state.routing.defaultAccount,
+          hostnames: {
+            ...Object.fromEntries(state.routing.hostnames),
+            'alias.localhost': 'account1',
+          },
+        },
+      }))
+      await createAccountManagerPersistence(paths).removeAccount('account1', {
+        baseHostname: state.routing.baseHostname,
+        defaultAccount: state.routing.defaultAccount,
+        hostnames: { 'default.localhost': 'default' },
+      }, () => {})
+      expect((await readGitHubCredentials(paths))?.accounts.account1).toBeUndefined()
+      const config = JSON.parse(await fs.readFile(paths.CONFIG_PATH, 'utf8')) as {
+        accountRouting: { hostnames: Record<string, string> }
+      }
+      expect(Object.values(config.accountRouting.hostnames)).not.toContain('account1')
+    }
+    finally {
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('removes the last GitHub credential when M365 is the surviving default', async () => {
+    const { paths, tempDir } = await persistedFixture()
+    const m365 = createTargetRuntime('m365', 'm365', { mscAuthAccount: 'unchanged-broker' })
+    const github = runtime('account1', 'bob')
+    const routingConfig = {
+      baseHostname: 'localhost',
+      defaultAccount: 'm365',
+      hostnames: { 'account1.localhost': 'account1', 'm365.localhost': 'm365' },
+    }
+    const routing = compileAccountRouting(routingConfig, ['account1'])
+    const manager = new AccountManager({ routing, runtimes: [github, m365] }, dependencies({
+      persistence: createAccountManagerPersistence(paths),
+    }))
+    try {
+      await fs.rm(paths.CREDENTIALS_PATH)
+      await writeGitHubCredential('github-account1', undefined, paths, 'account1')
+      await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({
+        accountRouting: routingConfig,
+        m365: { account: 'unchanged-broker' },
+      }))
+      configureAccountRuntimes(routing, [github, m365])
+
+      await manager.removeAccount('account1')
+
+      expect(await readGitHubCredentials(paths)).toBeUndefined()
+      expect(manager.getAccountSnapshot().accounts.map(account => account.name)).toEqual(['m365'])
+      expect(resolveRequestAccountRuntime(new Request('http://localhost/token'))).toBe(m365)
+      expect(m365.auth.mscAuthAccount).toBe('unchanged-broker')
+      const persisted = JSON.parse(await fs.readFile(paths.CONFIG_PATH, 'utf8')) as {
+        accountRouting: typeof routingConfig
+        m365: { account: string }
+      }
+      expect(persisted.m365.account).toBe('unchanged-broker')
+      const restarted = compileAccountRouting(persisted.accountRouting, [])
+      configureAccountRuntimes(restarted, [m365])
+      expect(resolveRequestAccountRuntime(new Request('http://m365.localhost/token'))).toBe(m365)
+    }
+    finally {
+      await manager.stop()
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('M365 target mutations', () => {
   function m365Dependencies(persistM365Target?: AccountManagerPersistence['persistM365Target']) {
     return dependencies({
       persistence: {
         addAccount: async (_input, applyRuntime) => applyRuntime(),
+        removeAccount: async (_accountName, _routing, applyRuntime) => applyRuntime(),
         persistRouting: async (_routing, applyRuntime) => applyRuntime(),
         persistM365Target: persistM365Target
           ?? (async (_input, applyRuntime) => applyRuntime()),
@@ -806,11 +1060,11 @@ describe('M365 target mutations', () => {
     await expect(manager.removeM365Target()).rejects.toMatchObject({ status: 409 })
   })
 
-  test('removes the target and its hostname mapping', async () => {
+  test('delegates general removal to the M365 target mutation without nesting the queue', async () => {
     const manager = new AccountManager(initialState(), m365Dependencies())
     await manager.registerM365Target({})
 
-    await manager.removeM365Target()
+    await manager.removeAccount(' m365 ')
 
     expect(manager.getAccountSnapshot().accounts.map(account => account.name))
       .toEqual(['account1', 'default'])

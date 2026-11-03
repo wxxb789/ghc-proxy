@@ -51,7 +51,7 @@ interface RunServerOptions {
   upstream?: string
   /** Explicit msc-auth helper path for the `m365` upstream. */
   mscAuthExe?: string
-  /** Broker account (home account id) for the `m365` upstream. */
+  /** Broker home account id or exact email for the `m365` upstream. */
   mscAuthAccount?: string
   claudeCode: boolean
   showToken: boolean
@@ -648,7 +648,7 @@ export const start = defineCommand({
     'msc-auth-account': {
       type: 'string',
       description:
-        'Broker account (home account id from `msc-auth --accounts`) for the m365 upstream',
+        'Broker home account id or exact email for the m365 upstream (`msc-auth --accounts` lists accounts)',
     },
     'claude-code': {
       alias: 'c',

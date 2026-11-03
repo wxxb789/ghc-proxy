@@ -135,7 +135,7 @@ bunx --bun ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node
 | `--github-token` | `-g` | -- | Use a GitHub token for this process only (normally obtained with `auth`); this flag does not persist it to `config.json` |
 | `--upstream` | -- | `github` | Upstream API: `github`, or `m365` for the Microsoft 365 Copilot gateway (Windows only; always binds `127.0.0.1`) |
 | `--msc-auth-exe` | -- | bundled helper | Path to the `msc-auth` helper used by `--upstream m365` |
-| `--msc-auth-account` | -- | broker default | Broker account for `--upstream m365`, as the home account id printed by `msc-auth --accounts` |
+| `--msc-auth-account` | -- | unambiguous broker account | Broker home account ID or exact email from `msc-auth --accounts`; ambiguous emails require the home ID |
 | `--claude-code` | `-c` | `false` | Generate a Claude Code launch command |
 | `--show-token` | -- | `false` | Display tokens on auth and refresh |
 | `--dump-failed-payloads` | `-D` | `false` | Dump failed `/responses` payloads on upstream 400 errors for debugging. Can also be enabled with `DUMP_FAILED_PAYLOADS=1`. |
@@ -209,10 +209,11 @@ M365 is a route target beside your GitHub accounts, not a separate mode: one pro
 bunx --bun ghc-proxy@latest start --upstream m365
 ```
 
-- **Windows only.** The credential comes from the bundled `msc-auth` helper over WAM/MSAL; the client has no device-code or loopback flow. The helper ships in the npm artifact (`dist/msc-auth/`); `bun run build:msc-auth` rebuilds it from source and `GHC_MSC_AUTH_EXE` overrides the path.
-- **Broker accounts.** `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`. Pin one with `--msc-auth-account <homeAccountId>`, or choose it in the Dashboard's M365 section, which persists `m365.account`. Only accounts carrying the Copilot subscription can mint gateway tokens; consumer accounts (MSA) are out of scope.
-- **Mixed targets.** Register the target once (`accountRouting.hostnames["m365.localhost"] = "m365"`, or the Dashboard section) and point a client at that hostname. Requests that select it are accepted only from the local machine, serve Anthropic Messages only, and answer `503` with the broker cause while the account cannot mint a token. GitHub hostnames are unaffected by any of it.
-- **Live catalog.** Startup reads `GET /api/v1/llmapi/models` and serves its `/v1/messages` subset, so context limits come from the gateway (1M today). The built-in list is a fallback for when that request fails.
+- **Windows only.** The credential comes from the bundled `msc-auth` helper over WAM/MSAL; the client has no device-code or loopback flow. The helper ships in the npm artifact (`dist/msc-auth/`). Windows source startup (`bun run start`) prepares a complete, current helper automatically; the first local build needs the .NET 10 SDK, C++ build tools, and Windows SDK. A complete `MSC_AUTH_DIR` payload or `--msc-auth-exe` / `GHC_MSC_AUTH_EXE` override avoids compiling. See [helper setup](./msc-auth/README.md#starting-the-proxy-from-source).
+- **Broker accounts.** Opening Accounts discovers Windows broker accounts once; Live polling does not repeatedly spawn the helper. Emails and Microsoft tenant IDs are displayed separately from GitHub identities. `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`; select an exact email or home ID with `--msc-auth-account`, or use the Dashboard picker, which persists `m365.account`. A profile signed in only inside the Copilot app may not be visible to WAM: use **Sign in another M365 account**, finish the Windows dialog, then apply the selection. Consumer accounts (MSA) do not support this gateway.
+- **Account removal.** Accounts has a **Remove** action for each non-default target. Choose another default before removing the current default; the only remaining target cannot be removed. GitHub removal deletes its local proxy credential and hostname mappings transactionally. Removing M365 deletes its proxy target, not its Windows broker account.
+- **Mixed targets.** Register the target once (`accountRouting.hostnames["m365.localhost"] = "m365"`, or the Dashboard section) and point a client at that hostname. Requests that select it are accepted only from the local machine, serve Anthropic Messages only, and answer `503` with the recorded cause while the account is unavailable. GitHub hostnames are unaffected.
+- **Live catalog.** The current upstream `GET /api/v1/llmapi/models` returned 10 models on 2026-11-03: five Messages models and five Responses models. The proxy exposes its supported Messages subset through `http://m365.localhost:4141/models` and `/v1/models`; use the M365 hostname rather than a GitHub hostname. Transient discovery failures may use the built-in catalog; 401/403 access failures leave the target unavailable instead of reporting it ready.
 - **Loopback only when it is the only target.** `--upstream m365` binds `127.0.0.1` because the credential spends your own account's quota; in a mixed process the M365 hostname alone is restricted to loopback peers.
 
 See [M365 Upstream](./docs/design/m365-upstream.md) for the header contract, measured limits, and the family fallbacks applied to unadvertised model names.
@@ -748,6 +749,11 @@ bun run dev              # Start with --watch
 # Or use the production-style source command:
 bun run start
 ```
+
+On Windows, `bun run start --port 4141` also prepares `dist/msc-auth/msc-auth.exe`
+and `msalruntime.dll` before loading the production-style source CLI. Repeated
+starts reuse an unchanged payload. The helper's compiler prerequisites are source
+tooling only; a release or complete explicit helper payload does not need .NET.
 
 ## Development
 

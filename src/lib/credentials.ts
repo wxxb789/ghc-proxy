@@ -160,6 +160,43 @@ export async function writeNewGitHubCredential(
   )
 }
 
+/** Deletes only the selected GitHub credential, preserving all surviving fields. */
+export async function removeGitHubCredential(
+  accountName: string,
+  paths: CredentialPaths = PATHS,
+): Promise<void> {
+  const existing = await readCredentialStore(paths)
+  if (!existing || !Object.hasOwn(existing.accounts, accountName)) {
+    throw new Error(
+      `credentials.json at ${paths.CREDENTIALS_PATH} does not contain account ${JSON.stringify(accountName)}. The file was left unchanged.`,
+    )
+  }
+  if (!Object.hasOwn(existing.accounts, existing.activeAccount)) {
+    throw new Error(
+      `credentials.json at ${paths.CREDENTIALS_PATH} selects missing account ${JSON.stringify(existing.activeAccount)}. The file was left unchanged.`,
+    )
+  }
+
+  const accounts = { ...existing.accounts }
+  delete accounts[accountName]
+  const remainingAccountNames = Object.keys(accounts).sort()
+  if (remainingAccountNames.length === 0) {
+    await fs.rm(paths.CREDENTIALS_PATH)
+    return
+  }
+  const next: CredentialStoreFile = {
+    ...existing,
+    activeAccount: existing.activeAccount === accountName
+      ? remainingAccountNames[0]!
+      : existing.activeAccount,
+    accounts,
+  }
+  await writePrivateFileAtomically(
+    paths.CREDENTIALS_PATH,
+    `${JSON.stringify(next, null, 2)}\n`,
+  )
+}
+
 async function writeGitHubCredentialEntry(
   githubToken: string,
   gheDomain: string | undefined,

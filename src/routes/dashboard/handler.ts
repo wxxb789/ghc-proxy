@@ -1,5 +1,6 @@
 import type { RoutedAccountDescriptor } from '~/accounts/descriptor'
 import type { AccountManagementSnapshot } from '~/accounts/manager'
+import type { AccountRuntime } from '~/state/account-runtime'
 import type { CopilotUsageResponse, Model, QuotaDetail } from '~/types'
 
 import { getUpstreamRequestQueueSnapshot } from '~/clients/factory'
@@ -11,6 +12,7 @@ import { resolveResponsesStrategyName } from '~/routes/responses/capabilities'
 import { responsesStrategyRegistry } from '~/routes/responses/strategy-registry'
 import { handleUsageCore } from '~/routes/usage/handler'
 import { authStore, configStore, getCurrentAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore, runWithAccountRuntime } from '~/state'
+import { getCurrentAccountRuntime, getTargetAvailability } from '~/state/account-runtime'
 import { resolveResponsesCompactThreshold } from '~/transform/context-management'
 import { getChatCompletionsTokenParameter, resolveStrippedResponsesParams, RESPONSES_MIN_OUTPUT_TOKENS } from '~/transform/parameter-filter'
 import { RESPONSES_INPUT_POLICY } from '~/transform/responses-input'
@@ -20,7 +22,7 @@ const DEFAULT_QUOTA_TTL_MS = 60_000
 const DEFAULT_QUOTA_TIMEOUT_MS = 5_000
 
 export interface DashboardQuota {
-  status: 'ok' | 'stale' | 'unavailable'
+  status: 'ok' | 'stale' | 'unavailable' | 'not_applicable'
   fetchedAt?: string
   plan?: string
   resetDate?: string
@@ -38,8 +40,8 @@ interface DashboardQuotaDetail {
 }
 
 export class DashboardQuotaCache {
-  private readonly cached = new Map<string, { expiresAt: number, value: DashboardQuota }>()
-  private readonly inFlight = new Map<string, Promise<DashboardQuota>>()
+  private cached = new WeakMap<AccountRuntime, { expiresAt: number, value: DashboardQuota }>()
+  private inFlight = new WeakMap<AccountRuntime, Promise<DashboardQuota>>()
   private readonly load: (signal?: AbortSignal) => Promise<CopilotUsageResponse>
   private readonly now: () => number
   private readonly ttlMs: number
@@ -66,12 +68,14 @@ export class DashboardQuotaCache {
   }
 
   private loadQuota(force: boolean): Promise<DashboardQuota> {
-    const accountName = getCurrentAccountName()
+    const account = getCurrentAccountRuntime()
+    const cache = this.cached
+    const inFlightLoads = this.inFlight
     const now = this.now()
-    const cached = this.cached.get(accountName)
+    const cached = cache.get(account)
     if (!force && cached && now < cached.expiresAt)
       return Promise.resolve(cached.value)
-    const inFlight = this.inFlight.get(accountName)
+    const inFlight = inFlightLoads.get(account)
     if (inFlight)
       return inFlight
 
@@ -89,15 +93,15 @@ export class DashboardQuotaCache {
       .then((usage) => {
         const fetchedAt = this.now()
         const value = projectQuota(usage, fetchedAt)
-        this.cached.set(accountName, { expiresAt: fetchedAt + this.ttlMs, value })
+        cache.set(account, { expiresAt: fetchedAt + this.ttlMs, value })
         return value
       })
       .catch(() => {
-        const lastValue = this.cached.get(accountName)
+        const lastValue = cache.get(account)
         const value: DashboardQuota = lastValue
           ? { ...lastValue.value, status: 'stale' }
           : { status: 'unavailable' }
-        this.cached.set(accountName, {
+        cache.set(account, {
           expiresAt: this.now() + this.ttlMs,
           value,
         })
@@ -106,15 +110,15 @@ export class DashboardQuotaCache {
       .finally(() => {
         if (timeout !== undefined)
           clearTimeout(timeout)
-        this.inFlight.delete(accountName)
+        inFlightLoads.delete(account)
       })
-    this.inFlight.set(accountName, load)
+    inFlightLoads.set(account, load)
     return load
   }
 
   reset(): void {
-    this.cached.clear()
-    this.inFlight.clear()
+    this.cached = new WeakMap()
+    this.inFlight = new WeakMap()
   }
 }
 
@@ -130,7 +134,13 @@ export async function getDashboardAccount(
       name: account.name,
       hostname: account.hostname,
       isDefault: account.isDefault,
-      tenant: authStore.gheDomain ?? 'github.com',
+      upstream: authStore.upstream,
+      identity: authStore.upstream === 'm365'
+        ? authStore.mscAuthUsername ?? authStore.mscAuthUpn
+        : authStore.githubLogin,
+      tenant: authStore.upstream === 'm365'
+        ? authStore.mscAuthTenant || 'Microsoft 365'
+        : authStore.gheDomain ?? 'github.com',
       github: health.github,
       copilot: health.copilot,
       quota: health.quota,
@@ -209,6 +219,10 @@ export async function getDashboardOverview(
     startedAt: runtimeStore.startedAt,
     uptimeMs: Math.max(0, Date.now() - Date.parse(runtimeStore.startedAt)),
     auth: {
+      upstream: authStore.upstream,
+      identity: authStore.upstream === 'm365'
+        ? authStore.mscAuthUsername ?? authStore.mscAuthUpn
+        : authStore.githubLogin,
       github: account.github,
       copilot: account.copilot,
       accounts: {
@@ -231,6 +245,7 @@ async function getDashboardAccountHealth(
   quotaCache: DashboardQuotaCache,
 ) {
   const modelsLoaded = modelCache.getModels() !== undefined
+  const isM365 = authStore.upstream === 'm365'
   const githubConfigured = Boolean(authStore.githubToken)
   const copilotConfigured = Boolean(authStore.copilotToken)
   const copilotExpired = authStore.copilotTokenExpiresAt !== undefined
@@ -239,16 +254,21 @@ async function getDashboardAccountHealth(
     && modelsLoaded
     && !copilotExpired
     && authStore.copilotTokenLastRefreshSucceeded !== false
-  const quota = githubConfigured
-    ? await quotaCache.get()
-    : { status: 'unavailable' as const }
+    && (!isM365 || getTargetAvailability(getCurrentAccountRuntime())?.status !== 'unavailable')
+  const quota: DashboardQuota = isM365
+    ? { status: 'not_applicable' }
+    : githubConfigured
+      ? await quotaCache.get()
+      : { status: 'unavailable' }
 
   return {
     status: copilotHealthy ? 'ok' : 'degraded',
     github: {
-      status: githubConfigured
-        ? authStore.githubValidatedAt ? 'ok' : 'unknown'
-        : 'missing',
+      status: isM365
+        ? 'not_applicable'
+        : githubConfigured
+          ? authStore.githubValidatedAt ? 'ok' : 'unknown'
+          : 'missing',
       login: authStore.githubLogin,
       lastValidatedAt: toIso(authStore.githubValidatedAt),
       accountType: authStore.accountType,

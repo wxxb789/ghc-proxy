@@ -10,6 +10,7 @@ import { Elysia } from 'elysia'
 import { z } from 'zod'
 
 import { AccountManagementError } from '~/accounts/manager'
+import { signInMscAccount } from '~/clients/msc-auth'
 import { isLoopbackAddress, resolveRequestPeer } from '~/lib/peer'
 import { RECENT_REQUEST_LIMIT } from '~/observability/request-store'
 import { DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS } from './assets'
@@ -67,6 +68,8 @@ const configureM365TargetSchema = z.object({
   hostname: z.string().min(1).optional(),
 }).strict()
 
+const m365SignInSchema = z.object({ upn: z.string().trim().min(1).optional() }).strict()
+
 export interface DashboardAccountManagement {
   beginAddAccount: (input: AddAccountInput) => Promise<AccountAuthenticationSession>
   bootstrapAccountRouting: (hostname: string) => Promise<void>
@@ -80,6 +83,7 @@ export interface DashboardAccountManagement {
     input: { account?: string | null, hostname?: string },
   ) => Promise<void>
   removeM365Target: () => Promise<void>
+  removeAccount: (accountName: string) => Promise<void>
   setDefaultAccount: (accountName: string) => Promise<void>
 }
 
@@ -139,6 +143,23 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
     })))
     .post('/dashboard/api/m365/probe', async () =>
       apiResponse(await probeM365Readiness(accountManager?.getMscAuthExe?.())))
+    .post('/dashboard/api/m365/sign-in', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = m365SignInSchema.safeParse(body)
+      if (!parsed.success)
+        return apiError('Invalid M365 sign-in request.', 400)
+      try {
+        const account = await signInMscAccount({
+          exe: accountManager.getMscAuthExe?.(),
+          upn: parsed.data.upn,
+        })
+        return apiResponse({ account })
+      }
+      catch (error) {
+        return apiError((error as Error).message, 502)
+      }
+    })
     .post('/dashboard/api/m365/register', async ({ body }) => {
       if (!accountManager)
         return accountManagementUnavailable()
@@ -259,6 +280,17 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         return apiError('Invalid default account request.', 400)
       try {
         await accountManager.setDefaultAccount(parsed.data.accountName)
+        return apiResponse(accountManager.getAccountSnapshot().routing)
+      }
+      catch (error) {
+        return accountManagementError(error)
+      }
+    })
+    .delete('/dashboard/api/accounts/:accountName', async ({ params }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      try {
+        await accountManager.removeAccount(params.accountName)
         return apiResponse(accountManager.getAccountSnapshot().routing)
       }
       catch (error) {

@@ -6,10 +6,13 @@ export class AuthStore {
   upstream: 'github' | 'm365' = 'github'
   /** Explicit helper path for the M365 upstream. */
   mscAuthExe?: string
-  /** Broker account (home account id) selected for the M365 upstream. */
+  /** Broker home account id or exact email selected for the M365 upstream. */
   mscAuthAccount?: string
-  /** Broker account UPN; the helper's own default applies when omitted. */
+  /** Broker account UPN when no account selector is configured. */
   mscAuthUpn?: string
+  /** Identity returned by the broker, separate from the configured selector. */
+  mscAuthUsername?: string
+  mscAuthTenant?: string
   gheDomain?: string
   githubLogin?: string
   githubValidatedAt?: number

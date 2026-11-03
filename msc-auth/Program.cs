@@ -19,10 +19,11 @@ internal static class Program
     private const string ClientId = "0ec893e0-5785-4de6-99da-4ed124e5296c";
     private const string DefaultTenantId = "72f988bf-86f1-41af-91ab-2d7cd011db47";
     private const string ResourceScope = "api://42c8f7bd-c7a8-4ba9-bc1c-91edfb716247/.default";
-    private const string DefaultUpn = "lhan@microsoft.com";
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     private static string? GetArgument(string[] args, string name)
     {
@@ -39,6 +40,32 @@ internal static class Program
 
     private static bool HasFlag(string[] args, string name) =>
         args.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+    internal static IAccount? SelectAccount(
+        IReadOnlyList<IAccount> accounts, string? accountId, string? upn, string tenant)
+    {
+        var selector = accountId ?? upn;
+        IAccount? selected = null;
+        foreach (var candidate in accounts)
+        {
+            var matches = selector is null
+                ? string.Equals(candidate.HomeAccountId.TenantId, tenant, StringComparison.OrdinalIgnoreCase)
+                : string.Equals(candidate.Username, selector, StringComparison.OrdinalIgnoreCase)
+                    || (accountId is not null && string.Equals(
+                        candidate.HomeAccountId.Identifier, selector, StringComparison.OrdinalIgnoreCase));
+            if (!matches)
+            {
+                continue;
+            }
+            if (selected is not null)
+            {
+                return null;
+            }
+            selected = candidate;
+        }
+
+        return selected ?? (selector is null && accounts.Count == 1 ? accounts[0] : null);
+    }
 
     private static async Task<int> Main(string[] args)
     {
@@ -61,7 +88,8 @@ internal static class Program
             .WithLogging(
                 (level, message, _) =>
                 {
-                    if (level <= (verbose ? LogLevel.Info : LogLevel.Warning))
+                    if ((verbose || level != LogLevel.Always)
+                        && level <= (verbose ? LogLevel.Info : LogLevel.Warning))
                     {
                         Console.Error.WriteLine($"[msal:{level}] {message}");
                     }
@@ -75,11 +103,14 @@ internal static class Program
         try
         {
             accounts = (await app.GetAccountsAsync()).ToList();
-            Console.Error.WriteLine($"[msc-auth] broker accounts: {accounts.Count}");
-            foreach (var candidate in accounts)
+            if (verbose)
             {
-                Console.Error.WriteLine(
-                    $"[msc-auth] {candidate.Username}  home={candidate.HomeAccountId.Identifier}  env={candidate.Environment}");
+                Console.Error.WriteLine($"[msc-auth] broker accounts: {accounts.Count}");
+                foreach (var candidate in accounts)
+                {
+                    Console.Error.WriteLine(
+                        $"[msc-auth] {candidate.Username}  home={candidate.HomeAccountId.Identifier}  env={candidate.Environment}");
+                }
             }
         }
         catch (MsalException error)
@@ -98,45 +129,20 @@ internal static class Program
             return 0;
         }
 
-        IAccount? selected = null;
-        if (accountId is not null)
+        account = SelectAccount(accounts, accountId, upn, tenant);
+        if (account is null && !interactive)
         {
-            selected = accounts.FirstOrDefault(candidate =>
-                string.Equals(candidate.HomeAccountId.Identifier, accountId, StringComparison.OrdinalIgnoreCase));
-            if (selected is null)
-            {
-                Console.Error.WriteLine($"[msc-auth] no account matched --account {accountId}");
-                return 2;
-            }
-        }
-        else
-        {
-            var target = upn ?? DefaultUpn;
-            selected = accounts.FirstOrDefault(candidate =>
-                    candidate.Username.Equals(target, StringComparison.OrdinalIgnoreCase))
-                ?? accounts.FirstOrDefault(candidate =>
-                    candidate.Username.Contains(target, StringComparison.OrdinalIgnoreCase));
-            if (selected is null && upn is null)
-            {
-                var preferred = GetArgument(args, "--prefer") ?? "microsoft.com";
-                selected = accounts.FirstOrDefault(candidate =>
-                    candidate.Username.Contains(preferred, StringComparison.OrdinalIgnoreCase));
-            }
-
-            if (selected is null && accounts.Count == 1)
-            {
-                selected = accounts[0];
-            }
-
-            if (selected is null && accounts.Count > 1)
-            {
-                Console.Error.WriteLine("[msc-auth] no account matched; use --accounts to list and --upn to pick");
-            }
+            var selector = accountId ?? upn;
+            Console.Error.WriteLine(selector is null
+                ? "[msc-auth] no unique broker account selected; use --accounts, then --account <home id or email>, or --interactive"
+                : $"[msc-auth] no unique account matched {selector}; use --accounts and select the home account id, or --interactive to sign in");
+            return 2;
         }
 
-        account = selected;
-
-        Console.Error.WriteLine($"[msc-auth] selected: {account?.Username ?? "(none)"}  authority={tenant}");
+        if (verbose)
+        {
+            Console.Error.WriteLine($"[msc-auth] selected: {account?.Username ?? "(none)"}  authority={tenant}");
+        }
 
         AuthenticationResult result;
         try
@@ -145,27 +151,32 @@ internal static class Program
             // broker session that silent acquisition can no longer satisfy.
             if (interactive)
             {
+                var parentWindow = GetConsoleWindow();
+                if (parentWindow == IntPtr.Zero)
+                {
+                    parentWindow = GetForegroundWindow();
+                }
                 var builder = app
                     .AcquireTokenInteractive(new[] { ResourceScope })
-                    .WithParentActivityOrWindow(GetConsoleWindow())
-                    .WithUseEmbeddedWebView(false);
+                    .WithParentActivityOrWindow(parentWindow)
+                    .WithUseEmbeddedWebView(false)
+                    .WithPrompt(Prompt.SelectAccount);
                 if (account is not null)
                 {
                     builder = builder.WithAccount(account);
                 }
+                else if (upn is not null || accountId?.Contains('@') == true)
+                {
+                    builder = builder.WithLoginHint(upn ?? accountId);
+                }
 
                 result = await builder.ExecuteAsync();
             }
-            else if (account is not null)
-            {
-                result = await app
-                    .AcquireTokenSilent(new[] { ResourceScope }, account)
-                    .ExecuteAsync();
-            }
             else
             {
-                Console.Error.WriteLine("[msc-auth] no account selected; use --accounts to list, --upn to pick, or --interactive");
-                return 2;
+                result = await app
+                    .AcquireTokenSilent(new[] { ResourceScope }, account!)
+                    .ExecuteAsync();
             }
         }
         catch (MsalUiRequiredException error)
@@ -184,6 +195,8 @@ internal static class Program
             result.ExpiresOn.ToUniversalTime().ToString("o"),
             result.TenantId,
             result.Account.Username,
+            result.Account.HomeAccountId.Identifier,
+            result.Account.Environment,
             result.Scopes.ToArray());
 
         Console.WriteLine(JsonSerializer.Serialize(payload, TokenJson.Default.TokenPayload));
@@ -196,6 +209,8 @@ internal sealed record TokenPayload(
     [property: JsonPropertyName("expires_on")] string ExpiresOn,
     [property: JsonPropertyName("tenant")] string Tenant,
     [property: JsonPropertyName("username")] string Username,
+    [property: JsonPropertyName("home_account_id")] string HomeAccountId,
+    [property: JsonPropertyName("environment")] string Environment,
     [property: JsonPropertyName("scopes")] string[] Scopes);
 
 [JsonSerializable(typeof(TokenPayload))]
