@@ -23,7 +23,7 @@ import {
   getDashboardRequests,
 } from './handler'
 
-import { getM365DashboardState, setM365Account } from './m365'
+import { getM365DashboardState, probeM365Readiness } from './m365'
 import { dashboardMetadataRefresher } from './metadata-refresh'
 
 const DASHBOARD_CSP = [
@@ -62,15 +62,23 @@ const setDefaultAccountSchema = z.object({
   accountName: z.string(),
 }).strict()
 
-const setM365AccountSchema = z.object({
-  account: z.string().nullable(),
+const configureM365TargetSchema = z.object({
+  account: z.string().nullable().optional(),
+  hostname: z.string().min(1).optional(),
 }).strict()
 
 export interface DashboardAccountManagement {
   beginAddAccount: (input: AddAccountInput) => Promise<AccountAuthenticationSession>
   bootstrapAccountRouting: (hostname: string) => Promise<void>
+  configureM365Target: (
+    input: { account?: string | null, hostname?: string },
+  ) => Promise<void>
   getAuthenticationSession: (id: string) => AccountAuthenticationSession | undefined
   getAccountSnapshot: () => AccountManagementSnapshot
+  registerM365Target: (
+    input: { account?: string | null, hostname?: string },
+  ) => Promise<void>
+  removeM365Target: () => Promise<void>
   setDefaultAccount: (accountName: string) => Promise<void>
 }
 
@@ -78,6 +86,7 @@ interface DashboardRouteOptions {
   accountManager?: DashboardAccountManagement
   metadataRefresher?: DashboardMetadataRefreshService
   quotaCache?: DashboardQuotaCache
+  serverPort?: number
 }
 
 export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
@@ -123,17 +132,74 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         accounts: await getDashboardAccounts(snapshot.accounts, quotaCache),
       })
     })
-    .get('/dashboard/api/m365', async () => apiResponse(await getM365DashboardState()))
-    .post('/dashboard/api/m365/account', async ({ body }) => {
-      const parsed = setM365AccountSchema.safeParse(body)
-      if (!parsed.success) {
-        return apiResponse({ error: { message: 'Invalid account selection payload.' } }, 400)
-      }
+    .get('/dashboard/api/m365', () => apiResponse(getM365DashboardState({
+      manager: accountManager,
+      serverPort: options.serverPort,
+    })))
+    .post('/dashboard/api/m365/probe', async () => apiResponse(await probeM365Readiness()))
+    .post('/dashboard/api/m365/register', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = configureM365TargetSchema.safeParse(body)
+      if (!parsed.success)
+        return apiError('Invalid M365 target payload.', 400)
       try {
-        return apiResponse(await setM365Account(parsed.data.account))
+        await accountManager.registerM365Target(parsed.data)
+        return apiResponse(getM365DashboardState({
+          manager: accountManager,
+          serverPort: options.serverPort,
+        }))
       }
       catch (error) {
-        return apiResponse({ error: { message: (error as Error).message } }, 400)
+        return accountManagementError(error)
+      }
+    })
+    .post('/dashboard/api/m365/remove', async () => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      try {
+        await accountManager.removeM365Target()
+        return apiResponse(getM365DashboardState({
+          manager: accountManager,
+          serverPort: options.serverPort,
+        }))
+      }
+      catch (error) {
+        return accountManagementError(error)
+      }
+    })
+    .post('/dashboard/api/m365/account', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = configureM365TargetSchema.safeParse(body)
+      if (!parsed.success)
+        return apiError('Invalid account selection payload.', 400)
+      try {
+        await accountManager.configureM365Target({ account: parsed.data.account })
+        return apiResponse(getM365DashboardState({
+          manager: accountManager,
+          serverPort: options.serverPort,
+        }))
+      }
+      catch (error) {
+        return accountManagementError(error)
+      }
+    })
+    .post('/dashboard/api/m365/hostname', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = configureM365TargetSchema.safeParse(body)
+      if (!parsed.success || parsed.data.hostname === undefined)
+        return apiError('Invalid hostname payload.', 400)
+      try {
+        await accountManager.configureM365Target({ hostname: parsed.data.hostname })
+        return apiResponse(getM365DashboardState({
+          manager: accountManager,
+          serverPort: options.serverPort,
+        }))
+      }
+      catch (error) {
+        return accountManagementError(error)
       }
     })
     .post('/dashboard/api/refresh', async () => {

@@ -48,6 +48,8 @@ export interface ServerOptions {
   accountManager?: DashboardAccountManagement
   idleTimeout?: number
   logRequests?: boolean
+  /** Port the dashboard should advertise for a target's base URL. */
+  serverPort?: number
 }
 
 /**
@@ -278,7 +280,10 @@ export function createServer(options?: ServerOptions) {
       modelsLoaded: !!modelCache.getModels(),
       version: VERSION,
     }))
-    .use(createDashboardRoutes({ accountManager: options?.accountManager }))
+    .use(createDashboardRoutes({
+      accountManager: options?.accountManager,
+      serverPort: options?.serverPort,
+    }))
     // Root-level routes: completions, decisions, models, embeddings, responses are
     // registered here for clients that omit the /v1 prefix. Token and usage routes
     // are root-only because they are proxy-specific endpoints, not part of any

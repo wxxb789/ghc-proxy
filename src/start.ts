@@ -269,6 +269,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
     const app = createServer({
       accountManager: accountSetup.accountManager,
       idleTimeout: options.idleTimeoutSeconds,
+      serverPort: options.port,
     })
     // The M365 upstream authenticates with the user's own Microsoft credential,
     // so it must not be reachable from the network by default.
