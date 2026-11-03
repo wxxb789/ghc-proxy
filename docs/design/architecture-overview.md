@@ -10,7 +10,7 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 
 | Component       | Technology                      |
 |-----------------|---------------------------------|
-| Runtime         | Bun >= 1.4 (first-class), Node.js >= 24 via `@elysiajs/node`; CI tracks latest LTS and Current |
+| Runtime         | Bun >= 1.4 (first-class), Node.js >= 26 via `@elysiajs/node`; CI tracks latest LTS and Current |
 | Language        | TypeScript (ESNext, strict)     |
 | HTTP Framework  | Elysia (`Bun.serve` on Bun; lazily loaded `@elysiajs/node` adapter on Node.js) |
 | CLI Framework   | citty                           |

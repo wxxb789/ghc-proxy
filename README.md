@@ -15,7 +15,7 @@ A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic
 # Bun >= 1.4
 bunx --bun ghc-proxy@latest start
 
-# Node.js >= 24
+# Node.js >= 26
 npx ghc-proxy@latest start
 ```
 
@@ -25,7 +25,7 @@ Before you start, make sure you have:
 
 1. **One supported JavaScript runtime:**
    - **Bun >= 1.4:** `winget install --id Oven-sh.Bun` on Windows, or see the [official installation guide](https://bun.com/docs/installation)
-   - **Node.js >= 24:** install the latest LTS release from the [official Node.js download page](https://nodejs.org/en/download)
+   - **Node.js >= 26:** install the latest LTS release from the [official Node.js download page](https://nodejs.org/en/download)
 2. **A GitHub Copilot subscription** -- individual, business, or enterprise
 
 ## Quick Start
