@@ -1,4 +1,5 @@
 export { parseAnthropicCountTokensPayload, parseAnthropicMessagesPayload } from './anthropic-messages'
+export { parseDecisionsRequest } from './decisions'
 export { parseEmbeddingRequest } from './embeddings'
 export { parseOpenAIChatPayload } from './openai-chat'
 export { parseResponsesInputTokensPayload, parseResponsesPayload } from './responses'

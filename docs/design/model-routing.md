@@ -193,6 +193,17 @@ retried through native Responses. This policy covers the create operation only.
 Responses `input_tokens`, retrieve, input-items, and delete routes retain their
 existing native/emulator behavior.
 
+### Decisions Admission
+
+`POST /decisions` and `POST /v1/decisions` do not select an execution strategy.
+After request validation and unsupported-field checks, the handler uses the
+common resolver with compact policy disabled and requires the resulting cached
+model record to advertise the exact endpoint `/v1/systemone`. An empty catalog
+is loaded once through the normal Copilot client; an unknown model or a model
+without that endpoint returns `400` before inference. There is no model
+fallback, overload fallback, or System One passthrough. See
+[Decisions API](decisions-api.md).
+
 ## Small-Model Routing
 
 An optional optimization that reroutes certain requests to a smaller (cheaper/faster) model.

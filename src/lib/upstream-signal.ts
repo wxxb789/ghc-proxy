@@ -5,7 +5,7 @@ const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 minutes
 
 const CLIENT_ABORT_MARKER = 'ghcProxyClientAbort'
 
-class ClientAbortError extends DOMException {
+export class ClientAbortError extends DOMException {
   readonly [CLIENT_ABORT_MARKER] = true
 
   constructor() {

@@ -19,6 +19,7 @@ import type {
   ResponsesInputTokensPayload,
   ResponsesPayload,
   ResponsesResult,
+  SystemOneRequest,
 } from '~/types'
 
 import { events } from 'fetch-event-stream'
@@ -30,6 +31,8 @@ import { normalizeM365Catalog } from './m365-upstream'
 import { getMscToken } from './msc-auth'
 import { TerminalUpstreamRecoveryError } from './upstream-queue'
 
+export type UpstreamErrorMapper = (message: string, response: Response) => Promise<HTTPError>
+
 interface RequestOptions {
   method?: string
   body?: string
@@ -38,6 +41,7 @@ interface RequestOptions {
   extraHeaders?: Record<string, string>
   retryable?: boolean | 'capacity'
   effectiveModel?: string
+  errorMapper?: UpstreamErrorMapper
 }
 
 interface FetchParams {
@@ -110,6 +114,8 @@ export class CopilotClient {
 
     if (!response.ok) {
       try {
+        if (options.errorMapper)
+          throw await options.errorMapper(errorMessage, response)
         await throwUpstreamError(errorMessage, response)
       }
       catch (error) {
@@ -258,6 +264,24 @@ export class CopilotClient {
         signal: options?.signal,
         effectiveModel: payload.model,
         retryable: true,
+      },
+    )
+  }
+
+  async createSystemOne(
+    payload: SystemOneRequest,
+    options?: { signal?: AbortSignal, errorMapper?: UpstreamErrorMapper },
+  ): Promise<unknown> {
+    return this.requestJson<unknown>(
+      '/v1/systemone',
+      'Failed to create System One response',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        signal: options?.signal,
+        effectiveModel: payload.model,
+        retryable: 'capacity',
+        errorMapper: options?.errorMapper,
       },
     )
   }

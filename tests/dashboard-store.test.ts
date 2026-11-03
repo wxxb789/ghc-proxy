@@ -318,6 +318,10 @@ describe('dashboard metadata sanitizers', () => {
       .toBe('/v1/responses/input_tokens')
     expect(classifyObservedEndpoint('http://localhost/v1/responses/input_tokens/'))
       .toBe('/v1/responses/input_tokens')
+    expect(classifyObservedEndpoint('http://localhost/decisions'))
+      .toBe('/decisions')
+    expect(classifyObservedEndpoint('http://localhost/v1/decisions?trace=1'))
+      .toBe('/v1/decisions')
   })
 
   test('classifies errors without storing raw messages', () => {

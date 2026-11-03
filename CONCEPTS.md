@@ -28,6 +28,12 @@ An advertised set is also not an ordered ladder every model implements a prefix 
 
 The record describes the model, not the deployment serving it. An advertised capability can still be refused by an account-scoped policy on the infrastructure a model happens to run on — so an advertisement is a claim about what the model can do, never a guarantee that this subscriber may do it. A refusal of that kind needs its own bounded, dated exclusion; folding it into the capability check would state it as a property of the model, which it is not.
 
+### Decisions API
+The public OpenAI-compatible subset served by `POST /decisions` and `POST /v1/decisions`. It carries a model, string or message evidence, and keyed predicate, choice, or score questions. The proxy rejects public fields it cannot translate losslessly rather than dropping them, and returns an answer array in request order.
+
+### System One
+Copilot's keyed-question upstream contract at `POST /v1/systemone`. Its request pairs a state with a `questions` object keyed `q{index}`, and its response supplies an answer for each key plus usage. The Decisions route maps to and from this shape; the public boundary never exposes System One question or answer objects.
+
 ### Execution mechanism
 Who runs a tool once the model decides to use it: the upstream executes it and returns a result, or the model emits a call and the caller executes it. The distinction decides what counts as proof that the tool works — a result coming back, versus a correctly-named call going out — so a check written for one mechanism reports the other as broken.
 

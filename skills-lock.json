@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "leanrea": {
+      "source": "aicodeking/leanrea",
+      "sourceType": "github",
+      "skillPath": "leanrea/SKILL.md",
+      "computedHash": "a502dd556ca6e5cf812baa616a89915e9dd07f569d9419c2824376598739e475"
+    }
+  }
+}

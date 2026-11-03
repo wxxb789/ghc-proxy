@@ -15,7 +15,7 @@ A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic
 # Bun >= 1.4
 bunx --bun ghc-proxy@latest start
 
-# Node.js >= 24
+# Node.js >= 26
 npx ghc-proxy@latest start
 ```
 
@@ -25,7 +25,7 @@ Before you start, make sure you have:
 
 1. **One supported JavaScript runtime:**
    - **Bun >= 1.4:** `winget install --id Oven-sh.Bun` on Windows, or see the [official installation guide](https://bun.com/docs/installation)
-   - **Node.js >= 24:** install the latest LTS release from the [official Node.js download page](https://nodejs.org/en/download)
+   - **Node.js >= 26:** install the latest LTS release from the [official Node.js download page](https://nodejs.org/en/download)
 2. **A GitHub Copilot subscription** -- individual, business, or enterprise
 
 ## Quick Start
@@ -509,6 +509,7 @@ For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-op
 `ghc-proxy` does not force every request through one protocol. The current routing rules are:
 
 - `POST /v1/chat/completions`: OpenAI Chat Completions -> shared planning pipeline -> Copilot `/chat/completions`
+- `POST /v1/decisions`: OpenAI Decisions -> direct JSON translation -> Copilot `/v1/systemone` for models advertising that endpoint; no streaming, strategy, or overload fallback
 - `POST /v1/responses`: OpenAI Responses create -> native Responses handler -> Copilot `/responses`, or (with `responsesChatCompletionsFallback: true`) Responses-to-Chat translation -> Copilot `/chat/completions` for Chat-only models
 - `POST /v1/responses/input_tokens`: Responses input-token counting passthrough by default, or local estimation in official emulator mode
 - `GET /v1/responses/:responseId`: Responses retrieve passthrough by default, or local retrieval in official emulator mode
@@ -528,6 +529,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming) |
+| `POST` | `/v1/decisions` | OpenAI Decisions subset translated to System One for models advertising `/v1/systemone` |
 | `POST` | `/v1/responses` | Create a Responses API response |
 | `POST` | `/v1/responses/input_tokens` | Count Responses input tokens via upstream passthrough or the local official emulator |
 | `GET` | `/v1/responses/:responseId` | Retrieve one response via upstream passthrough or the local official emulator |
@@ -570,7 +572,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 
 Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. A normal legacy single-account process automatically migrates to named routing at startup, so adding accounts and changing the default are available after startup. Processes using `start --github-token` or `start --ghe-domain` retain legacy behavior and return `409` for account management because those overrides cannot be assigned safely. Dashboard requests are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection, transaction, and security contract.
 
-> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/responses` and its resource routes, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
+> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/decisions`, `/responses` and its resource routes, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
 
 ## Responses Compatibility
 

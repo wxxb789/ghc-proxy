@@ -9,6 +9,7 @@ import { isClientAbortError } from './lib/upstream-signal'
 import { classifyObservedEndpoint, sanitizeObservedError } from './observability/request-store'
 import { createCompletionRoutes } from './routes/chat-completions/route'
 import { createDashboardRoutes } from './routes/dashboard/route'
+import { createDecisionRoutes } from './routes/decisions/route'
 import { createEmbeddingRoutes } from './routes/embeddings/route'
 import { createMessageRoutes } from './routes/messages/route'
 import { createModelRoutes } from './routes/models/route'
@@ -272,10 +273,12 @@ export function createServer(options?: ServerOptions) {
       version: VERSION,
     }))
     .use(createDashboardRoutes({ accountManager: options?.accountManager }))
-    // Root-level routes: completions, models, embeddings, responses are registered here
-    // for clients that omit the /v1 prefix. Token and usage routes are root-only
-    // because they are proxy-specific endpoints, not part of any upstream API spec.
+    // Root-level routes: completions, decisions, models, embeddings, responses are
+    // registered here for clients that omit the /v1 prefix. Token and usage routes
+    // are root-only because they are proxy-specific endpoints, not part of any
+    // upstream API spec.
     .use(createCompletionRoutes())
+    .use(createDecisionRoutes())
     .use(createModelRoutes())
     .use(createEmbeddingRoutes())
     .use(createResponsesRoutes())
@@ -287,6 +290,7 @@ export function createServer(options?: ServerOptions) {
     .group('/v1', (app) => {
       return app
         .use(createCompletionRoutes())
+        .use(createDecisionRoutes())
         .use(createModelRoutes())
         .use(createEmbeddingRoutes())
         .use(createResponsesRoutes())

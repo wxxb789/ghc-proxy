@@ -15,6 +15,8 @@ const KNOWN_OBSERVED_ENDPOINTS = new Set([
   '/v1/models',
   '/embeddings',
   '/v1/embeddings',
+  '/decisions',
+  '/v1/decisions',
   '/chat/completions',
   '/v1/chat/completions',
   '/responses',
