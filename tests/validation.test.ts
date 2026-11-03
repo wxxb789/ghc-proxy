@@ -1261,6 +1261,23 @@ describe('Decisions payload validation', () => {
     }), 'container levels')
   })
 
+  test('preserves an own __proto__ key in JSON evidence', () => {
+    const evidence = JSON.parse('{"__proto__":{"flag":true},"ticket":1}') as Record<string, unknown>
+    const parsed = parseDecisionsRequest(decisionsRequest({
+      input: [{
+        role: 'user',
+        content: [{ type: 'input_json', data: evidence }],
+      }],
+    }))
+
+    const parsedEvidence = JSON.parse(JSON.stringify(parsed.input)) as Array<{
+      content: Array<{ data: Record<string, unknown> }>
+    }>
+    const data = parsedEvidence[0].content[0].data
+    expect(Object.hasOwn(data, '__proto__')).toBe(true)
+    expect(Object.getOwnPropertyDescriptor(data, '__proto__')?.value).toEqual({ flag: true })
+  })
+
   test('rejects an empty model after payload parsing', () => {
     expectDecisionsInvalid(decisionsRequest({ model: '' }))
   })

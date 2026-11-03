@@ -35,10 +35,20 @@ const imagePartSchema = z.object({
   prompt_cache_breakpoint: promptCacheBreakpointSchema,
 }).strict()
 
-const jsonDataSchema = z.union([
-  z.record(z.string(), z.unknown()),
-  z.array(z.record(z.string(), z.unknown())),
-])
+type DecisionsJsonData = Record<string, unknown> | Array<Record<string, unknown>>
+
+function isDecisionsJsonData(value: unknown): value is DecisionsJsonData {
+  if (Array.isArray(value))
+    return value.every(item => typeof item === 'object' && item !== null && !Array.isArray(item))
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// `z.record` rebuilds the object and drops an own `__proto__` key, which would
+// silently change accepted evidence. `z.custom` instead validates the shape
+// while handing the original object through unchanged.
+const jsonDataSchema = z.custom<DecisionsJsonData>(isDecisionsJsonData, {
+  message: 'input_json.data must be an object or an array of objects',
+})
 
 function addJsonLimitIssues(
   data: Record<string, unknown> | Array<Record<string, unknown>>,
