@@ -1,6 +1,7 @@
 import type { Elysia } from 'elysia'
 import type { DashboardAccountManagement } from './routes/dashboard/route'
 import { cors } from '@elysiajs/cors'
+import { enforceTargetGates } from '~/lib/target-gates'
 import { HTTPError } from './lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
 import { createRuntimeApp } from './lib/server-runtime'
@@ -194,6 +195,11 @@ export function createServer(options?: ServerOptions) {
     // Block body, not a concise arrow: Elysia turns any non-undefined
     // `onRequest` return into the response, and a WeakMap setter returns the
     // WeakMap. `markRequestStart` is typed `: void` for the same reason.
+    .onRequest(async ({ request, server }) => {
+      const refusal = await enforceTargetGates(request, server)
+      if (refusal)
+        return refusal
+    })
     .onRequest(({ request }) => {
       const endpoint = classifyObservedEndpoint(request.url)
       if (endpoint === undefined)

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { Elysia } from 'elysia'
 import { AccountManager } from '~/accounts/manager'
 import { compileAccountRouting } from '~/lib/account-routing'
+import { isLoopbackAddress } from '~/lib/peer'
 import { DashboardQuotaCache, dashboardQuotaCache } from '~/routes/dashboard/handler'
 import {
   DashboardMetadataRefresher,
@@ -15,7 +16,6 @@ import {
 import {
   createDashboardRoutes,
   DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY,
-  isLoopbackAddress,
 } from '~/routes/dashboard/route'
 import { createServer } from '~/server'
 import {

@@ -10,6 +10,7 @@ import { Elysia } from 'elysia'
 import { z } from 'zod'
 
 import { AccountManagementError } from '~/accounts/manager'
+import { isLoopbackAddress, resolveRequestPeer } from '~/lib/peer'
 import { RECENT_REQUEST_LIMIT } from '~/observability/request-store'
 import { DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS } from './assets'
 
@@ -36,8 +37,6 @@ const DASHBOARD_CSP = [
   'form-action \'none\'',
   'object-src \'none\'',
 ].join('; ')
-const ADDRESS_BRACKET_RE = /^\[|\]$/g
-const LOOPBACK_IPV4_RE = /^127(?:\.\d{1,3}){3}$/
 
 export const DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY = 4
 
@@ -81,18 +80,6 @@ interface DashboardRouteOptions {
   quotaCache?: DashboardQuotaCache
 }
 
-interface DashboardPeer {
-  address?: string
-  live: boolean
-}
-
-interface SrvxNodeRequest extends Request {
-  ip?: string
-  runtime?: {
-    name?: string
-  }
-}
-
 export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
   const accountManager = options.accountManager
   const metadataRefresher = options.metadataRefresher ?? dashboardMetadataRefresher
@@ -100,7 +87,7 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
 
   return new Elysia({ name: 'dashboard' })
     .onBeforeHandle(({ request, server }) => {
-      const peer = getDashboardPeer(request, server)
+      const peer = resolveRequestPeer(request, server)
       return rejectDashboardAccess(request, peer.address, peer.live)
     })
     .get('/dashboard', () => assetResponse(
@@ -233,28 +220,6 @@ async function getDashboardAccounts(
   return results
 }
 
-function getDashboardPeer(
-  request: Request,
-  server: { requestIP: (request: Request) => { address: string } | null } | null,
-): DashboardPeer {
-  if (server !== null) {
-    return {
-      address: server.requestIP(request)?.address,
-      live: true,
-    }
-  }
-
-  const srvxRequest = request as SrvxNodeRequest
-  if (srvxRequest.runtime?.name === 'node') {
-    return {
-      address: srvxRequest.ip,
-      live: true,
-    }
-  }
-
-  return { live: false }
-}
-
 function rejectDashboardAccess(
   request: Request,
   peerAddress: string | undefined,
@@ -291,18 +256,6 @@ function isLoopbackHostname(hostname: string): boolean {
     || normalized.endsWith('.localhost')
     || normalized === '0.0.0.0'
     || isLoopbackAddress(normalized)
-}
-
-export function isLoopbackAddress(address: string): boolean {
-  const normalized = address.toLowerCase().replace(ADDRESS_BRACKET_RE, '')
-  if (normalized === '::1')
-    return true
-  const ipv4 = normalized.startsWith('::ffff:')
-    ? normalized.slice('::ffff:'.length)
-    : normalized
-  if (!LOOPBACK_IPV4_RE.test(ipv4))
-    return false
-  return ipv4.split('.').every(part => Number(part) <= 255)
 }
 
 function assetResponse(
