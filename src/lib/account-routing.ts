@@ -7,6 +7,11 @@ const DNS_LABEL_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/
 const ACCOUNT_NAME_RE = /^[a-z0-9][\w.-]{0,63}$/i
 const LOOPBACK_DEFAULT_HOSTNAME = '127.0.0.1'
 
+/** Target name reserved for the Microsoft 365 Copilot gateway. */
+export const RESERVED_M365_TARGET = 'm365'
+
+export type TargetKind = 'github' | 'm365'
+
 export interface AccountRoutingConfig {
   baseHostname: string
   defaultAccount: string
@@ -17,6 +22,7 @@ export interface CompiledAccountRouting {
   baseHostname: string
   defaultAccount: string
   hostnames: Map<string, string>
+  kinds: Map<string, TargetKind>
 }
 
 const rawAccountRoutingSchema = z.object({
@@ -99,14 +105,24 @@ export function compileAccountRouting(
   const normalized = normalizeAccountRoutingConfig(config)
   const knownAccounts = new Set(accountNames)
 
-  if (!knownAccounts.has(normalized.defaultAccount)) {
+  if (knownAccounts.has(RESERVED_M365_TARGET)) {
+    throw new Error(
+      `The target name ${JSON.stringify(RESERVED_M365_TARGET)} is reserved for the Microsoft 365 gateway and may not be used by a GitHub account.`,
+    )
+  }
+
+  // The M365 target has no GitHub credential; its hostname mapping is what
+  // creates it, so it is admitted alongside the credential-backed accounts.
+  const knownTargets = new Set([...knownAccounts, RESERVED_M365_TARGET])
+
+  if (!knownTargets.has(normalized.defaultAccount)) {
     throw new Error(
       `accountRouting selects missing default account ${JSON.stringify(normalized.defaultAccount)}.`,
     )
   }
 
   for (const [hostname, accountName] of Object.entries(normalized.hostnames)) {
-    if (!knownAccounts.has(accountName)) {
+    if (!knownTargets.has(accountName)) {
       throw new Error(
         `accountRouting hostname ${JSON.stringify(hostname)} selects missing account ${JSON.stringify(accountName)}.`,
       )
@@ -132,10 +148,19 @@ export function compileAccountRouting(
     }
   }
 
+  const kinds = new Map<string, TargetKind>()
+  for (const target of routedAccounts) {
+    kinds.set(
+      target,
+      target === RESERVED_M365_TARGET ? 'm365' : 'github',
+    )
+  }
+
   return {
     baseHostname: normalized.baseHostname,
     defaultAccount: normalized.defaultAccount,
     hostnames: new Map(Object.entries(normalized.hostnames)),
+    kinds,
   }
 }
 

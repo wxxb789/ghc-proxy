@@ -5,6 +5,7 @@ import fs from 'node:fs/promises'
 import consola from 'consola'
 import { z } from 'zod'
 
+import { RESERVED_M365_TARGET } from '~/lib/account-routing'
 import {
   applyPrivateFilePermissions,
   writePrivateFileAtomically,
@@ -173,6 +174,11 @@ async function writeGitHubCredentialEntry(
 
   const existing = await readCredentialStore(paths)
   const selectedAccount = accountName ?? existing?.activeAccount ?? DEFAULT_CREDENTIAL_ACCOUNT
+  if (selectedAccount === RESERVED_M365_TARGET) {
+    throw new Error(
+      `The account name ${JSON.stringify(RESERVED_M365_TARGET)} is reserved for the Microsoft 365 gateway and cannot hold a GitHub credential.`,
+    )
+  }
   const activeAccount = existing?.activeAccount ?? selectedAccount
   const existingAccount = existing?.accounts[selectedAccount]
   if (createOnly && existingAccount) {
