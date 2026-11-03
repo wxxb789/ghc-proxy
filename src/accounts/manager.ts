@@ -604,6 +604,7 @@ function cloneCompiledRouting(routing: CompiledAccountRouting): CompiledAccountR
     baseHostname: routing.baseHostname,
     defaultAccount: routing.defaultAccount,
     hostnames: new Map(routing.hostnames),
+    kinds: new Map(routing.kinds),
   }
 }
 

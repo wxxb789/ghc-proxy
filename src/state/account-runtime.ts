@@ -1,4 +1,4 @@
-import type { CompiledAccountRouting } from '~/lib/account-routing'
+import type { CompiledAccountRouting, TargetKind } from '~/lib/account-routing'
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 
@@ -112,6 +112,39 @@ export function configureAccountRuntimes(
   routing = nextRouting
 }
 
+export interface TargetAvailability {
+  status: 'ready' | 'unavailable'
+  cause?: string
+  updatedAt: number
+}
+
+const targetAvailability = new Map<string, TargetAvailability>()
+
+/** Records whether a target can currently serve traffic, with a bounded cause. */
+export function setTargetAvailability(
+  targetName: string,
+  next: { status: 'ready' | 'unavailable', cause?: string },
+): void {
+  targetAvailability.set(targetName, {
+    ...next,
+    updatedAt: Date.now(),
+  })
+}
+
+export function getTargetAvailability(
+  targetName: string,
+): TargetAvailability | undefined {
+  return targetAvailability.get(targetName)
+}
+
+export function clearTargetAvailability(): void {
+  targetAvailability.clear()
+}
+
+export function getTargetKind(targetName: string): TargetKind | undefined {
+  return routing?.kinds.get(targetName)
+}
+
 export function resetAccountRuntimes(): void {
   for (const runtime of accountRuntimes.values()) {
     if (runtime !== legacyRuntime) {
@@ -119,6 +152,7 @@ export function resetAccountRuntimes(): void {
       runtime.rateLimiter.reset()
     }
   }
+  targetAvailability.clear()
   disableAccountRouting()
   accountContext.disable()
 }

@@ -8,6 +8,8 @@ export class AuthStore {
   mscAuthExe?: string
   /** Broker account (home account id) selected for the M365 upstream. */
   mscAuthAccount?: string
+  /** Broker account UPN; the helper's own default applies when omitted. */
+  mscAuthUpn?: string
   gheDomain?: string
   githubLogin?: string
   githubValidatedAt?: number

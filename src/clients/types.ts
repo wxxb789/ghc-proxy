@@ -17,6 +17,8 @@ export interface ClientConfig {
   mscAuthExe?: string
   /** Broker account (home account id) to select; helper default applies when omitted. */
   mscAuthAccount?: string
+  /** Broker account UPN to select when no home account id is set. */
+  mscAuthUpn?: string
   vsCodeVersion?: string
   copilotApiBase?: string
   githubBaseUrl?: string
