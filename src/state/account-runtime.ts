@@ -145,6 +145,13 @@ export function getTargetKind(targetName: string): TargetKind | undefined {
   return routing?.kinds.get(targetName)
 }
 
+/** True when the active routing table holds the M365 target and nothing else. */
+export function isM365OnlyRouting(): boolean {
+  if (!routing || routing.kinds.size === 0)
+    return false
+  return Array.from(routing.kinds.values()).every(kind => kind === 'm365')
+}
+
 export function resetAccountRuntimes(): void {
   for (const runtime of accountRuntimes.values()) {
     if (runtime !== legacyRuntime) {

@@ -10,6 +10,9 @@ const LOOPBACK_DEFAULT_HOSTNAME = '127.0.0.1'
 /** Target name reserved for the Microsoft 365 Copilot gateway. */
 export const RESERVED_M365_TARGET = 'm365'
 
+/** Hostname a freshly registered M365 target takes unless the operator edits it. */
+export const M365_DEFAULT_HOSTNAME = 'm365.localhost'
+
 export type TargetKind = 'github' | 'm365'
 
 export interface AccountRoutingConfig {

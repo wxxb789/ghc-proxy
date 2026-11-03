@@ -4,10 +4,13 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 
 import { createTargetRuntime, initializeM365Target } from '~/accounts/target-runtime'
 import { M365_MODELS } from '~/clients/m365-upstream'
+import { compileAccountRouting } from '~/lib/account-routing'
 import {
   clearTargetAvailability,
+  configureAccountRuntimes,
   createAccountRuntime,
   getTargetAvailability,
+  isM365OnlyRouting,
 } from '~/state/account-runtime'
 
 function catalog(ids: Array<string>): ModelsResponse {
@@ -108,5 +111,32 @@ describe('target runtime factory', () => {
 
     expect(m365.models.getModelIds()).toEqual(['claude-opus-5.5'])
     expect(github.models.getModelIds()).toEqual([])
+  })
+
+  test('detects when the M365 target is the only target', () => {
+    const m365 = createTargetRuntime('m365', 'm365')
+    configureAccountRuntimes(
+      compileAccountRouting({
+        baseHostname: 'localhost',
+        defaultAccount: 'm365',
+        hostnames: { 'm365.localhost': 'm365' },
+      }, []),
+      [m365],
+    )
+    expect(isM365OnlyRouting()).toBe(true)
+
+    const github = createAccountRuntime('default')
+    configureAccountRuntimes(
+      compileAccountRouting({
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: {
+          'default.localhost': 'default',
+          'm365.localhost': 'm365',
+        },
+      }, ['default']),
+      [github, m365],
+    )
+    expect(isM365OnlyRouting()).toBe(false)
   })
 })
