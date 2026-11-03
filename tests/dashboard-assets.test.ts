@@ -18,6 +18,10 @@ class FakeElement {
 
   addEventListener() {}
 
+  append(...children: FakeElement[]) {
+    this.children.push(...children)
+  }
+
   appendChild(child: FakeElement) {
     this.children.push(child)
     return child
@@ -240,7 +244,7 @@ describe('dashboard embedded state', () => {
         if (input === '/dashboard/api/accounts')
           return Response.json({ routingEnabled: true, accounts: [] })
         if (input === '/dashboard/api/m365')
-          return Response.json({ enabled: false, selected: {}, accounts: [] })
+          return Response.json({ registered: false, onboarding: { status: 'available' }, routing: [] })
         if (input === '/dashboard/api/models')
           return Response.json({ models: [] })
         if (input === '/dashboard/api/behavior')
@@ -431,5 +435,45 @@ describe('dashboard embedded state', () => {
     expect(elements.get('account-auth-code')?.textContent).toBe('ABCD-1234')
     expect(elements.get('account-auth-link')?.href).toBe('https://github.com/login/device')
     expect(JSON.stringify(elements.get('account-auth'))).not.toContain('device_code')
+  })
+
+  test('renders the M365 section from the target projection', async () => {
+    const { elements, runtime } = createRuntime({
+      fetch: async (input) => {
+        const path = String(input)
+        if (path === '/dashboard/api/accounts')
+          return Response.json({ baseHostname: 'localhost', defaultAccount: 'default', routingEnabled: true, accounts: [] })
+        if (path === '/dashboard/api/models')
+          return Response.json({ models: [] })
+        if (path === '/dashboard/api/behavior')
+          return Response.json({ modelRouting: {}, strategies: {}, parameterHandling: {}, contextManagement: {}, toolCompatibility: {}, effects: [] })
+        if (path === '/dashboard/api/m365') {
+          return Response.json({
+            registered: true,
+            hostname: 'm365.localhost',
+            account: 'home-account-id-1234',
+            modelCount: 1,
+            models: ['claude-opus-5.5'],
+            availability: { status: 'ready', updatedAt: 1 },
+            routing: [
+              { target: 'default', hostname: 'default.localhost', kind: 'github', isDefault: true },
+              { target: 'm365', hostname: 'm365.localhost', kind: 'm365', isDefault: false },
+            ],
+            client: { baseUrl: 'http://m365.localhost:4141', model: 'claude-opus-5.5' },
+            onboarding: { status: 'available' },
+          })
+        }
+        return Response.json({ active: [], recent: [] })
+      },
+    })
+
+    await runtime.refreshDashboardMetadata()
+
+    expect(elements.get('m365-panel')?.hidden).toBe(false)
+    expect(elements.get('m365-active')?.hidden).toBe(false)
+    expect(elements.get('m365-status')?.textContent).toBe('Ready.')
+    expect(elements.get('m365-client')?.textContent).toContain('http://m365.localhost:4141')
+    expect(elements.get('m365-client')?.textContent).toContain('claude-opus-5.5')
+    expect(elements.get('m365-routing')?.textContent).toContain('m365 \u2192 m365.localhost')
   })
 })
