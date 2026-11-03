@@ -65,9 +65,67 @@ fails with `AADSTS50011` - the redirect URI is not configured for `0ec893e0-...`
 There is no non-broker flow, so there is no `msal-node` or other cross-platform path
 to this token; the device-code grant is disabled by tenant policy as well.
 
+## Starting the proxy from source
+
+`bun run start` prepares the helper before loading the source CLI on Windows.
+It keeps `NODE_ENV=production` and forwards CLI arguments unchanged:
+
+```bash
+bun install
+bun run start --port 4141
+```
+
+Only Bun is needed as the JavaScript executable; source startup and
+`bun run build:msc-auth` do not invoke a Node executable. Install the .NET 10
+SDK, Visual Studio's Desktop development with C++ workload, and the Windows SDK
+for the first native AOT publish or whenever the local helper sources change.
+These compiler prerequisites are unnecessary when using a complete prebuilt
+payload or explicit helper override.
+
+For native publishes under Bun, the build script adds the installed Visual Studio
+Installer directory to the `dotnet` child's `PATH`. Visual Studio's setup scripts
+invoke `vswhere.exe` by name; this makes that installed tool discoverable while
+preserving Bun's restriction on implicit current-directory executable lookup.
+It does not change the machine's `PATH` or substitute for missing C++/SDK tools.
+
+Source startup chooses the helper in this order:
+
+1. `--msc-auth-exe <path>` (also `--msc-auth-exe=<path>`), then
+   `GHC_MSC_AUTH_EXE`: use that executable and the adjacent `msalruntime.dll`
+   without copying, rebuilding, or comparing it with repository sources. The
+   override is authoritative; a missing or empty file fails startup instead of
+   overwriting it or silently falling back.
+2. `MSC_AUTH_DIR`: validate that directory contains both `msc-auth.exe` and
+   `msalruntime.dll`, then copy its `.exe`/`.dll` files to `dist/msc-auth` without
+   invoking a compiler. An incomplete directory fails even if an old copy exists
+   in `dist/msc-auth`.
+3. Otherwise, reuse an unchanged local native build or run `dotnet publish` into
+   `dist/msc-auth`. Reuse requires both payload files to be nonempty and their
+   modification times and sizes to match the successful build record. That
+   record also tracks the script and every helper `.cs`, `.csproj`, `.props`,
+   `.targets`, and `.resx` file recursively, excluding `bin/`, `obj/`, and `out/`.
+   Added, changed, or removed sources, a missing/replaced DLL, or a missing build
+   record require a new publish. NuGet's original DLL timestamp alone does not
+   make every startup rebuild.
+
+For example, `bun run start --msc-auth-exe C:/tools/msc-auth/msc-auth.exe`
+uses a user-managed payload without requiring .NET or changing that directory.
+Keep `MSC_AUTH_DIR` set when using a prebuilt payload across source starts;
+removing it returns to local-source freshness checks.
+
+On non-Windows platforms source startup prints an explicit Windows-only skip
+and continues with the GitHub CLI path; it does not attempt to compile or copy
+the helper. M365 remains unavailable there. `dev` and `serve` still launch the
+source CLI directly; use `bun run build:msc-auth` first for those commands.
+
+A failed publish or incomplete payload exits nonzero before the source CLI is
+loaded; a helper-ready message means the payload is prepared, not that WAM
+sign-in or a gateway token has been verified.
+
 ## Build
 
 ```bash
+bun run build:msc-auth                                 # Prepare the native payload
 dotnet build msc-auth                                   # JIT
 dotnet publish msc-auth -c Release -r win-x64 -p:PublishAot=true -o dist/msc-auth
 ```
@@ -94,11 +152,11 @@ runtime). It is not a single file, and it is win-x64 only.
 ## Usage
 
 ```
-msc-auth --json          # { access_token, expires_on, tenant, username, scopes }
-msc-auth                 # access token only
-msc-auth --accounts      # list broker accounts (username, home id, environment)
-msc-auth --account <id>  # pick the account by home account id (unambiguous)
-msc-auth --upn <upn>     # pick the account (default: lhan@microsoft.com)
+msc-auth --json             # token JSON plus username, home_account_id, and environment
+msc-auth                    # the same JSON payload
+msc-auth --accounts         # list broker accounts (username, home id, environment)
+msc-auth --account <id|upn>  # exact home account ID or email; ambiguous emails require an ID
+msc-auth --upn <upn>        # exact email, never substring matching or a different account
 msc-auth --tenant <tid>  # pick the authority tenant
 msc-auth --interactive   # sign in through WAM, even when an account is already selected
 msc-auth --verbose       # MSAL diagnostics on stderr
@@ -108,10 +166,18 @@ Exit codes: `0` success, `2` no account selected or interaction required,
 `3` broker/MSAL failure. Diagnostics go to stderr; stdout carries only the
 payload.
 
-The default account is `lhan@microsoft.com` (the subscription account). Consumer
-accounts (MSA) are **out of scope**: the broker lists them, but acquiring a
-gateway token for one fails with `unknown_broker_error` (`0x80070057`) and no
-support is planned. Use `--accounts` to confirm which entry you are pointing at.
+There is no hard-coded user email. Without a selector, the helper chooses a
+unique account in the authority tenant, or the only broker account; otherwise
+it exits with guidance to select a home account ID. Explicit selectors never
+fall back to another account. MSAL `Always` cache diagnostics and account-list
+traces require `--verbose`; real warnings and errors remain visible.
+
+Consumer accounts (MSA) are **out of scope** for gateway tokens. Windows broker
+enumeration is not the Copilot app's complete profile list. For a missing work
+account, use the Dashboard's **Sign in another M365 account** action or
+`msc-auth --interactive --upn you@company.com`, finish WAM sign-in, and refresh
+the broker list. Dashboard sign-in returns identity fields only, never a token,
+and does not change the active target until the selection is applied.
 
 ## Verified models
 
@@ -139,12 +205,16 @@ unknown.
 ## Shipping in the npm package
 
 The npm artifact may carry the publish output; `package.json#files` includes
-`dist/msc-auth/**` and `bun run build:msc-auth` produces it. Constraints:
+`dist/msc-auth/**`. `bun run build` runs tsdown first (which clears `dist/`),
+then `bun run build:msc-auth` prepares the helper. `prepack` delegates to that
+build; helper preparation is not deferred to pack time. Constraints:
 
-- Build on Windows only. The release workflow currently runs on `ubuntu-latest`,
-  so it must publish the helper from a Windows job (or download a prebuilt
-  artifact) before `npm publish`; otherwise the directory is simply absent from
-  the tarball.
+- Native compilation runs on Windows only. `MSC_AUTH_DIR` supplies a complete
+  prebuilt payload on any packaging host, including Linux. Unlike source-start
+  overrides, `GHC_MSC_AUTH_EXE` and `--msc-auth-exe` never replace the packaged
+  payload. Without `MSC_AUTH_DIR`, non-Windows builds explicitly skip the helper.
+  The release workflow must provide a Windows-built artifact before
+  `npm publish`; otherwise the directory is absent from the tarball.
 - `msalruntime.dll` is a Microsoft redistributable. Its license terms and the
   `THIRD_PARTY_NOTICES.md` entry have to be checked before publishing it.
 - Every platform downloads the win-x64 payload (~12 MB). Accept that, or move the

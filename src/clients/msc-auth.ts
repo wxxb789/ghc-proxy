@@ -16,14 +16,17 @@ export interface MscToken {
   accessToken: string
   expiresOn: Date
   tenant: string
+  username?: string
+  homeAccountId?: string
+  environment?: string
 }
 
 export interface MscTokenOptions {
   /** Explicit helper path; overrides GHC_MSC_AUTH_EXE and discovery. */
   exe?: string
-  /** Broker account (home account id) passed to the helper. */
+  /** Broker home account id or exact account email passed to the helper. */
   account?: string
-  /** Account UPN passed to the helper; the helper's own default applies when omitted. */
+  /** Exact account UPN passed to the helper. */
   upn?: string
   /** Authority tenant passed to the helper. */
   tenant?: string
@@ -46,6 +49,7 @@ const REFRESH_SKEW_MS = 5 * 60 * 1000
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_BUFFER = 1024 * 1024
 const NEWLINE_RE = /\r?\n/
+const TRAILING_CR_RE = /\r$/
 
 const cachedTokens = new Map<string, MscToken>()
 const inflightTokens = new Map<string, Promise<MscToken>>()
@@ -66,10 +70,15 @@ function credentialKey(options: MscTokenOptions): string {
  * `dist/msc-auth/` payload and the repository build output.
  */
 export function resolveMscAuthExe(explicit?: string): string {
+  const override = explicit ?? process.env.GHC_MSC_AUTH_EXE
+  if (override) {
+    if (existsSync(override))
+      return override
+    throw new MscAuthError(`msc-auth helper override not found: ${override}`, 2)
+  }
   const candidates = [
-    explicit,
-    process.env.GHC_MSC_AUTH_EXE,
     join(MODULE_DIR, 'msc-auth', HELPER_NAME),
+    join(MODULE_DIR, '..', '..', 'dist', 'msc-auth', HELPER_NAME),
     join(process.cwd(), 'dist', 'msc-auth', HELPER_NAME),
     join(
       process.cwd(),
@@ -80,7 +89,7 @@ export function resolveMscAuthExe(explicit?: string): string {
       'win-x64',
       HELPER_NAME,
     ),
-  ].filter((value): value is string => Boolean(value))
+  ]
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
@@ -176,24 +185,30 @@ export async function listMscAccounts(
 
   return stdout
     .split(NEWLINE_RE)
-    .map(line => line.trim())
+    .map(line => line.replace(TRAILING_CR_RE, ''))
     .filter(Boolean)
     .map((line) => {
       const [upn, homeAccountId, environment] = line.split('\t')
       return { upn: upn ?? '', homeAccountId: homeAccountId ?? '', environment: environment ?? '' }
     })
-    .filter(account => account.upn && account.homeAccountId)
+    .filter(account => account.homeAccountId)
 }
 
 interface HelperPayload {
   access_token?: unknown
   expires_on?: unknown
   tenant?: unknown
+  username?: unknown
+  home_account_id?: unknown
+  environment?: unknown
 }
 
-async function acquire(options: MscTokenOptions): Promise<MscToken> {
+async function acquire(options: MscTokenOptions, interactive = false): Promise<MscToken> {
   const exe = resolveMscAuthExe(options.exe)
   const args = ['--json']
+  if (interactive) {
+    args.push('--interactive')
+  }
   if (options.account) {
     args.push('--account', options.account)
   }
@@ -218,7 +233,7 @@ async function acquire(options: MscTokenOptions): Promise<MscToken> {
     payload = JSON.parse(stdout) as HelperPayload
   }
   catch {
-    throw new MscAuthError(`msc-auth returned non-JSON output: ${stdout.slice(0, 200)}`, 3)
+    throw new MscAuthError('msc-auth returned non-JSON output; rebuild or update the helper.', 3)
   }
 
   const accessToken = typeof payload.access_token === 'string' ? payload.access_token : ''
@@ -232,6 +247,23 @@ async function acquire(options: MscTokenOptions): Promise<MscToken> {
     accessToken,
     expiresOn,
     tenant: typeof payload.tenant === 'string' ? payload.tenant : '',
+    username: typeof payload.username === 'string' ? payload.username : undefined,
+    homeAccountId: typeof payload.home_account_id === 'string' ? payload.home_account_id : undefined,
+    environment: typeof payload.environment === 'string' ? payload.environment : undefined,
+  }
+}
+
+/** Opens WAM only on an explicit Dashboard sign-in action; never returns a token. */
+export async function signInMscAccount(options: { exe?: string, upn?: string } = {}): Promise<MscAccount> {
+  const token = await acquire({ ...options, timeoutMs: 120_000 }, true)
+  if (!token.homeAccountId) {
+    throw new MscAuthError('msc-auth returned no broker account identity; rebuild or update the helper.', 3)
+  }
+  resetMscTokenCache()
+  return {
+    upn: token.username ?? '',
+    homeAccountId: token.homeAccountId,
+    environment: token.environment ?? '',
   }
 }
 

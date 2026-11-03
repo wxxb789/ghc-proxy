@@ -23,6 +23,7 @@ Investigation notes and findings from upstream API behavior analysis. Treat each
 | Document | Description |
 |----------|-------------|
 | [Copilot Token Usage](research/copilot-token-usage.md) | How Copilot returns token usage across all API paths |
+| [M365 Reliability Analysis Handoff](research/m365-reliability-analysis-handoff.md) | Task-level verification, endpoint discovery questions, semantic fidelity, and prioritized research conclusions; not an implementation plan |
 | [Builtin Tool Support](research/builtin-tool-support.md) | Which builtin tools actually run, per model family and boundary |
 | [claude-5 Tool Schemas](research/claude-5-tool-schemas.md) | Whether opus-5/sonnet-5 tool gating follows the type tag or the tool name, per schema |
 | [Responses Web Search](research/responses-web-search.md) | Whether `/responses` supports built-in web search, and whether it actually searches |

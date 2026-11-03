@@ -301,6 +301,40 @@ describe('DashboardQuotaCache', () => {
     expect(calls).toBe(1)
   })
 
+  test('does not expose a removed account quota when its name is reused', async () => {
+    const previous = createAccountRuntime('work', { githubToken: 'previous-identity' })
+    const replacement = createAccountRuntime('work', { githubToken: 'replacement-identity' })
+    const cache = new DashboardQuotaCache(async () => {
+      if (authStore.githubToken === 'replacement-identity')
+        throw new Error('Replacement quota unavailable')
+      return { ...quotaUsageFixture(), copilot_plan: 'previous-plan' }
+    })
+
+    await runWithAccountRuntime(previous, () => cache.get())
+    expect(await runWithAccountRuntime(replacement, () => cache.get()))
+      .toEqual({ status: 'unavailable' })
+  })
+
+  test('a removed account in-flight quota cannot replace its same-name successor', async () => {
+    const previous = createAccountRuntime('work', { githubToken: 'previous-identity' })
+    const replacement = createAccountRuntime('work', { githubToken: 'replacement-identity' })
+    const delayed = Promise.withResolvers<CopilotUsageResponse>()
+    const cache = new DashboardQuotaCache(async () => {
+      if (authStore.githubToken === 'previous-identity')
+        return delayed.promise
+      return { ...quotaUsageFixture(), copilot_plan: 'replacement-plan' }
+    })
+
+    const oldLoad = runWithAccountRuntime(previous, () => cache.get())
+    const newLoad = runWithAccountRuntime(replacement, () => cache.get())
+    delayed.resolve({ ...quotaUsageFixture(), copilot_plan: 'previous-plan' })
+
+    expect(await oldLoad).toMatchObject({ plan: 'previous-plan' })
+    expect(await newLoad).toMatchObject({ plan: 'replacement-plan' })
+    expect(await runWithAccountRuntime(replacement, () => cache.get()))
+      .toMatchObject({ plan: 'replacement-plan' })
+  })
+
   test('caches an unavailable result instead of retrying on every poll', async () => {
     let calls = 0
     let now = 1_000

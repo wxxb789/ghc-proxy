@@ -823,6 +823,9 @@ async function probeLegacySingleAccountRoutingMigration(): Promise<void> {
       addAccount: async () => {
         throw new Error('legacy migration must not add an account')
       },
+      removeAccount: async () => {
+        throw new Error('legacy migration must not remove an account')
+      },
       persistRouting: async (routing, applyRuntime) => {
         assertProbe(!listenerStarted, 'legacy migration persisted routing after the listener started')
         persistedRouting = routing

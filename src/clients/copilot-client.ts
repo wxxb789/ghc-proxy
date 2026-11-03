@@ -90,9 +90,13 @@ export class CopilotClient {
         })
         this.auth.copilotToken = token.accessToken
         this.auth.copilotTokenExpiresAt = token.expiresOn.getTime()
-        setTargetAvailability(getCurrentAccountRuntime(), { status: 'ready' })
+        this.auth.copilotTokenLastRefreshAt = Date.now()
+        this.auth.copilotTokenLastRefreshSucceeded = true
+        this.auth.mscAuthUsername = token.username
+        this.auth.mscAuthTenant = token.tenant
       }
       catch (error) {
+        this.auth.copilotTokenLastRefreshSucceeded = false
         const cause = (error as Error).message.slice(0, 400)
         setTargetAvailability(getCurrentAccountRuntime(), { status: 'unavailable', cause })
         throw new HTTPError(503, {
@@ -303,14 +307,28 @@ export class CopilotClient {
   }
 
   async getModels(options: { signal?: AbortSignal } = {}): Promise<ModelsResponse> {
-    const payload = await this.requestJson<unknown>(
-      '/models',
-      'Failed to get models',
-      { retryable: true, signal: options.signal },
-    )
-    return this.config.upstream === 'm365'
-      ? normalizeM365Catalog(payload)
-      : payload as ModelsResponse
+    try {
+      const payload = await this.requestJson<unknown>(
+        '/models',
+        'Failed to get models',
+        { retryable: true, signal: options.signal },
+      )
+      if (this.config.upstream !== 'm365')
+        return payload as ModelsResponse
+      const catalog = normalizeM365Catalog(payload)
+      setTargetAvailability(getCurrentAccountRuntime(), { status: 'ready' })
+      return catalog
+    }
+    catch (error) {
+      if (this.config.upstream === 'm365' && error instanceof HTTPError && (error.status === 401 || error.status === 403)) {
+        this.auth.copilotTokenLastRefreshSucceeded = false
+        setTargetAvailability(getCurrentAccountRuntime(), {
+          status: 'unavailable',
+          cause: `M365 model catalog access denied (${error.status}); select a work account with gateway access and a Copilot subscription.`,
+        })
+      }
+      throw error
+    }
   }
 
   async createResponses(

@@ -10,6 +10,8 @@ import type { Model, ModelsResponse } from '~/types'
 
 import { randomUUID } from 'node:crypto'
 
+import { HTTPError } from '~/lib/error'
+
 export const M365_BASE_URL = 'https://msit.loki.delve.office.com/api/v1/llmapi'
 export const M365_ANTHROPIC_VERSION = '2023-06-01'
 export const M365_API_VERSION = '2026-10-16'
@@ -135,7 +137,12 @@ export async function fetchM365Models(
     signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
   })
   if (!response.ok) {
-    throw new Error(`M365 model catalog request failed with ${response.status}`)
+    throw new HTTPError(response.status, {
+      error: {
+        message: `M365 model catalog request failed with ${response.status}${response.status === 401 || response.status === 403 ? '; select a work account with gateway access and a Copilot subscription' : ''}`,
+        type: 'upstream_error',
+      },
+    })
   }
   return normalizeM365Catalog(await response.json())
 }

@@ -29,7 +29,7 @@ import {
   RESERVED_M365_TARGET,
 } from '~/lib/account-routing'
 import { getCachedConfig, readConfig, writeConfigField } from '~/lib/config'
-import { writeNewGitHubCredential } from '~/lib/credentials'
+import { removeGitHubCredential, writeNewGitHubCredential } from '~/lib/credentials'
 import { PATHS } from '~/lib/paths'
 import { configureAccountRuntimes, disableAccountRouting, runWithAccountRuntime } from '~/state'
 import {
@@ -66,6 +66,11 @@ export interface PersistM365TargetInput {
 export interface AccountManagerPersistence {
   addAccount: (
     input: PersistAccountInput,
+    applyRuntime: () => void,
+  ) => Promise<void>
+  removeAccount: (
+    accountName: string,
+    routing: AccountRoutingConfig,
     applyRuntime: () => void,
   ) => Promise<void>
   persistRouting: (
@@ -135,6 +140,16 @@ export function createAccountManagerPersistence(
           input.accountName,
         )
         await writeConfigField('accountRouting', input.routing, {
+          configPath: paths.CONFIG_PATH,
+          failOnReadError: true,
+        })
+        applyRuntime()
+      })
+    },
+    removeAccount: async (accountName, routing, applyRuntime) => {
+      await runPersistedAccountMutation(paths, async () => {
+        await removeGitHubCredential(accountName, paths)
+        await writeConfigField('accountRouting', routing, {
           configPath: paths.CONFIG_PATH,
           failOnReadError: true,
         })
@@ -472,6 +487,75 @@ export class AccountManager {
     })
   }
 
+  /** Removes a routed account without changing ownership of in-flight requests. */
+  async removeAccount(rawAccountName: string): Promise<void> {
+    if (this.stopped) {
+      throw new AccountManagementError('Account management is shutting down.', 503)
+    }
+    const accountName = parseAccountName(rawAccountName)
+    if (accountName === RESERVED_M365_TARGET) {
+      await this.removeM365Target()
+      return
+    }
+    await this.runMutation(async () => {
+      if (this.stopped) {
+        throw new AccountManagementError('Account management is shutting down.', 503)
+      }
+      if (this.reservedAccountNames.has(accountName)) {
+        throw new AccountManagementError(
+          `Account ${JSON.stringify(accountName)} is being authenticated.`,
+          409,
+        )
+      }
+      if (!this.runtimes.has(accountName)) {
+        throw new AccountManagementError(
+          `Account ${JSON.stringify(accountName)} does not exist.`,
+          404,
+        )
+      }
+      if (this.runtimes.size === 1 || accountName === this.routing.defaultAccount) {
+        throw new AccountManagementError(
+          'Choose another default target before removing this account.',
+          409,
+        )
+      }
+
+      const current = routingConfig(this.routing)
+      const nextConfig: AccountRoutingConfig = {
+        ...current,
+        hostnames: Object.fromEntries(
+          Object.entries(current.hostnames).filter(([, target]) => target !== accountName),
+        ),
+      }
+      const nextRuntimes = new Map(this.runtimes)
+      nextRuntimes.delete(accountName)
+      const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
+      let runtimeApplied = false
+      try {
+        await this.dependencies.persistence.removeAccount(accountName, nextConfig, () => {
+          configureAccountRuntimes(nextRouting, nextRuntimes.values())
+          runtimeApplied = true
+        })
+      }
+      catch (error) {
+        if (runtimeApplied) {
+          configureAccountRuntimes(this.routing, this.runtimes.values())
+        }
+        if (error instanceof AccountManagementError) {
+          throw error
+        }
+        throw new AccountManagementError('Could not remove the account.', 500, { cause: error })
+      }
+
+      this.routing = nextRouting
+      this.runtimes = nextRuntimes
+      this.knownAccountNames.delete(accountName)
+      const cleanup = this.refreshCleanups.get(accountName)
+      this.refreshCleanups.delete(accountName)
+      cleanup?.()
+    })
+  }
+
   /**
    * Registers the M365 target as a route target. The routing block and the
    * broker identity are persisted together, and a failed persistence leaves
@@ -540,6 +624,9 @@ export class AccountManager {
       throw new AccountManagementError('Account management is shutting down.', 503)
     }
     await this.runMutation(async () => {
+      if (this.stopped) {
+        throw new AccountManagementError('Account management is shutting down.', 503)
+      }
       if (!this.runtimes.has(RESERVED_M365_TARGET)) {
         throw new AccountManagementError('The M365 target is not registered.', 404)
       }
@@ -804,6 +891,7 @@ async function runPersistedAccountMutation(
   paths: AccountManagerPaths,
   mutation: () => Promise<void>,
 ): Promise<void> {
+  const previousConfig = paths.CONFIG_PATH === PATHS.CONFIG_PATH ? undefined : { ...getCachedConfig() }
   await beginAccountManagementTransaction(paths)
   try {
     await mutation()
@@ -814,6 +902,13 @@ async function runPersistedAccountMutation(
       await rollbackAccountManagementTransaction(paths)
       if (paths.CONFIG_PATH === PATHS.CONFIG_PATH) {
         await readConfig()
+      }
+      else if (previousConfig) {
+        const config = getCachedConfig()
+        for (const key of Object.keys(config)) {
+          Reflect.deleteProperty(config, key)
+        }
+        Object.assign(config, previousConfig)
       }
     }
     catch (rollbackError) {

@@ -13,24 +13,24 @@ The dashboard exposes five views under `/dashboard`:
   requests, and upstream queue activity. Authentication identifies the current
   request account, the configured default account, and the count of active
   routed accounts.
-- Accounts: each routed account's stable hostname, GitHub identity and tenant,
-  authentication/Copilot state, quota, and default marker; it also starts new
-  device authentication and changes the default account. The same view carries
-  the M365 target in both states: onboarding with a prerequisite probe when it
-  is absent, and status, hostname, routing rows, client configuration, and
-  removal when it is registered. The projection reads the committed routing
-  snapshot and the availability registry, so it is identical on every hostname,
-  and only the explicit probe action lists broker accounts.
+- Accounts: each routed account's stable hostname, upstream identity and tenant,
+  authentication/Copilot state, quota, and default marker. GitHub device auth
+  and M365 broker sign-in are separate actions. M365 shows its email and
+  Microsoft tenant, with GitHub-only fields marked `not_applicable`. Broker
+  discovery runs once on the first Accounts visit or on an explicit probe,
+  never on every Live poll. Accounts can select the default and remove a
+  non-default target. The M365 projection reads committed routing and target
+  availability, independent of the hostname used to open the Dashboard.
 - Models: cached upstream model metadata plus ghc-proxy's effective routing
   and compatibility decisions.
 - Behavior: current configuration, strategy order, and process-local effect
   counters.
 - Requests: active requests plus the most recent 256 terminal requests.
 
-It does not use a database, retain token statistics, delete or rename accounts,
-or expose request/response content. Account management writes only the existing
-credential and routing configuration files through the transaction described
-below.
+It does not use a database, retain token statistics, rename accounts, or expose
+request/response content. Account management writes the existing credential
+and routing files through the transaction described below. Removal affects
+proxy configuration and credentials, not GitHub or Windows account registration.
 
 ## Request Lifecycle Storage
 
@@ -129,10 +129,11 @@ The account-domain manager exposes active runtime descriptors and routing state.
 Dashboard owns the safe account projection, so account management does not
 depend on Dashboard handlers or caches.
 
-Quota is loaded by Dashboard projections when an account's safe cache entry is
-missing or expired, and a process-local cache keeps one safe projection per
-selected account for 60 seconds. Concurrent Overview and Accounts reads for
-the same account coalesce into one load. A failed load exposes `unavailable`,
+Quota is loaded when an account runtime's safe cache entry is missing or
+expired, with a 60-second process-local cache keyed by runtime identity, not a
+reusable account name. Concurrent reads for the same runtime coalesce; deleted
+or replaced runtimes cannot supply quota to their successors. A failed load
+exposes `unavailable`,
 and an expired prior safe value is exposed as `stale`. The projection includes
 plan, reset date, and the three quota pools; analytics IDs, organization data,
 and quota IDs are discarded before caching. A five-second dashboard-only
@@ -144,16 +145,18 @@ cold or expired cache cannot fan out an unbounded number of quota reads. Its
 response preserves the routing snapshot order, and each projection remains in
 the selected account's runtime context.
 
-`POST /dashboard/api/refresh` is the only Dashboard operation that forces all
-remote metadata to refresh. It reads every active routed account and, in that
-account's runtime context, refreshes GitHub identity, forces a quota cache
-refresh, and refreshes the model cache. Each account and metadata source can
-succeed or fail independently. The response exposes only safe `ok`, `stale`,
-or `unavailable` states; a failure retains prior safe quota and model values
-where available. The operation does not write credentials, change routing,
-start device auth, or change token-refresh schedules. Initial page load, tab
-changes, and Live polling use read-only GET endpoints and never invoke this
-POST, though a GET can fill a missing or expired quota cache entry.
+`POST /dashboard/api/refresh` forces metadata refresh in each active account's
+runtime context. GitHub refreshes identity, quota, and models; M365 refreshes
+models and broker credentials without requesting GitHub identity or quota.
+`not_applicable` fields do not make the aggregate refresh fail. Real failures
+retain prior safe values and expose `stale` or `unavailable`; the UI identifies
+the affected account and metadata source without raw upstream error bodies.
+An authorization-denied M365 catalog remains unavailable until access recovers.
+Initial GET projections and Live polls do not force this metadata POST.
+
+The explicit M365 sign-in action opens WAM and returns only account identity.
+It does not select or register the target automatically, and it never returns
+the acquired access token to the browser.
 
 Dashboard device authentication exposes only the user code, verification URL,
 expiry, polling interval, and a random local session ID. The GitHub device code,
@@ -180,6 +183,13 @@ owner liveness that cannot be verified also fails closed. A malformed journal
 fails closed without changing either managed file. Default changes use the same
 transaction boundary, so a failed switch leaves the old default active and
 persistent.
+
+Removal uses the same journal boundary for credential and hostname changes.
+The current default and the sole remaining target are protected; the operator
+must choose another default first. Refresh cleanup runs only after a committed
+removal, and in-flight requests keep their captured runtime. Deleting the
+account that owns the current Dashboard hostname redirects the browser to the
+surviving base hostname with the same listener port.
 
 Legacy startup atomically migrates to a one-account routing table only when the
 credential store contains exactly one account. A credential created from the

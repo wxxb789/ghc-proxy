@@ -2,6 +2,7 @@ import { createContext, Script } from 'node:vm'
 import { describe, expect, test } from 'bun:test'
 
 import { DASHBOARD_HTML, DASHBOARD_JS } from '~/routes/dashboard/assets'
+import { getDashboardBehavior } from '~/routes/dashboard/handler'
 
 class FakeElement {
   children: FakeElement[] = []
@@ -45,6 +46,7 @@ interface DashboardRuntime {
   refreshLiveViews: () => Promise<void>
   settleLoads: (loads: Array<{ scope: string, load: () => Promise<void> }>) => Promise<void>
   startAccountBootstrap: (event: { preventDefault: () => void }) => Promise<void>
+  removeAccount: (accountName: string, button: FakeElement) => Promise<void>
 }
 
 interface RequestFixture {
@@ -58,6 +60,7 @@ function createRuntime(options: {
   fetch?: (input: Request | URL | string, init?: RequestInit) => Promise<Response>
   locationHref?: string
   replaceLocation?: (href: string) => void
+  confirmRemoval?: () => boolean
 } = {}) {
   const elements = new Map<string, FakeElement>()
   const document = {
@@ -83,6 +86,7 @@ function createRuntime(options: {
     navigator: {},
     URL,
     window: {
+      confirm: options.confirmRemoval ?? (() => false),
       location: {
         href: options.locationHref ?? 'http://localhost:4141/dashboard',
         replace: options.replaceLocation ?? (() => {}),
@@ -91,7 +95,7 @@ function createRuntime(options: {
     },
   })
 
-  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, loadAllViews, refreshDashboardMetadata, refreshLiveViews, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads, startAccountBootstrap };`).runInContext(context)
+  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, loadAllViews, refreshDashboardMetadata, refreshLiveViews, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads, startAccountBootstrap, removeAccount };`).runInContext(context)
 
   return {
     elements,
@@ -164,65 +168,6 @@ describe('dashboard embedded state', () => {
     expect(DASHBOARD_HTML).toContain('id="metric-aborted"')
     expect(elements.get('metric-aborted')?.textContent).toBe('1')
     expect(JSON.stringify(elements.get('auth-body'))).toContain('2 total / default personal / current work')
-  })
-
-  test('uses a protected metadata refresh only for the manual Refresh action', async () => {
-    const requests: Array<{ method: string, path: string }> = []
-    const { elements, runtime } = createRuntime({
-      fetch: async (input, init) => {
-        const path = String(input)
-        const method = init?.method ?? 'GET'
-        requests.push({ method, path })
-        if (path === '/dashboard/api/refresh') {
-          return Response.json({
-            status: 'partial',
-            accounts: [{
-              name: 'work',
-              github: { status: 'ok' },
-              models: { status: 'stale' },
-              quota: { status: 'ok' },
-            }],
-          })
-        }
-        if (path === '/dashboard/api/overview') {
-          return Response.json({
-            status: 'ok',
-            version: 'test',
-            uptimeMs: 0,
-            startedAt: '2026-09-08T00:00:00.000Z',
-            activity: { activeRequests: 0, recentRequests: 0, completed: 0, failed: 0, aborted: 0, upstreamQueue: {} },
-            auth: { github: {}, copilot: {}, accounts: { currentAccount: 'work', defaultAccount: 'default', totalAccounts: 2 } },
-            quota: { status: 'unavailable' },
-          })
-        }
-        if (path === '/dashboard/api/accounts') {
-          return Response.json({ baseHostname: 'localhost', defaultAccount: 'default', routingEnabled: true, accounts: [] })
-        }
-        if (path === '/dashboard/api/models')
-          return Response.json({ models: [] })
-        if (path === '/dashboard/api/behavior')
-          return Response.json({ modelRouting: {}, strategies: {}, parameterHandling: {}, contextManagement: {}, toolCompatibility: {}, effects: [] })
-        return Response.json({ active: [], recent: [] })
-      },
-    })
-
-    await runtime.refreshDashboardMetadata()
-
-    const [refreshRequest, ...viewRequests] = requests
-    expect(refreshRequest).toEqual({ method: 'POST', path: '/dashboard/api/refresh' })
-    expect(viewRequests.every(request => request.method === 'GET')).toBe(true)
-    expect(viewRequests.map(request => request.path).sort()).toEqual([
-      '/dashboard/api/accounts',
-      '/dashboard/api/behavior',
-      '/dashboard/api/m365',
-      '/dashboard/api/models',
-      '/dashboard/api/overview',
-      '/dashboard/api/requests',
-    ])
-    expect(elements.get('error-banner')).toMatchObject({
-      hidden: false,
-      textContent: 'Some account metadata could not be refreshed',
-    })
   })
 
   test('keeps initial and Live refreshes on read-only Dashboard routes', async () => {
@@ -329,6 +274,68 @@ describe('dashboard embedded state', () => {
     ])
 
     expect(elements.get('error-banner')?.hidden).toBe(true)
+  })
+
+  test('redirects away from a removed account hostname while preserving the listener port', async () => {
+    const replacements: string[] = []
+    const { runtime } = createRuntime({
+      locationHref: 'http://work.localhost:4187/dashboard',
+      confirmRemoval: () => true,
+      replaceLocation: href => replacements.push(href),
+      fetch: async (_input, init) => {
+        if (init?.method !== 'DELETE')
+          throw new Error('The removed origin cannot serve Dashboard reads')
+        return Response.json({ baseHostname: 'localhost', defaultAccount: 'default' })
+      },
+    })
+    runtime.renderAccounts({
+      routingEnabled: true,
+      accounts: [{ name: 'work', hostname: 'work.localhost', isDefault: false }],
+    })
+
+    await runtime.removeAccount('work', new FakeElement())
+
+    expect(replacements).toEqual(['http://localhost:4187/dashboard'])
+  })
+
+  test('shows partial refresh failure and clears it after an M365 not-applicable success', async () => {
+    let failed = true
+    const { elements, runtime } = createRuntime({
+      fetch: async (input) => {
+        const path = String(input)
+        if (path === '/dashboard/api/refresh') {
+          return Response.json({
+            status: failed ? 'partial' : 'ok',
+            accounts: [{
+              name: failed ? 'work' : 'm365',
+              github: { status: failed ? 'ok' : 'not_applicable' },
+              quota: { status: failed ? 'ok' : 'not_applicable' },
+              models: { status: failed ? 'stale' : 'ok' },
+            }],
+          })
+        }
+        if (path === '/dashboard/api/overview')
+          return overviewResponse()
+        if (path === '/dashboard/api/accounts')
+          return Response.json({ routingEnabled: true, accounts: [] })
+        if (path === '/dashboard/api/m365')
+          return Response.json({ registered: false, onboarding: { status: 'available' }, routing: [] })
+        if (path === '/dashboard/api/models')
+          return Response.json({ models: [] })
+        if (path === '/dashboard/api/behavior')
+          return Response.json(getDashboardBehavior())
+        return Response.json({ active: [], recent: [] })
+      },
+    })
+    const banner = new FakeElement()
+    banner.hidden = true
+    elements.set('error-banner', banner)
+
+    await runtime.refreshDashboardMetadata()
+    expect(banner.hidden).toBe(false)
+    failed = false
+    await runtime.refreshDashboardMetadata()
+    expect(banner.hidden).toBe(true)
   })
 
   test('renders account identity, routing, health, and default action without credentials', () => {

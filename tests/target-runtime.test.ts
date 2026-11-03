@@ -5,6 +5,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { createTargetRuntime, initializeM365Target } from '~/accounts/target-runtime'
 import { M365_MODELS } from '~/clients/m365-upstream'
 import { compileAccountRouting } from '~/lib/account-routing'
+import { HTTPError } from '~/lib/error'
 import { getM365DashboardState } from '~/routes/dashboard/m365'
 import {
   configureAccountRuntimes,
@@ -79,6 +80,25 @@ describe('target runtime factory', () => {
 
     expect(runtime.models.getModelIds()).toEqual(M365_MODELS.data.map(model => model.id))
     expect(getTargetAvailability(runtime)?.status).toBe('ready')
+  })
+
+  test.each([401, 403])('does not report ready after catalog access is denied (%s)', async (status) => {
+    const runtime = createTargetRuntime('m365', 'm365')
+
+    await initializeM365Target(runtime, {
+      acquireToken: async () => ({ accessToken: 'gateway-token', expiresOn: new Date(), tenant: '' }),
+      fetchCatalog: async () => {
+        throw new HTTPError(status, {
+          error: { message: 'Gateway catalog access denied', type: 'authentication_error' },
+        })
+      },
+    })
+
+    expect(getTargetAvailability(runtime)).toMatchObject({
+      status: 'unavailable',
+      cause: 'Gateway catalog access denied',
+    })
+    expect(runtime.models.getModels()).toBeUndefined()
   })
 
   test('records a credential failure as unavailable without throwing', async () => {

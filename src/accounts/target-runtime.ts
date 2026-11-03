@@ -13,6 +13,7 @@ import type { AuthStore } from '~/state/auth'
 
 import { fetchM365Models, M365_MODELS } from '~/clients/m365-upstream'
 import { getMscToken } from '~/clients/msc-auth'
+import { HTTPError } from '~/lib/error'
 import { createAccountRuntime, setTargetAvailability } from '~/state/account-runtime'
 
 export interface TargetRuntimeOptions {
@@ -62,12 +63,22 @@ export async function initializeM365Target(
       account: runtime.auth.mscAuthAccount,
       upn: runtime.auth.mscAuthUpn,
     })
-    const catalog = await fetchCatalog(credential.accessToken).catch(() => M365_MODELS)
-    runtime.models.cacheModels(catalog)
+    runtime.auth.copilotToken = credential.accessToken
     runtime.auth.copilotTokenExpiresAt = credential.expiresOn.getTime()
+    runtime.auth.copilotTokenLastRefreshAt = Date.now()
+    runtime.auth.copilotTokenLastRefreshSucceeded = true
+    runtime.auth.mscAuthUsername = credential.username
+    runtime.auth.mscAuthTenant = credential.tenant
+    const catalog = await fetchCatalog(credential.accessToken).catch((error: unknown) => {
+      if (error instanceof HTTPError && (error.status === 401 || error.status === 403))
+        throw error
+      return M365_MODELS
+    })
+    runtime.models.cacheModels(catalog)
     setTargetAvailability(runtime, { status: 'ready' })
   }
   catch (error) {
+    runtime.auth.copilotTokenLastRefreshSucceeded = false
     setTargetAvailability(runtime, {
       status: 'unavailable',
       cause: (error as Error).message.slice(0, 400),

@@ -1,12 +1,18 @@
+import type { Mock } from 'bun:test'
 import type { DashboardMetadataRefreshService } from '~/routes/dashboard/metadata-refresh'
 
 import type { DashboardAccountManagement } from '~/routes/dashboard/route'
 import type { CopilotUsageResponse } from '~/types'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import process from 'node:process'
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { Elysia } from 'elysia'
 import { AccountManager } from '~/accounts/manager'
 import { createTargetRuntime } from '~/accounts/target-runtime'
+import { resetMscTokenCache, setMscHelperRunner } from '~/clients/msc-auth'
 import { compileAccountRouting } from '~/lib/account-routing'
 import { isLoopbackAddress } from '~/lib/peer'
 import { DashboardQuotaCache, dashboardQuotaCache } from '~/routes/dashboard/handler'
@@ -179,6 +185,11 @@ describe('dashboard account management API', () => {
     const manager = accountManagerFixture()
     authStore.githubToken = 'github-default'
     manager.getAccountSnapshot().accounts[0]!.runtime.auth.githubToken = 'github-default'
+    configureAccountRuntimes(compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: { 'default.localhost': 'default' },
+    }, ['default']), [manager.getAccountSnapshot().accounts[0]!.runtime])
     let quotaLoads = 0
     const quotaCache = new DashboardQuotaCache(async () => {
       quotaLoads++
@@ -625,6 +636,7 @@ function accountManagerFixture(
   bootstrapAccountRouting: ReturnType<typeof mock>
   registerM365Target: ReturnType<typeof mock>
   removeM365Target: ReturnType<typeof mock>
+  removeAccount: Mock<(accountName: string) => Promise<void>>
   configureM365Target: ReturnType<typeof mock>
   setDefaultAccount: ReturnType<typeof mock>
 } {
@@ -647,6 +659,7 @@ function accountManagerFixture(
     }),
     registerM365Target: mock(async () => {}),
     removeM365Target: mock(async () => {}),
+    removeAccount: mock(async () => {}),
     configureM365Target: mock(async () => {}),
     beginAddAccount: mock(async () => ({
       id: 'session-1',
@@ -683,9 +696,65 @@ function accountManagerFixture(
   }
 }
 
+describe('M365 broker sign-in boundary', () => {
+  test('returns only the signed-in identity and enforces the Origin guard before WAM', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dashboard-msc-sign-in-'))
+    const previousExe = process.env.GHC_MSC_AUTH_EXE
+    process.env.GHC_MSC_AUTH_EXE = join(directory, 'msc-auth.exe')
+    writeFileSync(process.env.GHC_MSC_AUTH_EXE, 'unused')
+    let brokerCalls = 0
+    setMscHelperRunner(async () => {
+      brokerCalls++
+      return {
+        code: 0,
+        stderr: '',
+        stdout: JSON.stringify({
+          access_token: 'private-broker-token',
+          expires_on: new Date(Date.now() + 60_000).toISOString(),
+          username: 'operator@example.com',
+          tenant: 'tenant',
+          home_account_id: 'operator.tenant',
+          environment: 'login.microsoftonline.com',
+        }),
+      }
+    })
+    try {
+      const app = createDashboardRoutes({ accountManager: accountManagerFixture() })
+      const request = (origin: string) => new Request('http://localhost/dashboard/api/m365/sign-in', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin },
+        body: JSON.stringify({ upn: 'operator@example.com' }),
+      })
+      const denied = await app.handle(request('https://attacker.example'))
+      expect(denied.status).toBe(403)
+      expect(brokerCalls).toBe(0)
+      const response = await app.handle(request('http://localhost'))
+      const body = await response.text()
+      expect(response.status).toBe(200)
+      expect(JSON.parse(body)).toMatchObject({
+        account: { upn: 'operator@example.com', homeAccountId: 'operator.tenant' },
+      })
+      expect(body).not.toContain('private-broker-token')
+      expect(body).not.toContain('access_token')
+    }
+    finally {
+      setMscHelperRunner()
+      resetMscTokenCache()
+      if (previousExe === undefined)
+        delete process.env.GHC_MSC_AUTH_EXE
+      else
+        process.env.GHC_MSC_AUTH_EXE = previousExe
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('M365 target projection', () => {
   function targetManager(registered: boolean) {
-    const m365 = createTargetRuntime('m365', 'm365', { mscAuthAccount: 'home-account' })
+    const m365 = createTargetRuntime('m365', 'm365', {
+      mscAuthAccount: 'home-account',
+      auth: { mscAuthUsername: 'operator@example.com', mscAuthTenant: 'tenant-id' },
+    })
     m365.models.cacheModels({
       object: 'list',
       data: [{
@@ -736,6 +805,26 @@ describe('M365 target projection', () => {
       },
     })
     expect(state.routing.map(row => row.kind)).toEqual(['github', 'm365'])
+  })
+
+  test('does not label the M365 target as a GitHub tenant', async () => {
+    const manager = targetManager(true)
+    const app = createDashboardRoutes({ accountManager: {
+      ...accountManagerFixture(),
+      getAccountSnapshot: manager.getAccountSnapshot,
+    } })
+    const response = await app.handle(new Request('http://localhost/dashboard/api/accounts'))
+    const body = await response.json() as { accounts: Array<{ name: string, upstream: string, tenant: string }> }
+
+    expect(body.accounts.find(account => account.name === 'm365')).toMatchObject({
+      upstream: 'm365',
+      tenant: 'tenant-id',
+      identity: 'operator@example.com',
+    })
+    expect(body.accounts.find(account => account.name === 'default')).toMatchObject({
+      upstream: 'github',
+      tenant: 'github.com',
+    })
   })
 
   test('reports onboarding unavailable without account management', () => {
