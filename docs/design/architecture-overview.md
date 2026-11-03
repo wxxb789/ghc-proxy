@@ -124,9 +124,15 @@ Client Response (OpenAI / Anthropic format)
 When `accountRouting` is configured, hostname selection runs before CORS and
 route execution. The configured base hostname uses the explicit default
 account, and `127.0.0.1` is a fixed alias for that same default. Every other
-accepted hostname maps to one named account. Unknown hostnames return `421`
-without reaching a handler or upstream. The selected account remains fixed for
+accepted hostname maps to one route target. Unknown hostnames return `421`
+without reaching a handler or upstream. The selected target remains fixed for
 the full asynchronous request lifecycle.
+
+A target carries its own upstream, credential source, and model catalog, so the
+GitHub accounts and the M365 gateway coexist in one process. The M365 target is
+registered by its hostname mapping rather than by a credential, and it adds a
+loopback-only peer check and Messages-only inference admission for its own
+requests; GitHub targets keep their existing behavior.
 
 ## Exposed Endpoints
 

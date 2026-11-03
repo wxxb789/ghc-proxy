@@ -203,14 +203,17 @@ The proxy normalizes and persists the GHE domain automatically after a successfu
 
 A second upstream for the Microsoft 365 Copilot gateway, which serves the Anthropic Messages protocol directly. It uses your own work account through the Windows token broker instead of a GitHub credential.
 
+M365 is a route target beside your GitHub accounts, not a separate mode: one process serves both upstreams on one port, and the request hostname picks the target. Add it from the Dashboard Accounts view — no restart, no second instance, no hosts entry per port. `--upstream m365` still works as a shorthand for an M365-only process.
+
 ```bash
 bunx --bun ghc-proxy@latest start --upstream m365
 ```
 
 - **Windows only.** The credential comes from the bundled `msc-auth` helper over WAM/MSAL; the client has no device-code or loopback flow. The helper ships in the npm artifact (`dist/msc-auth/`); `bun run build:msc-auth` rebuilds it from source and `GHC_MSC_AUTH_EXE` overrides the path.
-- **Broker accounts.** `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`. Pin one with `--msc-auth-account <homeAccountId>`, or with the Dashboard Accounts tab, which persists `m365.account`. Only accounts carrying the Copilot subscription can mint gateway tokens; consumer accounts (MSA) are out of scope.
+- **Broker accounts.** `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`. Pin one with `--msc-auth-account <homeAccountId>`, or choose it in the Dashboard's M365 section, which persists `m365.account`. Only accounts carrying the Copilot subscription can mint gateway tokens; consumer accounts (MSA) are out of scope.
+- **Mixed targets.** Register the target once (`accountRouting.hostnames["m365.localhost"] = "m365"`, or the Dashboard section) and point a client at that hostname. Requests that select it are accepted only from the local machine, serve Anthropic Messages only, and answer `503` with the broker cause while the account cannot mint a token. GitHub hostnames are unaffected by any of it.
 - **Live catalog.** Startup reads `GET /api/v1/llmapi/models` and serves its `/v1/messages` subset, so context limits come from the gateway (1M today). The built-in list is a fallback for when that request fails.
-- **Loopback only.** The listener binds `127.0.0.1` in this mode, because the credential spends your own account's quota.
+- **Loopback only when it is the only target.** `--upstream m365` binds `127.0.0.1` because the credential spends your own account's quota; in a mixed process the M365 hostname alone is restricted to loopback peers.
 
 See [M365 Upstream](./docs/design/m365-upstream.md) for the header contract, measured limits, and the family fallbacks applied to unadvertised model names.
 

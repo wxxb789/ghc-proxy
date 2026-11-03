@@ -15,7 +15,12 @@ The dashboard exposes five views under `/dashboard`:
   routed accounts.
 - Accounts: each routed account's stable hostname, GitHub identity and tenant,
   authentication/Copilot state, quota, and default marker; it also starts new
-  device authentication and changes the default account.
+  device authentication and changes the default account. The same view carries
+  the M365 target in both states: onboarding with a prerequisite probe when it
+  is absent, and status, hostname, routing rows, client configuration, and
+  removal when it is registered. The projection reads the committed routing
+  snapshot and the availability registry, so it is identical on every hostname,
+  and only the explicit probe action lists broker accounts.
 - Models: cached upstream model metadata plus ghc-proxy's effective routing
   and compatibility decisions.
 - Behavior: current configuration, strategy order, and process-local effect

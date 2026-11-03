@@ -1,11 +1,15 @@
-# M365 Upstream (`--upstream m365`)
+# M365 Upstream
 
 Second upstream provider: the Microsoft 365 Copilot coding-agent gateway at
 `https://msit.loki.delve.office.com/api/v1/llmapi`. It speaks the Anthropic
 Messages protocol directly, so the request path reuses `native-messages` without
 translation.
 
-Selected with `--upstream m365`. The GitHub path is the default and is unchanged.
+M365 is a **route target** beside the GitHub accounts, not a process-wide mode.
+A hostname mapping registers it (`accountRouting.hostnames`), a request's
+hostname selects it, and one process can serve both upstreams on one listener.
+`--upstream m365` remains as a shorthand for a routing table that holds only
+this target; in that mode the listener still binds `127.0.0.1`.
 
 ## Credential path
 
@@ -92,10 +96,14 @@ planned for minting gateway tokens for an MSA.
   (`uid.utid`), which stays unambiguous when one UPN exists in several tenants.
 - Precedence: `--msc-auth-account` → `config.json#m365.account` → the helper's
   default (`lhan@microsoft.com`, then `--prefer`).
-- The Dashboard's Accounts tab shows a picker (`GET /dashboard/api/m365`,
-  `POST /dashboard/api/m365/account`). Saving writes the config, drops the cached
-  token, and acquires a new one immediately so a rejected account surfaces the
-  helper's diagnostics in the panel instead of failing the next request.
+- The Dashboard's Accounts view shows the target in both states. `GET
+  /dashboard/api/m365` projects the committed routing table and availability;
+  `POST /dashboard/api/m365/register`, `/remove`, `/account`, and `/hostname`
+  run through the account manager's transaction, and `POST
+  /dashboard/api/m365/probe` is the only call that lists broker accounts.
+  Registration, removal, and identity changes apply without a restart.
+- The target name `m365` is reserved: routing rejects a GitHub account that
+  claims it, and credential creation refuses to write it.
 - `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`, and
   `msc-auth --account <homeAccountId>` reproduces the selection from a shell.
 
@@ -127,15 +135,28 @@ verified live).
 
 ## Security boundary
 
-The server binds `127.0.0.1` only when this upstream is active. The credential is
-the user's own Microsoft account, so exposing the port on a LAN would let any
-client spend that account's quota. The GitHub path keeps its existing bind
-behavior.
+The credential is the user's own Microsoft account, so the boundary follows the
+target rather than the process:
+
+- Requests that select the M365 target are accepted only from a loopback peer;
+  a live runtime with no resolvable peer address fails closed.
+- The gate keys on the target's upstream, so it also covers the base hostname
+  and the `127.0.0.1` alias when the M365 target is the default.
+- GitHub targets keep their existing reachability.
+- When M365 is the only target (`--upstream m365`), the listener still binds
+  `127.0.0.1` only.
+
+An unavailable target answers 503 with its recorded cause; dashboard paths and
+the target's own model list are not inference and continue to their own
+handlers.
 
 ## Known limits
 
-- Account routing, the Dashboard account views, and GHE options are
-  GitHub-specific and are not used here.
+- GitHub account management and GHE options remain GitHub-specific; they are
+  not used here.
+- Only the Messages endpoint family is served on this target. Chat Completions,
+  Responses, and Embeddings requests are refused with an error naming
+  `/v1/messages` instead of being forwarded.
 - Unknown model names are not rejected up front; the gateway answers
   `403 model_not_allowed`, which the proxy returns unchanged (probed with
   `claude-unknown-1`).
