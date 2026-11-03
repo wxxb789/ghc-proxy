@@ -74,6 +74,7 @@ export interface DashboardAccountManagement {
     input: { account?: string | null, hostname?: string },
   ) => Promise<void>
   getAuthenticationSession: (id: string) => AccountAuthenticationSession | undefined
+  getMscAuthExe?: () => string | undefined
   getAccountSnapshot: () => AccountManagementSnapshot
   registerM365Target: (
     input: { account?: string | null, hostname?: string },
@@ -136,7 +137,8 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
       manager: accountManager,
       serverPort: options.serverPort,
     })))
-    .post('/dashboard/api/m365/probe', async () => apiResponse(await probeM365Readiness()))
+    .post('/dashboard/api/m365/probe', async () =>
+      apiResponse(await probeM365Readiness(accountManager?.getMscAuthExe?.())))
     .post('/dashboard/api/m365/register', async ({ body }) => {
       if (!accountManager)
         return accountManagementUnavailable()

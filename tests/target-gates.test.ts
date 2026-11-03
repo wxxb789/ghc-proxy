@@ -152,7 +152,7 @@ describe('per-target gates', () => {
 
   test('passes dashboard paths to their own guard', async () => {
     const m365 = activate('m365-only')
-    setTargetAvailability('m365', { status: 'unavailable', cause: 'no matching broker account' })
+    setTargetAvailability(m365, { status: 'unavailable', cause: 'no matching broker account' })
 
     const refusal = await runWithAccountRuntime(m365, () =>
       enforceTargetGates(requestTo('m365.localhost', '/dashboard'), loopbackServer))
@@ -162,7 +162,7 @@ describe('per-target gates', () => {
 
   test('answers an unavailable target with its cause', async () => {
     const m365 = activate('m365-only')
-    setTargetAvailability('m365', { status: 'unavailable', cause: 'no matching broker account' })
+    setTargetAvailability(m365, { status: 'unavailable', cause: 'no matching broker account' })
     setMscHelperRunner(async () => ({ stdout: '', stderr: '', code: 2 }))
 
     const refusal = await runWithAccountRuntime(m365, () =>
@@ -177,7 +177,7 @@ describe('per-target gates', () => {
 
   test('recovers once the broker answers again', async () => {
     const m365 = activate('m365-only')
-    setTargetAvailability('m365', { status: 'unavailable', cause: 'expired' })
+    setTargetAvailability(m365, { status: 'unavailable', cause: 'expired' })
     setMscHelperRunner(async () => ({
       stdout: JSON.stringify({
         access_token: 'gateway-token',

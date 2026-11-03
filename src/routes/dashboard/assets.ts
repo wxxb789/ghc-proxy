@@ -93,6 +93,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             <button id="m365-hostname-save" type="submit" class="command">Save hostname</button>
           </form>
           <div class="account-help"><span class="muted">Routing</span><div id="m365-routing" class="muted"></div></div>
+          <div class="account-form"><button id="m365-probe-active" type="button" class="command">Refresh broker accounts</button></div>
           <div class="account-help"><span class="muted">Client</span><pre id="m365-client" class="mono"></pre></div>
           <div class="account-form"><button id="m365-remove" type="button" class="command">Remove M365 target</button></div>
         </div>
@@ -679,6 +680,8 @@ function renderAccountAuthentication(session) {
 }
 
 let m365Snapshot;
+let m365ProbeAccounts;
+let m365HostnameDirty = false;
 
 function fillM365Accounts(select, accounts) {
   const current = select.value;
@@ -723,6 +726,9 @@ function renderM365(state) {
   const parts = [state.hostname];
   if (state.account) parts.push('account ' + state.account.slice(0, 12) + '\u2026');
   parts.push(state.modelCount + ' models');
+  if (state.tokenExpiresAt) {
+    parts.push('token until ' + new Date(state.tokenExpiresAt).toLocaleTimeString());
+  }
   if (availability && availability.status === 'unavailable') {
     parts.push('unavailable: ' + (availability.cause || 'unknown cause'));
   }
@@ -731,23 +737,21 @@ function renderM365(state) {
     ? (availability.cause || 'The target is unavailable.')
     : 'Ready.';
 
-  byId('m365-hostname').value = state.hostname || '';
+  if (!m365HostnameDirty) byId('m365-hostname').value = state.hostname || '';
   const select = byId('m365-account');
   const previous = select.value;
   clearNode(select);
-  if (state.account) {
+  const candidates = m365ProbeAccounts || (state.account
+    ? [{ homeAccountId: state.account, upn: 'Current selection', environment: 'broker' }]
+    : []);
+  for (const account of candidates) {
     const option = document.createElement('option');
-    option.value = state.account;
-    option.textContent = 'Current: ' + state.account.slice(0, 12) + '\u2026';
-    option.selected = true;
-    select.append(option);
-  } else if (previous) {
-    const option = document.createElement('option');
-    option.value = previous;
-    option.textContent = previous.slice(0, 12) + '\u2026';
-    option.selected = true;
+    option.value = account.homeAccountId;
+    option.textContent = account.upn + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026';
+    if ((previous || state.account) === account.homeAccountId) option.selected = true;
     select.append(option);
   }
+  byId('m365-save').disabled = candidates.length === 0;
 
   const baseUrl = state.client ? state.client.baseUrl : '';
   const model = state.client ? state.client.model : '';
@@ -794,13 +798,16 @@ async function probeM365() {
     if (readiness.error) lines.push(readiness.error);
     byId('m365-readiness').textContent = lines.join('\n');
     const form = byId('m365-register-form');
-    if (readiness.accounts && readiness.accounts.length > 0) {
+    m365ProbeAccounts = readiness.accounts || [];
+    if (m365ProbeAccounts.length > 0) {
       form.hidden = false;
-      fillM365Accounts(byId('m365-register-account'), readiness.accounts);
+      fillM365Accounts(byId('m365-register-account'), m365ProbeAccounts);
       byId('m365-register-hostname').value ||= 'm365.localhost';
     } else {
       form.hidden = true;
     }
+    m365Snapshot = undefined;
+    await loadM365();
   } catch (error) {
     byId('m365-readiness').textContent = error.message;
   } finally {
@@ -857,6 +864,7 @@ async function saveM365Hostname(event) {
   button.disabled = true;
   try {
     await postM365('/dashboard/api/m365/hostname', { hostname: byId('m365-hostname').value });
+    m365HostnameDirty = false;
   } finally {
     button.disabled = false;
   }
@@ -1409,6 +1417,8 @@ document.querySelectorAll('.tab').forEach(function (button) {
 byId('refresh-button').addEventListener('click', refreshDashboardMetadata);
 byId('m365-form').addEventListener('submit', saveM365Selection);
 byId('m365-probe').addEventListener('click', probeM365);
+byId('m365-probe-active').addEventListener('click', probeM365);
+byId('m365-hostname').addEventListener('input', function () { m365HostnameDirty = true; });
 byId('m365-register-form').addEventListener('submit', registerM365);
 byId('m365-hostname-form').addEventListener('submit', saveM365Hostname);
 byId('m365-remove').addEventListener('click', removeM365);

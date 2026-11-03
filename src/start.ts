@@ -208,7 +208,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
       auth: serverAuthDefaults(options, accountType),
     })
     await initializeM365Target(target)
-    const availability = getTargetAvailability(target.name)
+    const availability = getTargetAvailability(target)
     if (availability?.status === 'ready') {
       consola.info(`M365 target ready (account ${authStore.mscAuthAccount ?? 'default'})`)
     }
@@ -261,9 +261,15 @@ async function runServer(options: RunServerOptions): Promise<void> {
   try {
     if (options.claudeCode) {
       if (!modelCache.getModels()) {
-        throw new Error('Models should be loaded by now')
+        if (isM365OnlyRouting() || cachedConfig.accountRouting !== undefined) {
+          consola.warn('Skipping the Claude Code command: the default target has no models yet.')
+        }
+        else {
+          throw new Error('Models should be loaded by now')
+        }
       }
-      await maybeCopyClaudeCodeCommand(serverUrl)
+      if (modelCache.getModels())
+        await maybeCopyClaudeCodeCommand(serverUrl)
     }
 
     const app = createServer({
@@ -464,9 +470,8 @@ async function setupRoutedAccounts(
       })
     }
     const credential = credentials!.accounts[accountName]!
-    const runtime = createTargetRuntime(accountName, 'github', {
-      auth: serverAuthDefaults(options, accountType),
-    })
+    const runtime = createTargetRuntime(accountName, 'github')
+    applyServerAuthOptions(runtime.auth, options, accountType)
     applyGheDomain(runtime.auth, credential.gheDomain)
     return runtime
   })
@@ -477,7 +482,7 @@ async function setupRoutedAccounts(
     for (const runtime of runtimes) {
       if (compiled.kinds.get(runtime.name) === 'm365') {
         await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
-        const availability = getTargetAvailability(runtime.name)
+        const availability = getTargetAvailability(runtime)
         if (availability?.status === 'ready') {
           consola.info(`M365 target ${JSON.stringify(runtime.name)} ready`)
         }
@@ -544,6 +549,7 @@ function serverAuthDefaults(
     rateLimitSeconds: options.rateLimit,
     rateLimitWait: options.rateLimitWait,
     showToken: false,
+    mscAuthExe: options.mscAuthExe,
     upstreamTimeoutSeconds: options.upstreamTimeoutSeconds,
   }
 }

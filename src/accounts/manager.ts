@@ -227,6 +227,26 @@ export class AccountManager {
     }
   }
 
+  getMscAuthExe(): string | undefined {
+    return this.authDefaults.mscAuthExe
+  }
+
+  private assertHostnameAvailable(hostname: string, owner: string): void {
+    const currentOwner = this.routing.hostnames.get(hostname)
+    if (currentOwner !== undefined && currentOwner !== owner) {
+      throw new AccountManagementError(
+        `Hostname ${JSON.stringify(hostname)} already reaches account ${JSON.stringify(currentOwner)}.`,
+        409,
+      )
+    }
+    if (currentOwner === undefined && this.reservedHostnames.has(hostname)) {
+      throw new AccountManagementError(
+        `Hostname ${JSON.stringify(hostname)} is reserved by an account authentication in progress.`,
+        409,
+      )
+    }
+  }
+
   getRoutingSummary(): AccountRoutingSummary {
     return {
       baseHostname: this.routing.baseHostname,
@@ -475,9 +495,9 @@ export class AccountManager {
         )
       }
 
-      const previousRouting = this.routing
       const current = routingConfig(this.routing)
       const hostname = normalizeDnsHostname(input.hostname ?? M365_DEFAULT_HOSTNAME)
+      this.assertHostnameAvailable(hostname, RESERVED_M365_TARGET)
       const account = input.account ?? getCachedConfig().m365?.account
       const nextConfig: AccountRoutingConfig = {
         ...current,
@@ -485,6 +505,7 @@ export class AccountManager {
       }
       const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
       const runtime = createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
+        mscAuthExe: this.authDefaults.mscAuthExe,
         mscAuthAccount: account,
         mscAuthUpn: getCachedConfig().m365?.upn,
         auth: this.authDefaults,
@@ -492,19 +513,10 @@ export class AccountManager {
       const nextRuntimes = new Map(this.runtimes)
       nextRuntimes.set(RESERVED_M365_TARGET, runtime)
 
-      let runtimeApplied = false
       try {
-        await persist({ routing: nextConfig, account }, () => {
-          configureAccountRuntimes(nextRouting, nextRuntimes.values())
-          runtimeApplied = true
-        })
-        this.routing = nextRouting
-        this.runtimes = nextRuntimes
+        await persist({ routing: nextConfig, account }, () => {})
       }
       catch (error) {
-        if (runtimeApplied) {
-          configureAccountRuntimes(previousRouting, this.runtimes.values())
-        }
         if (error instanceof AccountManagementError) {
           throw error
         }
@@ -516,6 +528,9 @@ export class AccountManager {
       }
 
       await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
+      configureAccountRuntimes(nextRouting, nextRuntimes.values())
+      this.routing = nextRouting
+      this.runtimes = nextRuntimes
     })
   }
 
@@ -548,7 +563,6 @@ export class AccountManager {
         )
       }
 
-      const previousRouting = this.routing
       const current = routingConfig(this.routing)
       const hostnames = Object.fromEntries(
         Object.entries(current.hostnames).filter(([, target]) => target !== RESERVED_M365_TARGET),
@@ -558,19 +572,10 @@ export class AccountManager {
       nextRuntimes.delete(RESERVED_M365_TARGET)
       const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
 
-      let runtimeApplied = false
       try {
-        await persist({ routing: nextConfig }, () => {
-          configureAccountRuntimes(nextRouting, nextRuntimes.values())
-          runtimeApplied = true
-        })
-        this.routing = nextRouting
-        this.runtimes = nextRuntimes
+        await persist({ routing: nextConfig }, () => {})
       }
       catch (error) {
-        if (runtimeApplied) {
-          configureAccountRuntimes(previousRouting, this.runtimes.values())
-        }
         if (error instanceof AccountManagementError) {
           throw error
         }
@@ -580,6 +585,10 @@ export class AccountManager {
           { cause: error },
         )
       }
+
+      configureAccountRuntimes(nextRouting, nextRuntimes.values())
+      this.routing = nextRouting
+      this.runtimes = nextRuntimes
 
       const cleanup = this.refreshCleanups.get(RESERVED_M365_TARGET)
       this.refreshCleanups.delete(RESERVED_M365_TARGET)
@@ -606,7 +615,6 @@ export class AccountManager {
         )
       }
 
-      const previousRouting = this.routing
       const current = routingConfig(this.routing)
       const account = input.account === undefined
         ? currentRuntime.auth.mscAuthAccount
@@ -614,6 +622,7 @@ export class AccountManager {
       const hostname = input.hostname === undefined
         ? dedicatedHostnamesByAccount(this.routing).get(RESERVED_M365_TARGET)!
         : normalizeDnsHostname(input.hostname)
+      this.assertHostnameAvailable(hostname, RESERVED_M365_TARGET)
       const hostnames = Object.fromEntries(
         Object.entries(current.hostnames).filter(([, target]) => target !== RESERVED_M365_TARGET),
       )
@@ -625,6 +634,7 @@ export class AccountManager {
         && (account ?? undefined) !== currentRuntime.auth.mscAuthAccount
       const runtime = accountChanged
         ? createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
+            mscAuthExe: this.authDefaults.mscAuthExe,
             mscAuthAccount: account,
             mscAuthUpn: getCachedConfig().m365?.upn,
             auth: this.authDefaults,
@@ -634,19 +644,10 @@ export class AccountManager {
       nextRuntimes.set(RESERVED_M365_TARGET, runtime)
       const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
 
-      let runtimeApplied = false
       try {
-        await persist({ routing: nextConfig, account }, () => {
-          configureAccountRuntimes(nextRouting, nextRuntimes.values())
-          runtimeApplied = true
-        })
-        this.routing = nextRouting
-        this.runtimes = nextRuntimes
+        await persist({ routing: nextConfig, account }, () => {})
       }
       catch (error) {
-        if (runtimeApplied) {
-          configureAccountRuntimes(previousRouting, this.runtimes.values())
-        }
         if (error instanceof AccountManagementError) {
           throw error
         }
@@ -657,11 +658,13 @@ export class AccountManager {
         )
       }
 
-      if (!accountChanged)
-        return
-
-      resetMscTokenCache()
-      await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
+      if (accountChanged) {
+        resetMscTokenCache()
+        await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
+      }
+      configureAccountRuntimes(nextRouting, nextRuntimes.values())
+      this.routing = nextRouting
+      this.runtimes = nextRuntimes
     })
   }
 

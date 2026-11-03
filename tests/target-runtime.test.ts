@@ -1,12 +1,12 @@
 import type { ModelsResponse } from '~/types'
 
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 
 import { createTargetRuntime, initializeM365Target } from '~/accounts/target-runtime'
 import { M365_MODELS } from '~/clients/m365-upstream'
 import { compileAccountRouting } from '~/lib/account-routing'
+import { getM365DashboardState } from '~/routes/dashboard/m365'
 import {
-  clearTargetAvailability,
   configureAccountRuntimes,
   createAccountRuntime,
   getTargetAvailability,
@@ -25,10 +25,6 @@ function catalog(ids: Array<string>): ModelsResponse {
 }
 
 describe('target runtime factory', () => {
-  beforeEach(() => {
-    clearTargetAvailability()
-  })
-
   test('builds a GitHub target without the M365 credential identity', () => {
     const runtime = createTargetRuntime('default', 'github', {
       auth: { githubToken: 'github-token' },
@@ -37,7 +33,7 @@ describe('target runtime factory', () => {
     expect(runtime.auth.upstream).toBe('github')
     expect(runtime.auth.githubToken).toBe('github-token')
     expect(runtime.models.getModels()).toBeUndefined()
-    expect(getTargetAvailability('default')).toBeUndefined()
+    expect(getTargetAvailability(runtime)).toBeUndefined()
   })
 
   test('builds an M365 target with its credential identity', () => {
@@ -67,7 +63,7 @@ describe('target runtime factory', () => {
 
     expect(seen).toEqual([{ exe: undefined, account: undefined, upn: undefined }])
     expect(runtime.models.getModelIds()).toEqual(['claude-opus-5.5'])
-    expect(getTargetAvailability('m365')?.status).toBe('ready')
+    expect(getTargetAvailability(runtime)?.status).toBe('ready')
   })
 
   test('falls back to the static catalog when discovery fails', async () => {
@@ -81,7 +77,7 @@ describe('target runtime factory', () => {
     })
 
     expect(runtime.models.getModelIds()).toEqual(M365_MODELS.data.map(model => model.id))
-    expect(getTargetAvailability('m365')?.status).toBe('ready')
+    expect(getTargetAvailability(runtime)?.status).toBe('ready')
   })
 
   test('records a credential failure as unavailable without throwing', async () => {
@@ -93,7 +89,7 @@ describe('target runtime factory', () => {
       },
     })
 
-    expect(getTargetAvailability('m365')).toMatchObject({
+    expect(getTargetAvailability(runtime)).toMatchObject({
       status: 'unavailable',
       cause: 'The broker has no matching account.',
     })
@@ -138,5 +134,28 @@ describe('target runtime factory', () => {
       [github, m365],
     )
     expect(isM365OnlyRouting()).toBe(false)
+  })
+
+  test('projects a running target without an account manager', async () => {
+    const m365 = createTargetRuntime('m365', 'm365')
+    configureAccountRuntimes(
+      compileAccountRouting({
+        baseHostname: 'localhost',
+        defaultAccount: 'm365',
+        hostnames: { 'm365.localhost': 'm365' },
+      }, []),
+      [m365],
+    )
+    await initializeM365Target(m365, {
+      acquireToken: async () => ({ accessToken: 'token', expiresOn: new Date(Date.now() + 60_000), tenant: '' }),
+      fetchCatalog: async () => catalog(['claude-opus-5.5']),
+    })
+
+    const state = getM365DashboardState({ serverPort: 4141 })
+    expect(state.registered).toBe(true)
+    expect(state.hostname).toBe('m365.localhost')
+    expect(state.models).toEqual(['claude-opus-5.5'])
+    expect(state.availability?.status).toBe('ready')
+    expect(state.onboarding.status).toBe('unavailable')
   })
 })

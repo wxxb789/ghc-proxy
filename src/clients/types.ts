@@ -6,6 +6,7 @@ export type UpstreamKind = 'github' | 'm365'
 export interface ClientAuth {
   githubToken?: string
   copilotToken?: string
+  copilotTokenExpiresAt?: number
   copilotApiBase?: string
 }
 

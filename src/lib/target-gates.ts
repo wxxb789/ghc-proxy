@@ -61,14 +61,14 @@ export async function enforceTargetGates(
   if (!MESSAGES_PATHS.has(pathname))
     return undefined
 
-  if (getTargetAvailability(runtime.name)?.status !== 'unavailable')
+  if (getTargetAvailability(runtime)?.status !== 'unavailable')
     return undefined
 
   // A recovered broker must restore service without a restart, so an
   // unavailable target retries acquisition through the helper's single-flight
   // path before the request is refused.
   await initializeM365Target(runtime)
-  const availability = getTargetAvailability(runtime.name)
+  const availability = getTargetAvailability(runtime)
   if (availability?.status === 'ready')
     return undefined
 

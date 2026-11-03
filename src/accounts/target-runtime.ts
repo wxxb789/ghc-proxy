@@ -64,10 +64,11 @@ export async function initializeM365Target(
     })
     const catalog = await fetchCatalog(credential.accessToken).catch(() => M365_MODELS)
     runtime.models.cacheModels(catalog)
-    setTargetAvailability(runtime.name, { status: 'ready' })
+    runtime.auth.copilotTokenExpiresAt = credential.expiresOn.getTime()
+    setTargetAvailability(runtime, { status: 'ready' })
   }
   catch (error) {
-    setTargetAvailability(runtime.name, {
+    setTargetAvailability(runtime, {
       status: 'unavailable',
       cause: (error as Error).message.slice(0, 400),
     })

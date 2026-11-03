@@ -17,7 +17,7 @@ import process from 'node:process'
 import { listMscAccounts, resolveMscAuthExe } from '~/clients/msc-auth'
 import { M365_DEFAULT_HOSTNAME, RESERVED_M365_TARGET } from '~/lib/account-routing'
 import { getCachedConfig } from '~/lib/config'
-import { getTargetAvailability } from '~/state/account-runtime'
+import { getRoutingTargets, getTargetAvailability } from '~/state/account-runtime'
 
 export interface M365Readiness {
   platformSupported: boolean
@@ -74,16 +74,48 @@ export function getM365DashboardState(
   options: M365DashboardOptions = {},
 ): M365DashboardState {
   const manager = options.manager
-  if (!manager) {
-    return {
-      registered: false,
-      modelCount: 0,
-      models: [],
-      routing: [],
-      onboarding: {
+  const onboarding: M365DashboardState['onboarding'] = manager
+    ? { status: 'available' }
+    : {
         status: 'unavailable',
         reason: 'This process was started without account management.',
+      }
+
+  if (!manager) {
+    const committed = getRoutingTargets()
+    const rows: M365RoutingRow[] = committed.map(view => ({
+      target: view.name,
+      hostname: view.hostname,
+      kind: view.runtime.auth.upstream === 'm365' ? 'm365' : 'github',
+      isDefault: view.isDefault,
+    }))
+    const running = committed.find(view => view.name === RESERVED_M365_TARGET)
+    if (!running) {
+      return {
+        registered: false,
+        modelCount: 0,
+        models: [],
+        routing: rows,
+        onboarding,
+      }
+    }
+    const modelIds = running.runtime.models.getModelIds()
+    return {
+      registered: true,
+      hostname: running.hostname,
+      account: running.runtime.auth.mscAuthAccount ?? getCachedConfig().m365?.account,
+      tokenExpiresAt: running.runtime.auth.copilotTokenExpiresAt
+        ? new Date(running.runtime.auth.copilotTokenExpiresAt).toISOString()
+        : undefined,
+      modelCount: modelIds.length,
+      models: modelIds,
+      availability: getTargetAvailability(running.runtime),
+      routing: rows,
+      client: {
+        baseUrl: baseUrlFor(running.hostname, options.serverPort),
+        model: modelIds[0] ?? 'claude-opus-5.5',
       },
+      onboarding,
     }
   }
 
@@ -91,7 +123,7 @@ export function getM365DashboardState(
   const routing = routingRows(snapshot)
   const target = snapshot.accounts.find(account => account.name === RESERVED_M365_TARGET)
   const modelIds = target?.runtime.models.getModelIds() ?? []
-  const availability = getTargetAvailability(RESERVED_M365_TARGET)
+  const availability = target ? getTargetAvailability(target.runtime) : undefined
 
   if (!target) {
     return {
@@ -100,7 +132,7 @@ export function getM365DashboardState(
       models: [],
       availability,
       routing,
-      onboarding: { status: 'available' },
+      onboarding,
     }
   }
 
@@ -119,17 +151,17 @@ export function getM365DashboardState(
       baseUrl: baseUrlFor(target.hostname ?? M365_DEFAULT_HOSTNAME, options.serverPort),
       model: modelIds[0] ?? 'claude-opus-5.5',
     },
-    onboarding: { status: 'available' },
+    onboarding,
   }
 }
 
-export async function probeM365Readiness(): Promise<M365Readiness> {
+export async function probeM365Readiness(exe?: string): Promise<M365Readiness> {
   if (process.platform !== 'win32') {
     return { platformSupported: false, helperAvailable: false, failedStep: 'platform' }
   }
 
   try {
-    resolveMscAuthExe()
+    resolveMscAuthExe(exe)
   }
   catch (error) {
     return {
@@ -141,7 +173,7 @@ export async function probeM365Readiness(): Promise<M365Readiness> {
   }
 
   try {
-    const accounts = await listMscAccounts()
+    const accounts = await listMscAccounts({ exe })
     return {
       platformSupported: true,
       helperAvailable: true,

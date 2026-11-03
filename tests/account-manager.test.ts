@@ -753,13 +753,22 @@ describe('M365 target mutations', () => {
     await expect(manager.registerM365Target({})).rejects.toMatchObject({ status: 409 })
   })
 
-  test('rolls back when persistence fails', async () => {
-    const manager = new AccountManager(initialState(), m365Dependencies(async (_input, applyRuntime) => {
-      applyRuntime()
+  test('leaves the live targets unchanged when persistence fails', async () => {
+    const manager = new AccountManager(initialState(), m365Dependencies(async () => {
       throw new Error('disk full')
     }))
 
     await expect(manager.registerM365Target({})).rejects.toMatchObject({ status: 500 })
+    expect(manager.getAccountSnapshot().accounts.map(account => account.name))
+      .toEqual(['account1', 'default'])
+  })
+
+  test('refuses a hostname that already reaches another account', async () => {
+    const manager = new AccountManager(initialState(), m365Dependencies())
+
+    await expect(manager.registerM365Target({ hostname: 'account1.localhost' }))
+      .rejects
+      .toMatchObject({ status: 409 })
     expect(manager.getAccountSnapshot().accounts.map(account => account.name))
       .toEqual(['account1', 'default'])
   })

@@ -12,12 +12,20 @@ import {
   responsesEmulatorState as legacyResponsesEmulatorState,
 } from './responses-emulator-state'
 
+export interface TargetAvailability {
+  status: 'ready' | 'unavailable'
+  cause?: string
+  updatedAt: number
+}
+
 export interface AccountRuntime {
   readonly name: string
   auth: AuthStore
   models: ModelCache
   rateLimiter: RateLimiter
   responsesEmulator: ReturnType<typeof createResponsesEmulatorState>
+  /** Whether this target can serve; owned by the runtime so a replaced target cannot leak state. */
+  availability?: TargetAvailability
 }
 
 const legacyRuntime: AccountRuntime = {
@@ -112,32 +120,17 @@ export function configureAccountRuntimes(
   routing = nextRouting
 }
 
-export interface TargetAvailability {
-  status: 'ready' | 'unavailable'
-  cause?: string
-  updatedAt: number
-}
-
-const targetAvailability = new Map<string, TargetAvailability>()
-
 export function setTargetAvailability(
-  targetName: string,
+  runtime: AccountRuntime,
   next: { status: 'ready' | 'unavailable', cause?: string },
 ): void {
-  targetAvailability.set(targetName, {
-    ...next,
-    updatedAt: Date.now(),
-  })
+  runtime.availability = { ...next, updatedAt: Date.now() }
 }
 
 export function getTargetAvailability(
-  targetName: string,
+  runtime: AccountRuntime,
 ): TargetAvailability | undefined {
-  return targetAvailability.get(targetName)
-}
-
-export function clearTargetAvailability(): void {
-  targetAvailability.clear()
+  return runtime.availability
 }
 
 export function isM365OnlyRouting(): boolean {
@@ -153,7 +146,6 @@ export function resetAccountRuntimes(): void {
       runtime.rateLimiter.reset()
     }
   }
-  targetAvailability.clear()
   disableAccountRouting()
   accountContext.disable()
 }
@@ -162,6 +154,31 @@ export function disableAccountRouting(): void {
   accountRuntimes = new Map([[legacyRuntime.name, legacyRuntime]])
   defaultRuntime = legacyRuntime
   routing = undefined
+}
+
+export interface RoutingTargetView {
+  name: string
+  hostname: string
+  runtime: AccountRuntime
+  isDefault: boolean
+}
+
+/** Committed targets with their hostnames, for projections without an account manager. */
+export function getRoutingTargets(): RoutingTargetView[] {
+  if (!routing)
+    return []
+  const hostnames = new Map<string, string>()
+  for (const [hostname, name] of routing.hostnames)
+    hostnames.set(name, hostname)
+
+  const views: RoutingTargetView[] = []
+  for (const [name, runtime] of accountRuntimes) {
+    const hostname = hostnames.get(name)
+    if (hostname === undefined)
+      continue
+    views.push({ name, hostname, runtime, isDefault: name === routing.defaultAccount })
+  }
+  return views
 }
 
 export function getCurrentAccountRuntime(): AccountRuntime {
