@@ -32,10 +32,6 @@ export interface DecisionsTranslationResult {
   questions: Array<DecisionsQuestionMapping>
 }
 
-function invalidChoice(message: string): never {
-  throw new TranslationFailure(message, { status: 400, kind: 'invalid_decisions_choice' })
-}
-
 function unsupportedInput(message: string): never {
   throw new TranslationFailure(message, { status: 400, kind: 'unsupported_decisions_input_item' })
 }
@@ -115,31 +111,22 @@ function translateChoiceQuestion(
   question: DecisionsChoiceQuestion,
   key: string,
 ): { systemOne: SystemOneQuestion, mapping: DecisionsQuestionMapping } {
-  const seen = new Set<string>()
-  for (const choice of question.choices) {
-    const canonical = `${typeof choice.value}:${String(choice.value)}`
-    if (seen.has(canonical))
-      invalidChoice('Duplicate choice values are not supported.')
-    seen.add(canonical)
-  }
-
-  const useNatural = question.choices.every(choice =>
-    typeof choice.value === 'string' && choice.value.length > 0,
-  ) && new Set(question.choices.map(choice => choice.value)).size === question.choices.length
-
+  // `c{index}` keys are deliberately synthetic for every choice. Arbitrary
+  // user strings (including `__proto__`) must round-trip through
+  // `probabilities` records, and Zod's record parser drops prototype-like own
+  // keys, so a "natural" value key would turn a complete valid response into
+  // a false 502. The original value stays recoverable through `choiceValues`.
   const criteria = new Map<string, string | null>()
   const choiceValues: Array<DecisionsChoiceMapping> = []
 
   question.choices.forEach((choice, index) => {
-    const choiceKey = useNatural ? choice.value as string : `c${index}`
+    const choiceKey = `c${index}`
     const label = typeof choice.value === 'boolean'
       ? String(choice.value)
       : JSON.stringify(choice.value)
-    const description = useNatural
-      ? (choice.description ?? null)
-      : (choice.description === undefined
-          ? label
-          : `${label}: ${choice.description}`)
+    const description = choice.description === undefined
+      ? label
+      : `${label}: ${choice.description}`
 
     criteria.set(choiceKey, description)
     choiceValues.push({ key: choiceKey, value: choice.value })

@@ -74,6 +74,9 @@ function assertMessageSupported(message: DecisionsMessage): void {
 }
 
 function assertQuestionSupported(question: DecisionsQuestion): void {
+  if (question.type === 'choice')
+    assertChoiceValuesUnique(question)
+
   if (typeof question.instructions === 'string')
     return
 
@@ -87,6 +90,21 @@ function assertQuestionSupported(question: DecisionsQuestion): void {
         'Prompt cache breakpoints are not supported by this proxy.',
       )
     }
+  }
+}
+
+/**
+ * Typed-value uniqueness is part of admission, not translation: rejecting it
+ * here keeps the 400 stable on a cold catalog, where a later rejection would
+ * first burn a GET /models (and surface a catalog failure instead).
+ */
+function assertChoiceValuesUnique(question: Extract<DecisionsQuestion, { type: 'choice' }>): void {
+  const seen = new Set<string>()
+  for (const choice of question.choices) {
+    const canonical = `${typeof choice.value}:${String(choice.value)}`
+    if (seen.has(canonical))
+      unsupported('invalid_decisions_choice', 'Duplicate choice values are not supported.')
+    seen.add(canonical)
   }
 }
 

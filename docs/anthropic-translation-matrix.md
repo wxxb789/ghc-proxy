@@ -4,6 +4,13 @@ This matrix documents the current Anthropic translator behavior for the chat-com
 
 For the newer per-model routing behavior, including the Anthropic <-> Responses path, see [Messages Routing and Translation](./messages-routing-and-translation.md).
 
+## Other protocol translations
+
+This matrix covers Anthropic <-> OpenAI Chat Completions only. The Decisions
+route translates OpenAI Decisions to Copilot System One; see
+[Decisions API](./docs/design/decisions-api.md) for its supported subset, its
+exact `/v1/systemone` admission gate, and its unverified live contract status.
+
 ## Anthropic Request -> OpenAI Request
 
 | Feature | Status | Notes |

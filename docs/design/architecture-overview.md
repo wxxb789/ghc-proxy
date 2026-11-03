@@ -144,6 +144,7 @@ Root OpenAI-compatible routes are mirrored under `/v1`. Anthropic Messages is
 | `GET /responses/:responseId/input_items`, `GET /v1/responses/:responseId/input_items` | OpenAI | List stored/upstream response input items |
 | `DELETE /responses/:responseId`, `DELETE /v1/responses/:responseId` | OpenAI | Delete a stored/upstream response |
 | `POST /embeddings`, `POST /v1/embeddings` | OpenAI | Embeddings |
+| `POST /decisions`, `POST /v1/decisions` | OpenAI | Decisions subset translated directly to Copilot `/v1/systemone`; capacity-only retry and no strategy fallback |
 | `GET /models`, `GET /v1/models` | OpenAI | List available models |
 | `GET /token` | Proxy | Return the current Copilot token state |
 | `GET /usage` | Proxy | Fetch Copilot quota/usage statistics |
@@ -183,6 +184,14 @@ Route handlers like messages and chat-completions supply their own config object
 ## Endpoint Compatibility Notes
 
 `POST /embeddings` and `POST /v1/embeddings` remain OpenAI-compatible at the proxy boundary. When Copilot upstream expects a stricter request shape, the proxy normalizes internally before forwarding, for example converting a single string `input` into a one-element string array.
+
+`POST /decisions` and `POST /v1/decisions` are a direct JSON path for the
+supported OpenAI Decisions subset. The handler validates the public envelope,
+rejects unsupported evidence before loading the model catalog, requires the
+resolved model to advertise `/v1/systemone`, and calls the existing Copilot
+client with capacity-only retry. It does not enter `ExecutionStrategy`, the chat
+planning pipeline, streaming, or model fallback. See
+[Decisions API](decisions-api.md).
 
 `POST /responses` and `POST /v1/responses` stay close to passthrough by default. Before dispatch, the handler applies the Responses input policy, tool-schema normalization, optional context management, per-model parameter filters, and output/reasoning clamps. The strategy then stabilizes stream IDs, forwards events, and observes terminal `response.completed`, `response.incomplete`, and `response.failed` events.
 

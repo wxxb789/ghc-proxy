@@ -26,8 +26,8 @@ compatibility — if it fails, the package must not ship.
 | Group | Exports |
 |-------|---------|
 | Model builders | `buildModel()`, `buildGptModel()`, `buildVisionModel()`, `buildModelsResponse()`, `buildResponsesResult()` |
-| App factory | `createApp()` — assembles selected real API route plugins under `/v1`; it is not the full production server |
-| Mock factories | `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()`, `mockChatCompletions()`, `mockGetResponse()`, `mockGetResponseInputItems()`, `mockCreateResponseInputTokens()`, `mockDeleteResponse()`, `mockEmulatorCreateResponses()` |
+| App factory | `createApp()` — assembles selected real API route plugins under `/v1`; it is not the full production server. The selector includes `messages`, `responses`, `completions`, `embeddings`, `models`, `decisions`, and `all` |
+| Mock factories | `mockNonStreamingResponse()`, `mockStreamingResponse()`, `mockResponses()`, `mockMessages()`, `mockEmbeddings()`, `mockChatCompletions()`, `mockSystemOne()`, `mockGetResponse()`, `mockGetResponseInputItems()`, `mockCreateResponseInputTokens()`, `mockDeleteResponse()`, `mockEmulatorCreateResponses()` |
 | SSE utilities | `parseSse()` |
 | State isolation | `saveStateSnapshot()`, `restoreStateSnapshot()`, `setupDefaultTestState()` |
 | Config isolation | `clearConfig()` — clears only the in-memory cached config object |
@@ -66,9 +66,9 @@ compatibility — if it fails, the package must not ship.
     built deep inside the request path.
 
   The handlers that bypass `runPipeline` (`handleEmbeddingsCore`,
-  `handleModelsCore`, and the `/responses/{id}` resource handlers) also take
-  an optional `client`, so a new test can inject one instead of patching the
-  prototype. Prefer that when calling those handlers directly.
+  `handleModelsCore`, `handleDecisionsCore`, and the `/responses/{id}` resource
+  handlers) also take an optional `client`, so a new test can inject one instead
+  of patching the prototype. Prefer that when calling those handlers directly.
 - **Bun-native APIs are fine here.** Unlike `src/`, the test runtime is
   always Bun.
 - **No fixture files larger than ~5KB inline.** Move large captured payloads

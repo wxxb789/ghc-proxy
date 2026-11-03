@@ -10,6 +10,7 @@ Architecture and design documentation for ghc-proxy.
 | [Module Structure](module-structure.md) | Source code organization and responsibility of each module |
 | [Execution Strategy](execution-strategy.md) | The `ExecutionStrategy` and `runPipeline()` patterns shared by model-generation routes |
 | [Translation Pipeline](translation-pipeline.md) | Protocol translation architecture (Anthropic <-> OpenAI, Anthropic <-> Responses) |
+| [Decisions API](decisions-api.md) | Public Decisions subset, System One translation, model admission, capacity-only retry, and error behavior |
 | [Model Routing](model-routing.md) | Model resolution, capability detection, execution path selection, and small-model routing |
 | [Streaming](streaming.md) | SSE streaming architecture, per-path translation, and error recovery |
 | [Error Handling](error-handling.md) | Error classification, validation, translation policy, and error flow |

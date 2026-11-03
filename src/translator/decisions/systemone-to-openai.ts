@@ -98,9 +98,10 @@ function translateUsage(usage: ParsedUsage): DecisionsUsage {
 function translatePredicateAnswer(
   answer: SystemOneAnswer,
   mapping: DecisionsQuestionMapping,
+  questionIndex: number,
 ): DecisionsAnswer {
   if (answer.type !== 'noul')
-    invalidResponse(`Upstream answer for ${mapping.key} is not a predicate answer.`)
+    invalidResponse(`Upstream answer for questions[${questionIndex}] is not a predicate answer.`)
 
   return {
     type: 'predicate',
@@ -112,9 +113,10 @@ function translatePredicateAnswer(
 function translateChoiceAnswer(
   answer: SystemOneAnswer,
   mapping: DecisionsQuestionMapping,
+  questionIndex: number,
 ): DecisionsAnswer {
   if (answer.type !== 'choice')
-    invalidResponse(`Upstream answer for ${mapping.key} is not a choice answer.`)
+    invalidResponse(`Upstream answer for questions[${questionIndex}] is not a choice answer.`)
 
   const choiceValues = mapping.choiceValues ?? []
   const keys = choiceValues.map(choice => choice.key)
@@ -147,9 +149,10 @@ function translateChoiceAnswer(
 function translateScoreAnswer(
   answer: SystemOneAnswer,
   mapping: DecisionsQuestionMapping,
+  questionIndex: number,
 ): DecisionsAnswer {
   if (answer.type !== 'score')
-    invalidResponse(`Upstream answer for ${mapping.key} is not a score answer.`)
+    invalidResponse(`Upstream answer for questions[${questionIndex}] is not a score answer.`)
 
   const labels = mapping.scoreLabels ?? []
   const expectedKeys = labels.map((_, index) => String(index))
@@ -159,7 +162,7 @@ function translateScoreAnswer(
     answeredKeys.length !== expectedKeys.length
     || answeredKeys.some(key => !expectedKeys.includes(key))
   ) {
-    invalidResponse(`Upstream score answer for ${mapping.key} has mismatched probabilities.`)
+    invalidResponse(`Upstream score answer for questions[${questionIndex}] has mismatched probabilities.`)
   }
 
   return {
@@ -178,17 +181,18 @@ function translateScoreAnswer(
 function translateAnswer(
   answer: SystemOneAnswer,
   mapping: DecisionsQuestionMapping,
+  questionIndex: number,
 ): DecisionsAnswer {
   if (answer.type === 'refusal')
     return { type: 'refusal', name: mapping.name }
 
   switch (mapping.kind) {
     case 'predicate':
-      return translatePredicateAnswer(answer, mapping)
+      return translatePredicateAnswer(answer, mapping, questionIndex)
     case 'choice':
-      return translateChoiceAnswer(answer, mapping)
+      return translateChoiceAnswer(answer, mapping, questionIndex)
     case 'score':
-      return translateScoreAnswer(answer, mapping)
+      return translateScoreAnswer(answer, mapping, questionIndex)
   }
 }
 
@@ -211,11 +215,11 @@ export function translateDecisionsResponse(
     invalidResponse('Upstream decisions response has missing or extra answers.')
   }
 
-  const answers = translation.questions.map((mapping) => {
+  const answers = translation.questions.map((mapping, index) => {
     const answer = response.answers[mapping.key] as SystemOneAnswer | undefined
     if (!answer)
-      invalidResponse(`Upstream decisions response is missing answer ${mapping.key}.`)
-    return translateAnswer(answer, mapping)
+      invalidResponse(`Upstream decisions response is missing the answer for questions[${index}].`)
+    return translateAnswer(answer, mapping, index)
   })
 
   return {

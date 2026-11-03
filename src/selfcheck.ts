@@ -293,6 +293,32 @@ async function probeHttpErrorTransportContract(): Promise<void> {
       },
       status: 400,
     })
+
+    const decisions = await requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/v1/decisions', {
+      body: JSON.stringify({
+        model: 'microsoft-decision-1',
+        input: 'probe',
+        questions: [{
+          type: 'predicate',
+          instructions: [{
+            type: 'input_image',
+            image_url: 'https://example.invalid/probe.png',
+          }],
+        }],
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+    assertHttpErrorEnvelope(decisions, 'decisions rejection', {
+      body: {
+        error: {
+          code: 'unsupported_decisions_image',
+          message: 'Image input is not supported by this proxy.',
+          type: 'translation_error',
+        },
+      },
+      status: 400,
+    })
   }
   finally {
     await listener?.close(true)

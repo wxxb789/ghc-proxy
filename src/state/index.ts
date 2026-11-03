@@ -17,5 +17,5 @@ export {
 } from './account-runtime'
 export type { AccountRuntime } from './account-runtime'
 export { configStore } from './config-store'
-export { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from './model-cache'
+export { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT, SYSTEMONE_ENDPOINT } from './model-cache'
 export { runtimeStore } from './runtime'

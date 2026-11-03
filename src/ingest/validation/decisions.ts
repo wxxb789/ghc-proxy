@@ -46,9 +46,24 @@ function addJsonLimitIssues(
 ): void {
   let values = 0
   let maxDepth = 0
+  let depthOverflow = false
+  let valueOverflow = false
 
+  // Bound the walk itself, not only the reported limits: JSON.parse can hand
+  // us nesting far deeper than the cap, and recursing to the leaf first would
+  // overflow the stack before any issue is recorded. Stop as soon as a limit
+  // is crossed so the response is always the over-limit 400.
   const walk = (value: unknown, depth: number): void => {
     values++
+    if (depth > MAX_JSON_CONTAINER_LEVELS) {
+      depthOverflow = true
+      maxDepth = depth
+      return
+    }
+    if (values > MAX_JSON_VALUES) {
+      valueOverflow = true
+      return
+    }
     if (typeof value !== 'object' || value === null)
       return
     maxDepth = Math.max(maxDepth, depth)
@@ -63,7 +78,7 @@ function addJsonLimitIssues(
 
   walk(data, 1)
 
-  if (maxDepth > MAX_JSON_CONTAINER_LEVELS) {
+  if (depthOverflow || maxDepth > MAX_JSON_CONTAINER_LEVELS) {
     ctx.addIssue({
       code: 'custom',
       path: ['data'],
@@ -71,13 +86,16 @@ function addJsonLimitIssues(
     })
   }
 
-  if (values > MAX_JSON_VALUES) {
+  if (valueOverflow || values > MAX_JSON_VALUES) {
     ctx.addIssue({
       code: 'custom',
       path: ['data'],
       message: `input_json.data exceeds ${MAX_JSON_VALUES} values`,
     })
   }
+
+  if (depthOverflow || valueOverflow)
+    return
 
   try {
     const bytes = new TextEncoder().encode(JSON.stringify(data)).byteLength

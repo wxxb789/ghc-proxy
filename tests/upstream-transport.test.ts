@@ -1,4 +1,5 @@
 import type { ExecutionStrategy, SSEOutput } from '~/lib/execution-strategy'
+import type { DecisionsQuestionMapping } from '~/translator/decisions/mapping'
 
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import consola from 'consola'
@@ -11,13 +12,16 @@ import {
   TerminalUpstreamRecoveryError,
   UpstreamRequestQueue,
 } from '~/clients/upstream-queue'
+import { HTTPError } from '~/lib/error'
 import { runStrategy } from '~/lib/execution-strategy'
 import {
   disableIdleTimeout,
   hasStreamingFlag,
   hasStreamingResponsesQuery,
 } from '~/lib/request-timeout'
-import { createUpstreamSignal, isClientAbortError } from '~/lib/upstream-signal'
+import { isTimeoutLikeError } from '~/lib/timeout-error'
+import { ClientAbortError, createUpstreamSignal, isClientAbortError } from '~/lib/upstream-signal'
+import { normalizeDecisionsUpstreamError } from '~/translator/decisions/errors'
 
 describe('parseRetryAfterMs', () => {
   test('parses delta seconds', () => {
@@ -1183,5 +1187,395 @@ describe('completion POSTs are not replayed on ambiguous upstream failures', () 
 
     await client.getModels()
     expect(calls.n).toBe(2)
+  })
+})
+
+describe('systemone transport', () => {
+  const originalConsolaError = consola.error
+
+  afterEach(() => {
+    consola.error = originalConsolaError
+  })
+
+  test('normalizes validation evidence before the shared upstream logger sees it', async () => {
+    let logged = 0
+    consola.error = ((..._args: unknown[]) => {
+      logged++
+    }) as typeof consola.error
+    const questions: Array<DecisionsQuestionMapping> = [{
+      key: 'q0',
+      name: null,
+      kind: 'choice',
+      choiceValues: [
+        { key: 'c0', value: true },
+        { key: 'c1', value: false },
+      ],
+    }]
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        fetch: ((async () => Response.json({
+          detail: [{
+            loc: ['body', 'questions', 'q0', 'criteria', 'c1'],
+            msg: 'bad choice evidence',
+            type: 'value_error',
+            input: 'SENSITIVE EVIDENCE',
+          }],
+        }, { status: 422 })) as unknown) as typeof fetch,
+      },
+    )
+
+    let error: unknown
+    try {
+      await client.createSystemOne(
+        { model: 'microsoft-decision-1', state: 'evidence', questions: {} },
+        {
+          errorMapper: (message, response) =>
+            normalizeDecisionsUpstreamError(message, response, questions),
+        },
+      )
+    }
+    catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(HTTPError)
+    const httpError = error as HTTPError
+    expect(httpError.status).toBe(422)
+    expect(httpError.body.error).toMatchObject({
+      type: 'invalid_request_error',
+      param: 'questions[0].choices[1]',
+      code: 'upstream_validation_error',
+      details: [{
+        path: 'questions[0].choices[1]',
+        message: 'bad choice evidence',
+        code: 'value_error',
+      }],
+    })
+    expect(JSON.stringify(httpError.body)).not.toContain('SENSITIVE EVIDENCE')
+    expect(logged).toBe(0)
+  })
+
+  test('posts the translated payload to /v1/systemone with the caller signal', async () => {
+    let capturedUrl = ''
+    let capturedInit: RequestInit | undefined
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        fetch: ((async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          capturedUrl = String(input)
+          capturedInit = init
+          return Response.json({
+            model: 'microsoft-decision-1',
+            answers: {},
+            usage: { input_tokens: 1, output_tokens: 1 },
+          })
+        }) as unknown) as typeof fetch,
+      },
+    )
+    const controller = new AbortController()
+    const payload = {
+      model: 'microsoft-decision-1',
+      state: 'evidence',
+      questions: {
+        q0: { type: 'noul' as const, instructions: 'Is it?' },
+      },
+    }
+
+    await client.createSystemOne(payload, { signal: controller.signal })
+
+    expect(capturedUrl.endsWith('/v1/systemone')).toBe(true)
+    expect(capturedInit?.method).toBe('POST')
+    expect(capturedInit?.signal).toBe(controller.signal)
+    expect(JSON.parse(String(capturedInit?.body))).toEqual(payload)
+    const headers = new Headers(capturedInit?.headers)
+    expect(headers.get('authorization')).toBe('Bearer test-token')
+    expect(headers.get('copilot-integration-id')).toBe('vscode-chat')
+  })
+
+  test('replays capacity failures but not ambiguous 5xx responses', async () => {
+    consola.error = ((..._args: unknown[]) => {}) as typeof consola.error
+    const valid = {
+      model: 'microsoft-decision-1',
+      answers: {
+        q0: {
+          type: 'choice',
+          choice: 'c0',
+          confidence: 0.9,
+          probabilities: { c0: 0.9, c1: 0.1 },
+        },
+      },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+
+    function buildClient(status: number, calls: { n: number }) {
+      let now = 1_000
+      const requestQueue = new UpstreamRequestQueue(
+        { concurrency: 1, maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1 },
+        {
+          now: () => now,
+          sleep: (ms) => {
+            now += ms
+            return Promise.resolve()
+          },
+          logger: { warn: () => {} },
+          setTimeout: ((_cb: () => void) => undefined as unknown as ReturnType<typeof setTimeout>) as typeof setTimeout,
+          clearTimeout: (() => {}) as typeof clearTimeout,
+        },
+      )
+      return new CopilotClient(
+        { copilotToken: 'test-token' },
+        { accountType: 'individual', vsCodeVersion: '1.99.0' },
+        {
+          requestQueue,
+          fetch: ((async () => {
+            calls.n++
+            if (calls.n === 1) {
+              return new Response('busy', { status })
+            }
+            return Response.json(valid)
+          }) as unknown) as typeof fetch,
+        },
+      )
+    }
+
+    for (const status of [429, 529]) {
+      const calls = { n: 0 }
+      await buildClient(status, calls).createSystemOne({
+        model: 'microsoft-decision-1',
+        state: 'evidence',
+        questions: {},
+      })
+      expect(calls.n).toBe(2)
+    }
+
+    const calls = { n: 0 }
+    await expect(buildClient(500, calls).createSystemOne({
+      model: 'microsoft-decision-1',
+      state: 'evidence',
+      questions: {},
+    })).rejects.toMatchObject({ status: 500 })
+    expect(calls.n).toBe(1)
+  })
+
+  test('prevents dispatch when the caller aborts during queue wait', async () => {
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1 },
+      { logger: { warn: () => {} } },
+    )
+    const firstStarted = Promise.withResolvers<void>()
+    const heldResponse = Promise.withResolvers<Response>()
+    const firstPromise = requestQueue.dispatch(
+      () => {
+        firstStarted.resolve()
+        return heldResponse.promise
+      },
+      { url: 'https://api.githubcopilot.com/held' },
+    )
+    await firstStarted.promise
+    let fetchCalls = 0
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        fetch: ((async () => {
+          fetchCalls++
+          return Response.json({})
+        }) as unknown) as typeof fetch,
+      },
+    )
+    const controller = new AbortController()
+
+    const pending = client.createSystemOne({
+      model: 'microsoft-decision-1',
+      state: 'evidence',
+      questions: {},
+    }, { signal: controller.signal })
+    for (let index = 0; index < 20; index++) {
+      if (requestQueue.snapshot().pending > 0)
+        break
+      await Promise.resolve()
+    }
+    expect(requestQueue.snapshot().pending).toBe(1)
+    controller.abort('cancelled')
+
+    await expect(pending).rejects.toBe('cancelled')
+    expect(fetchCalls).toBe(0)
+
+    heldResponse.resolve(new Response('ok'))
+    const first = await firstPromise
+    first.release()
+  })
+
+  test('releases the lease when the caller aborts during the body read', async () => {
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1 },
+      { logger: { warn: () => {} } },
+    )
+    const fetchStarted = Promise.withResolvers<void>()
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        fetch: ((async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          const signal = init?.signal
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal?.addEventListener('abort', () => controller.error(signal.reason), {
+                once: true,
+              })
+            },
+          })
+          fetchStarted.resolve()
+          return new Response(stream, { status: 200 })
+        }) as unknown) as typeof fetch,
+      },
+    )
+    const controller = new AbortController()
+
+    const pending = client.createSystemOne({
+      model: 'microsoft-decision-1',
+      state: 'evidence',
+      questions: {},
+    }, { signal: controller.signal })
+    await fetchStarted.promise
+    controller.abort()
+
+    await expect(pending).rejects.toBeDefined()
+    expect(requestQueue.snapshot().active).toBe(0)
+  })
+})
+
+describe('decisions error-body transport', () => {
+  const originalConsolaError = consola.error
+
+  afterEach(() => {
+    consola.error = originalConsolaError
+  })
+
+  test('preserves a client abort while the error body is read', async () => {
+    consola.error = ((..._args: unknown[]) => {}) as typeof consola.error
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1 },
+      { logger: { warn: () => {} } },
+    )
+    const bodyStarted = Promise.withResolvers<void>()
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        fetch: ((async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          const signal = init?.signal
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              bodyStarted.resolve()
+              signal?.addEventListener('abort', () => controller.error(signal.reason), {
+                once: true,
+              })
+            },
+          })
+          return new Response(stream, { status: 422 })
+        }) as unknown) as typeof fetch,
+      },
+    )
+    const questions: Array<DecisionsQuestionMapping> = [{
+      key: 'q0',
+      name: null,
+      kind: 'choice',
+      choiceValues: [
+        { key: 'c0', value: true },
+        { key: 'c1', value: false },
+      ],
+    }]
+    const controller = new AbortController()
+    const abortReason = new ClientAbortError()
+
+    const pending = client.createSystemOne(
+      { model: 'microsoft-decision-1', state: 'evidence', questions: {} },
+      {
+        signal: controller.signal,
+        errorMapper: (message, response) =>
+          normalizeDecisionsUpstreamError(message, response, questions),
+      },
+    )
+    await bodyStarted.promise
+    controller.abort(abortReason)
+
+    let error: unknown
+    try {
+      await pending
+    }
+    catch (caught) {
+      error = caught
+    }
+
+    expect(isClientAbortError(error)).toBe(true)
+    expect(requestQueue.snapshot().active).toBe(0)
+  })
+
+  test('preserves a deadline miss while the error body is read', async () => {
+    consola.error = ((..._args: unknown[]) => {}) as typeof consola.error
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1 },
+      { logger: { warn: () => {} } },
+    )
+    const bodyStarted = Promise.withResolvers<void>()
+    const client = new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        fetch: ((async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          const signal = init?.signal
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              bodyStarted.resolve()
+              signal?.addEventListener('abort', () => controller.error(signal.reason), {
+                once: true,
+              })
+            },
+          })
+          return new Response(stream, { status: 422 })
+        }) as unknown) as typeof fetch,
+      },
+    )
+    const questions: Array<DecisionsQuestionMapping> = [{
+      key: 'q0',
+      name: null,
+      kind: 'choice',
+      choiceValues: [
+        { key: 'c0', value: true },
+        { key: 'c1', value: false },
+      ],
+    }]
+    const controller = new AbortController()
+    const deadline = new DOMException('The operation was aborted.', 'AbortError')
+
+    const pending = client.createSystemOne(
+      { model: 'microsoft-decision-1', state: 'evidence', questions: {} },
+      {
+        signal: controller.signal,
+        errorMapper: (message, response) =>
+          normalizeDecisionsUpstreamError(message, response, questions),
+      },
+    )
+    await bodyStarted.promise
+    controller.abort(deadline)
+
+    let error: unknown
+    try {
+      await pending
+    }
+    catch (caught) {
+      error = caught
+    }
+
+    expect(isTimeoutLikeError(error)).toBe(true)
+    expect(requestQueue.snapshot().active).toBe(0)
   })
 })

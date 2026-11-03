@@ -1,8 +1,9 @@
-import type { CapturedChatCall, CapturedEmbeddingCall, CapturedResponsesCall } from './helpers'
+import type { CapturedChatCall, CapturedDecisionsCall, CapturedEmbeddingCall, CapturedResponsesCall } from './helpers'
 import type { AnthropicResponse } from '~/translator'
 import type {
   ChatCompletionChunk,
   ChatCompletionResponse,
+  DecisionsResponse,
   EmbeddingResponse,
   ResponsesResult,
 } from '~/types'
@@ -24,6 +25,7 @@ import {
   mockNonStreamingResponse,
   mockResponses,
   mockStreamingResponse,
+  mockSystemOne,
   parseSse,
   restoreStateSnapshot,
   saveStateSnapshot,
@@ -33,6 +35,7 @@ import {
 const originalCreateChatCompletions = CopilotClient.prototype.createChatCompletions
 const originalCreateEmbeddings = CopilotClient.prototype.createEmbeddings
 const originalCreateResponses = CopilotClient.prototype.createResponses
+const originalCreateSystemOne = CopilotClient.prototype.createSystemOne
 const originalState = saveStateSnapshot()
 const originalConfig = structuredClone(getCachedConfig())
 
@@ -45,6 +48,7 @@ afterEach(() => {
   CopilotClient.prototype.createChatCompletions = originalCreateChatCompletions
   CopilotClient.prototype.createEmbeddings = originalCreateEmbeddings
   CopilotClient.prototype.createResponses = originalCreateResponses
+  CopilotClient.prototype.createSystemOne = originalCreateSystemOne
   runtimeStore.requests.reset()
   restoreStateSnapshot(originalState)
 
@@ -814,6 +818,76 @@ describe('API smoke', () => {
     expect(chunks[1]?.choices[0]?.delta.tool_calls?.[0]?.function?.name).toBe('read_file')
     expect(chunks[1]?.choices[0]?.finish_reason).toBe('tool_calls')
     expect(chunks[1]?.usage?.prompt_tokens_details?.cached_tokens).toBe(35)
+  })
+
+  test('Decisions translates a valid predicate and rejects unsupported evidence before upstream', async () => {
+    modelCache.cacheModels(buildModelsResponse(buildModel('microsoft-decision-1', {
+      vendor: 'microsoft',
+      supported_endpoints: ['/v1/systemone'],
+    })))
+    const calls: Array<CapturedDecisionsCall> = []
+    CopilotClient.prototype.createSystemOne = mockSystemOne({
+      model: 'microsoft-decision-1',
+      answers: {
+        q0: { type: 'noul', noul: 0.82 },
+      },
+      usage: { input_tokens: 3, output_tokens: 1 },
+    }, calls)
+    const app = createApp('decisions')
+    const validBody = {
+      model: 'microsoft-decision-1',
+      input: 'Customer asks for a refund.',
+      questions: [{
+        type: 'predicate',
+        name: 'refund',
+        instructions: 'Is the customer asking for a refund?',
+      }],
+    }
+
+    const response = await app.handle(new Request('http://localhost/v1/decisions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(validBody),
+    }))
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as DecisionsResponse
+    expect(body).toMatchObject({
+      model: 'microsoft-decision-1',
+      answers: [{ type: 'predicate', name: 'refund', probability: 0.82 }],
+      usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.payload).toMatchObject({
+      model: 'microsoft-decision-1',
+      state: 'Customer asks for a refund.',
+      questions: { q0: { type: 'noul', instructions: 'Is the customer asking for a refund?' } },
+    })
+
+    const rejected = await app.handle(new Request('http://localhost/v1/decisions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...validBody,
+        questions: [{
+          type: 'predicate',
+          instructions: [{
+            type: 'input_image',
+            image_url: 'https://example.invalid/probe.png',
+          }],
+        }],
+      }),
+    }))
+
+    expect(rejected.status).toBe(400)
+    expect(await rejected.json()).toMatchObject({
+      error: {
+        type: 'translation_error',
+        code: 'unsupported_decisions_image',
+        message: 'Image input is not supported by this proxy.',
+      },
+    })
+    expect(calls).toHaveLength(1)
   })
 })
 

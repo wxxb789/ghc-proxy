@@ -14,6 +14,7 @@ import type {
   ModelsResponse,
   ResponsesPayload,
   ResponsesResult,
+  SystemOneRequest,
 } from '~/types'
 
 import { expect } from 'bun:test'
@@ -22,6 +23,7 @@ import { Elysia } from 'elysia'
 import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
 import { createCompletionRoutes } from '~/routes/chat-completions/route'
+import { createDecisionRoutes } from '~/routes/decisions/route'
 import { createEmbeddingRoutes } from '~/routes/embeddings/route'
 import { createMessageRoutes } from '~/routes/messages/route'
 import { createModelRoutes } from '~/routes/models/route'
@@ -59,6 +61,11 @@ export interface CapturedMessagesCall {
 
 export interface CapturedEmbeddingCall {
   payload: EmbeddingRequest
+}
+
+export interface CapturedDecisionsCall {
+  payload: SystemOneRequest
+  options?: Parameters<CopilotClient['createSystemOne']>[1]
 }
 
 export interface CapturedGetResponseCall {
@@ -194,13 +201,14 @@ type CreateChatCompletions = typeof CopilotClient.prototype.createChatCompletion
 type CreateResponses = typeof CopilotClient.prototype.createResponses
 type CreateMessages = typeof CopilotClient.prototype.createMessages
 type CreateEmbeddings = typeof CopilotClient.prototype.createEmbeddings
+type CreateSystemOne = typeof CopilotClient.prototype.createSystemOne
 type GetResponse = typeof CopilotClient.prototype.getResponse
 type GetResponseInputItems = typeof CopilotClient.prototype.getResponseInputItems
 type CreateResponseInputTokens = typeof CopilotClient.prototype.createResponseInputTokens
 type DeleteResponse = typeof CopilotClient.prototype.deleteResponse
 
 export function createApp(
-  routes: 'all' | 'messages' | 'responses' | 'completions' | 'embeddings' | 'models' = 'all',
+  routes: 'all' | 'messages' | 'responses' | 'completions' | 'embeddings' | 'models' | 'decisions' = 'all',
 ) {
   const app = new Elysia()
     .error({ HTTP: HTTPError })
@@ -229,6 +237,9 @@ export function createApp(
   }
   if (routes === 'models') {
     return app.group('/v1', a => a.use(createModelRoutes()))
+  }
+  if (routes === 'decisions') {
+    return app.group('/v1', a => a.use(createDecisionRoutes()))
   }
   return app.group('/v1', a => a.use(createCompletionRoutes()))
 }
@@ -317,6 +328,16 @@ export function mockEmbeddings(
     calls.push({ payload })
     return Promise.resolve(response)
   }) as CreateEmbeddings
+}
+
+export function mockSystemOne(
+  response: unknown,
+  calls: Array<CapturedDecisionsCall>,
+): CreateSystemOne {
+  return ((payload, options) => {
+    calls.push({ payload, options })
+    return Promise.resolve(response)
+  }) as CreateSystemOne
 }
 
 export function mockChatCompletions(

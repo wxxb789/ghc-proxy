@@ -89,7 +89,7 @@ describe('Decisions request translation', () => {
     })
   })
 
-  test('uses natural string choice keys and preserves omitted descriptions', () => {
+  test('uses synthetic index choice keys and preserves descriptions', () => {
     const translated = translate({
       questions: [{
         type: 'choice',
@@ -104,11 +104,14 @@ describe('Decisions request translation', () => {
     expect(translated.upstream.questions.q0).toEqual({
       type: 'choice',
       instructions: 'Which team?',
-      criteria: { billing: 'Billing issues', technical: null },
+      criteria: {
+        c0: '"billing": Billing issues',
+        c1: '"technical"',
+      },
     })
     expect(translated.questions[0].choiceValues).toEqual([
-      { key: 'billing', value: 'billing' },
-      { key: 'technical', value: 'technical' },
+      { key: 'c0', value: 'billing' },
+      { key: 'c1', value: 'technical' },
     ])
   })
 
@@ -216,7 +219,7 @@ describe('Decisions request translation', () => {
     })
   })
 
-  test('keeps prototype-like choice values as ordinary data', () => {
+  test('round-trips prototype-like choice values through index keys', () => {
     const translated = translate({
       questions: [{
         type: 'choice',
@@ -230,15 +233,40 @@ describe('Decisions request translation', () => {
     if (question?.type !== 'choice')
       throw new Error('Expected a choice question')
     const criteria = question.criteria
-    expect(Object.hasOwn(criteria, '__proto__')).toBe(true)
-    expect(Object.getOwnPropertyDescriptor(criteria, '__proto__')?.value).toBeNull()
-    expect(criteria.constructor).toBeNull()
-    expect(criteria.safe).toBeNull()
+    expect(Object.hasOwn(criteria, 'c0')).toBe(true)
+    expect(Object.hasOwn(criteria, 'c1')).toBe(true)
+    expect(Object.hasOwn(criteria, 'c2')).toBe(true)
     expect(translated.questions[0].choiceValues).toEqual([
-      { key: '__proto__', value: '__proto__' },
-      { key: 'constructor', value: 'constructor' },
-      { key: 'safe', value: 'safe' },
+      { key: 'c0', value: '__proto__' },
+      { key: 'c1', value: 'constructor' },
+      { key: 'c2', value: 'safe' },
     ])
+
+    const response = {
+      model: 'microsoft-decision-1',
+      answers: {
+        q0: {
+          type: 'choice',
+          choice: 'c0',
+          confidence: 0.9,
+          probabilities: { c0: 0.9, c1: 0.05, c2: 0.05 },
+        },
+      },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
+    const translatedResponse = translateDecisionsResponse(response, translated)
+
+    expect(translatedResponse.answers[0]).toMatchObject({
+      type: 'choice',
+      name: null,
+      choice: '__proto__',
+      confidence: 0.9,
+      probabilities: [
+        { value: '__proto__', probability: 0.9 },
+        { value: 'constructor', probability: 0.05 },
+        { value: 'safe', probability: 0.05 },
+      ],
+    })
   })
 })
 
@@ -358,13 +386,17 @@ describe('Decisions response translation', () => {
     expect(() => translateDecisionsResponse(response, translation)).toThrow(TranslationFailure)
   })
 
-  test('rejects out-of-range probabilities and malformed usage', () => {
+  test('rejects out-of-range probabilities', () => {
     const translation = threeQuestionTranslation()
     const response = validResponse() as Record<string, unknown>
     const answers = response.answers as Record<string, unknown>
     answers.q0 = { type: 'noul', noul: 1.5 }
     expect(() => translateDecisionsResponse(response, translation)).toThrow(TranslationFailure)
+  })
 
+  test('rejects malformed usage on an otherwise valid response', () => {
+    const translation = threeQuestionTranslation()
+    const response = validResponse() as Record<string, unknown>
     const usage = response.usage as Record<string, unknown>
     usage.input_tokens = -1
     expect(() => translateDecisionsResponse(response, translation)).toThrow(TranslationFailure)

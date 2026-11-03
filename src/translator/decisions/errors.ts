@@ -2,6 +2,8 @@ import type { DecisionsQuestionMapping } from './mapping'
 import type { HTTPErrorBody } from '~/lib/error'
 
 import { HTTPError } from '~/lib/error'
+import { isTimeoutLikeError } from '~/lib/timeout-error'
+import { isClientAbortError } from '~/lib/upstream-signal'
 
 const MAX_ERROR_MESSAGE = 500
 const MAX_ERROR_DETAILS = 20
@@ -33,6 +35,25 @@ function errorTypeForStatus(status: number): string {
   if (status >= 500)
     return 'server_error'
   return 'invalid_request_error'
+}
+/**
+ * Map a System One `error.param` onto the public Decisions shape. Internal
+ * paths (`state`, `questions.qN[.criteria.xN]`) never cross the boundary as-is:
+ * a public client cannot locate `state` or a `qN` key in the request it sent.
+ * Unmappable params are dropped rather than leaked.
+ */
+function mapStructuredParam(
+  value: string,
+  questions: Array<DecisionsQuestionMapping> | undefined,
+): string | undefined {
+  if (!SAFE_TOKEN_RE.test(value))
+    return undefined
+  if (value === 'state')
+    return 'input'
+  if (!value.startsWith('questions.'))
+    return undefined
+  const location = value.split('.')
+  return mapQuestionPath(location, questions)
 }
 
 function mapQuestionPath(
@@ -123,7 +144,13 @@ export async function normalizeDecisionsUpstreamError(
   try {
     raw = await response.text()
   }
-  catch {
+  catch (error) {
+    // A failed error-body read must not reclassify the request: a cancelled
+    // body keeps its client-abort classification, and a deadline miss stays a
+    // timeout. Only genuinely unreadable bodies fall back to an empty body so
+    // the upstream status and Retry-After still reach the client.
+    if (isClientAbortError(error) || isTimeoutLikeError(error))
+      throw error
     raw = ''
   }
 
@@ -148,8 +175,8 @@ export async function normalizeDecisionsUpstreamError(
     if (typeof structured === 'object' && structured !== null && !Array.isArray(structured)) {
       const error = structured as Record<string, unknown>
       errorMessage = boundedMessage(error.message, message)
-      if (typeof error.param === 'string' && SAFE_TOKEN_RE.test(error.param))
-        param = error.param
+      if (typeof error.param === 'string')
+        param = mapStructuredParam(error.param, questions)
       if (typeof error.code === 'string' && SAFE_TOKEN_RE.test(error.code))
         code = error.code
     }
