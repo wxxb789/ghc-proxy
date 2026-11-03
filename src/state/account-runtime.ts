@@ -1,4 +1,4 @@
-import type { CompiledAccountRouting, TargetKind } from '~/lib/account-routing'
+import type { CompiledAccountRouting } from '~/lib/account-routing'
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 
@@ -120,7 +120,6 @@ export interface TargetAvailability {
 
 const targetAvailability = new Map<string, TargetAvailability>()
 
-/** Records whether a target can currently serve traffic, with a bounded cause. */
 export function setTargetAvailability(
   targetName: string,
   next: { status: 'ready' | 'unavailable', cause?: string },
@@ -141,11 +140,6 @@ export function clearTargetAvailability(): void {
   targetAvailability.clear()
 }
 
-export function getTargetKind(targetName: string): TargetKind | undefined {
-  return routing?.kinds.get(targetName)
-}
-
-/** True when the active routing table holds the M365 target and nothing else. */
 export function isM365OnlyRouting(): boolean {
   if (!routing || routing.kinds.size === 0)
     return false

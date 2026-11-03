@@ -754,7 +754,8 @@ describe('M365 target mutations', () => {
   })
 
   test('rolls back when persistence fails', async () => {
-    const manager = new AccountManager(initialState(), m365Dependencies(async () => {
+    const manager = new AccountManager(initialState(), m365Dependencies(async (_input, applyRuntime) => {
+      applyRuntime()
       throw new Error('disk full')
     }))
 

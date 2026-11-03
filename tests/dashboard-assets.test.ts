@@ -467,6 +467,13 @@ describe('dashboard embedded state', () => {
       },
     })
 
+    const panel = new FakeElement()
+    panel.hidden = true
+    elements.set('m365-panel', panel)
+    const active = new FakeElement()
+    active.hidden = true
+    elements.set('m365-active', active)
+
     await runtime.refreshDashboardMetadata()
 
     expect(elements.get('m365-panel')?.hidden).toBe(false)

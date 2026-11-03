@@ -448,10 +448,7 @@ async function setupRoutedAccounts(
     routingConfig,
     credentials ? Object.keys(credentials.accounts) : [],
   )
-  const targetNames = Array.from(new Set([
-    compiled.defaultAccount,
-    ...compiled.hostnames.values(),
-  ]))
+  const targetNames = Array.from(compiled.kinds.keys())
   const githubTargets = targetNames.filter(name => compiled.kinds.get(name) === 'github')
   if (githubTargets.length > 0 && !credentials) {
     throw new Error('accountRouting requires credentials.json with every referenced named account.')

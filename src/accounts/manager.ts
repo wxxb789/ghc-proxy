@@ -587,7 +587,6 @@ export class AccountManager {
     })
   }
 
-  /** Changes the M365 target's broker account or hostname. */
   async configureM365Target(
     input: { account?: string | null, hostname?: string },
   ): Promise<void> {
@@ -622,11 +621,15 @@ export class AccountManager {
         ...current,
         hostnames: { ...hostnames, [hostname]: RESERVED_M365_TARGET },
       }
-      const runtime = createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
-        mscAuthAccount: account,
-        mscAuthUpn: getCachedConfig().m365?.upn,
-        auth: this.authDefaults,
-      })
+      const accountChanged = (input.account !== undefined)
+        && (account ?? undefined) !== currentRuntime.auth.mscAuthAccount
+      const runtime = accountChanged
+        ? createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
+            mscAuthAccount: account,
+            mscAuthUpn: getCachedConfig().m365?.upn,
+            auth: this.authDefaults,
+          })
+        : currentRuntime
       const nextRuntimes = new Map(this.runtimes)
       nextRuntimes.set(RESERVED_M365_TARGET, runtime)
       const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
@@ -653,6 +656,9 @@ export class AccountManager {
           { cause: error },
         )
       }
+
+      if (!accountChanged)
+        return
 
       resetMscTokenCache()
       await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
@@ -892,7 +898,6 @@ function parseGheDomain(value: string | undefined): string | undefined {
   }
 }
 
-/** Credential-backed targets; the reserved M365 name is a target, not a credential. */
 function githubAccountNamesOf(runtimes: Map<string, AccountRuntime>): string[] {
   return Array.from(runtimes.keys()).filter(name => name !== RESERVED_M365_TARGET)
 }

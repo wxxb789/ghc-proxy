@@ -8,6 +8,9 @@
  * Live refresh free of helper subprocesses.
  */
 import type { AccountManagementSnapshot } from '~/accounts/manager'
+import type { MscAccount } from '~/clients/msc-auth'
+import type { TargetKind } from '~/lib/account-routing'
+import type { TargetAvailability } from '~/state/account-runtime'
 
 import process from 'node:process'
 
@@ -20,7 +23,7 @@ export interface M365Readiness {
   platformSupported: boolean
   helperAvailable: boolean
   accountCount?: number
-  accounts?: Array<{ upn: string, homeAccountId: string, environment: string }>
+  accounts?: MscAccount[]
   failedStep?: 'platform' | 'helper' | 'accounts'
   error?: string
 }
@@ -28,7 +31,7 @@ export interface M365Readiness {
 export interface M365RoutingRow {
   target: string
   hostname: string
-  kind: 'github' | 'm365'
+  kind: TargetKind
   isDefault: boolean
 }
 
@@ -39,7 +42,7 @@ export interface M365DashboardState {
   tokenExpiresAt?: string
   modelCount: number
   models: string[]
-  availability?: { status: 'ready' | 'unavailable', cause?: string, updatedAt: number }
+  availability?: TargetAvailability
   routing: M365RoutingRow[]
   client?: { baseUrl: string, model: string }
   onboarding: { status: 'available' | 'unavailable', reason?: string }
@@ -143,11 +146,7 @@ export async function probeM365Readiness(): Promise<M365Readiness> {
       platformSupported: true,
       helperAvailable: true,
       accountCount: accounts.length,
-      accounts: accounts.map(account => ({
-        upn: account.upn,
-        homeAccountId: account.homeAccountId,
-        environment: account.environment,
-      })),
+      accounts,
     }
   }
   catch (error) {

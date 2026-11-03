@@ -680,14 +680,14 @@ function renderAccountAuthentication(session) {
 
 let m365Snapshot;
 
-function fillM365Accounts(select, accounts, selected) {
+function fillM365Accounts(select, accounts) {
   const current = select.value;
   clearNode(select);
   for (const account of accounts) {
     const option = document.createElement('option');
     option.value = account.homeAccountId;
     option.textContent = account.upn + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026 (' + account.environment + ')';
-    if ((selected || current) === account.homeAccountId) option.selected = true;
+    if (current === account.homeAccountId) option.selected = true;
     select.append(option);
   }
 }
@@ -766,7 +766,7 @@ async function loadM365() {
       state.account,
       state.modelCount,
       state.models,
-      state.availability,
+      state.availability && { status: state.availability.status, cause: state.availability.cause },
       state.routing,
       state.client,
       state.onboarding,
@@ -796,7 +796,7 @@ async function probeM365() {
     const form = byId('m365-register-form');
     if (readiness.accounts && readiness.accounts.length > 0) {
       form.hidden = false;
-      fillM365Accounts(byId('m365-register-account'), readiness.accounts, undefined);
+      fillM365Accounts(byId('m365-register-account'), readiness.accounts);
       byId('m365-register-hostname').value ||= 'm365.localhost';
     } else {
       form.hidden = true;
@@ -872,7 +872,7 @@ async function removeM365() {
   }
 }
 
-async function loadAccounts(options) {
+async function loadAccounts() {
   try {
     renderAccounts(await fetchJson('/dashboard/api/accounts'));
   } catch (error) {
@@ -884,7 +884,7 @@ async function loadAccounts(options) {
     byId('account-add-panel').hidden = true;
     byId('account-auth').hidden = true;
   } finally {
-    if (!options || options.includeM365 !== false) await loadM365();
+    await loadM365();
   }
 }
 
@@ -1361,7 +1361,7 @@ async function refreshLiveViews() {
     if (dashboardState.activeView === 'accounts') {
       loads.push({
         scope: 'accounts',
-        load: function () { return loadAccounts({ includeM365: true }); },
+        load: loadAccounts,
       });
     }
     await settleLoads(loads);

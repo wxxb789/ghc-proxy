@@ -24,6 +24,7 @@ const remoteServer = {
 
 const temporaryDirs: Array<string> = []
 let previousExe: string | undefined
+let previousFetch: typeof fetch
 
 function installFakeHelper(): void {
   const dir = mkdtempSync(join(tmpdir(), 'target-gates-helper-'))
@@ -72,9 +73,21 @@ describe('per-target gates', () => {
   beforeEach(() => {
     resetMscTokenCache()
     installFakeHelper()
+    previousFetch = globalThis.fetch
+    const stub = async () =>
+      Response.json({
+        data: [{
+          id: 'claude-opus-5.5',
+          name: 'Claude Opus 5.5',
+          supported_endpoints: ['/v1/messages'],
+          capabilities: { type: 'chat' },
+        }],
+      })
+    globalThis.fetch = stub as unknown as typeof fetch
   })
 
   afterEach(() => {
+    globalThis.fetch = previousFetch
     setMscHelperRunner(undefined)
     resetMscTokenCache()
     if (previousExe === undefined)
@@ -158,7 +171,7 @@ describe('per-target gates', () => {
     expect(refusal?.status).toBe(503)
     await expect(refusal!.json()).resolves.toMatchObject({
       type: 'error',
-      error: { message: expect.stringContaining('unavailable') },
+      error: { message: expect.stringMatching(/unavailable: .+/) },
     })
   })
 
@@ -179,5 +192,6 @@ describe('per-target gates', () => {
       enforceTargetGates(requestTo('m365.localhost', '/v1/messages'), loopbackServer))
 
     expect(refusal).toBeUndefined()
+    expect(m365.models.getModelIds()).toEqual(['claude-opus-5.5'])
   })
 })
