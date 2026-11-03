@@ -12,6 +12,8 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { AccountManager, createAccountManagerPersistence } from '~/accounts/manager'
+import { createTargetRuntime } from '~/accounts/target-runtime'
+import { resetMscTokenCache, setMscHelperRunner } from '~/clients/msc-auth'
 import { compileAccountRouting } from '~/lib/account-routing'
 import { readGitHubCredentials, writeGitHubCredential } from '~/lib/credentials'
 import { createServer } from '~/server'
@@ -708,5 +710,113 @@ describe('AccountManager', () => {
     })
     expect(cleanupDefault).toHaveBeenCalledTimes(1)
     expect(cleanupAccount1).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('M365 target mutations', () => {
+  function m365Dependencies(persistM365Target?: AccountManagerPersistence['persistM365Target']) {
+    return dependencies({
+      persistence: {
+        addAccount: async (_input, applyRuntime) => applyRuntime(),
+        persistRouting: async (_routing, applyRuntime) => applyRuntime(),
+        persistM365Target: persistM365Target
+          ?? (async (_input, applyRuntime) => applyRuntime()),
+      },
+    })
+  }
+
+  beforeEach(() => {
+    resetMscTokenCache()
+    setMscHelperRunner(async () => ({ stdout: '', stderr: '', code: 2 }))
+  })
+
+  afterEach(() => {
+    setMscHelperRunner(undefined)
+    resetMscTokenCache()
+  })
+
+  test('registers the target and its hostname mapping', async () => {
+    const manager = new AccountManager(initialState(), m365Dependencies())
+
+    await manager.registerM365Target({ account: 'home-account' })
+
+    const snapshot = manager.getAccountSnapshot()
+    expect(snapshot.accounts.map(account => account.name)).toEqual(['account1', 'default', 'm365'])
+    expect(snapshot.accounts.find(account => account.name === 'm365')?.hostname)
+      .toBe('m365.localhost')
+  })
+
+  test('refuses a duplicate registration', async () => {
+    const manager = new AccountManager(initialState(), m365Dependencies())
+    await manager.registerM365Target({})
+
+    await expect(manager.registerM365Target({})).rejects.toMatchObject({ status: 409 })
+  })
+
+  test('rolls back when persistence fails', async () => {
+    const manager = new AccountManager(initialState(), m365Dependencies(async () => {
+      throw new Error('disk full')
+    }))
+
+    await expect(manager.registerM365Target({})).rejects.toMatchObject({ status: 500 })
+    expect(manager.getAccountSnapshot().accounts.map(account => account.name))
+      .toEqual(['account1', 'default'])
+  })
+
+  test('refuses to remove the only target', async () => {
+    const onlyTarget = createTargetRuntime('m365', 'm365')
+    const manager = new AccountManager({
+      routing: compileAccountRouting({
+        baseHostname: 'localhost',
+        defaultAccount: 'm365',
+        hostnames: { 'm365.localhost': 'm365' },
+      }, []),
+      runtimes: [onlyTarget],
+    }, m365Dependencies())
+
+    await expect(manager.removeM365Target()).rejects.toMatchObject({ status: 409 })
+  })
+
+  test('refuses to remove the target while it is the default', async () => {
+    const github = runtime('default', 'alice')
+    const m365 = createTargetRuntime('m365', 'm365')
+    const manager = new AccountManager({
+      routing: compileAccountRouting({
+        baseHostname: 'localhost',
+        defaultAccount: 'default',
+        hostnames: {
+          'default.localhost': 'default',
+          'm365.localhost': 'm365',
+        },
+      }, ['default']),
+      runtimes: [github, m365],
+    }, m365Dependencies())
+    await manager.setDefaultAccount('m365')
+
+    await expect(manager.removeM365Target()).rejects.toMatchObject({ status: 409 })
+  })
+
+  test('removes the target and its hostname mapping', async () => {
+    const manager = new AccountManager(initialState(), m365Dependencies())
+    await manager.registerM365Target({})
+
+    await manager.removeM365Target()
+
+    expect(manager.getAccountSnapshot().accounts.map(account => account.name))
+      .toEqual(['account1', 'default'])
+  })
+
+  test('changes the target hostname and broker account', async () => {
+    const manager = new AccountManager(initialState(), m365Dependencies())
+    await manager.registerM365Target({ account: 'first-account' })
+
+    await manager.configureM365Target({
+      account: 'second-account',
+      hostname: 'copilot.localhost',
+    })
+
+    const target = manager.getAccountSnapshot().accounts.find(account => account.name === 'm365')
+    expect(target?.hostname).toBe('copilot.localhost')
+    expect(target?.runtime.auth.mscAuthAccount).toBe('second-account')
   })
 })
