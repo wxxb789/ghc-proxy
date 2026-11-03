@@ -8,6 +8,8 @@ import { createTargetRuntime } from '~/accounts/target-runtime'
 import { resetMscTokenCache, setMscHelperRunner } from '~/clients/msc-auth'
 import { compileAccountRouting } from '~/lib/account-routing'
 import { enforceTargetGates } from '~/lib/target-gates'
+import { createServer } from '~/server'
+import { runtimeStore } from '~/state'
 import {
   configureAccountRuntimes,
   createAccountRuntime,
@@ -194,6 +196,26 @@ describe('per-target gates', () => {
 
     expect(refusal).toBeUndefined()
     expect(m365.models.getModelIds()).toEqual(['claude-opus-5.5'])
+  })
+  test('records a refused request in the request history', async () => {
+    const m365 = activate('m365-only')
+    setTargetAvailability(m365, { status: 'unavailable', cause: 'no matching broker account' })
+    setMscHelperRunner(async () => ({ stdout: '', stderr: '', code: 2 }))
+
+    const server = createServer()
+    const response = await runWithAccountRuntime(m365, () => server.handle(
+      new Request('http://m365.localhost/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-opus-5.5', messages: [] }),
+      }),
+    ))
+    await response.text()
+
+    expect(response.status).toBe(503)
+    const snapshot = runtimeStore.requests.snapshot()
+    expect(snapshot.totals.started).toBeGreaterThan(0)
+    expect(snapshot.active.some(entry => entry.endpoint === '/v1/messages')).toBe(true)
   })
 })
 

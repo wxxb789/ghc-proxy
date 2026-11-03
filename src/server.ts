@@ -194,14 +194,12 @@ export function createServer(options?: ServerOptions) {
     // (`sanitizeObservedError`). The client response is built by
     // `toErrorResponse`; nothing relies on Elysia serializing the error.
     .error({ HTTP: HTTPError })
+    // Observation runs before the target gates so a refused request is still
+    // recorded: the gates answer 400/403/503 without reaching a route, and a
+    // request that was never started cannot be completed into the history.
     // Block body, not a concise arrow: Elysia turns any non-undefined
     // `onRequest` return into the response, and a WeakMap setter returns the
     // WeakMap. `markRequestStart` is typed `: void` for the same reason.
-    .onRequest(async ({ request, server }) => {
-      const refusal = await enforceTargetGates(request, server)
-      if (refusal)
-        return refusal
-    })
     .onRequest(({ request }) => {
       const endpoint = classifyObservedEndpoint(request.url)
       if (endpoint === undefined)
@@ -215,6 +213,11 @@ export function createServer(options?: ServerOptions) {
         method: request.method,
         endpoint,
       })
+    })
+    .onRequest(async ({ request, server }) => {
+      const refusal = await enforceTargetGates(request, server)
+      if (refusal)
+        return refusal
     })
     .use(cors())
     .derive(({ request }) => ({
