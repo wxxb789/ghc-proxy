@@ -1,6 +1,7 @@
 import type { Elysia } from 'elysia'
 import type { DashboardAccountManagement } from './routes/dashboard/route'
 import { cors } from '@elysiajs/cors'
+import { enforceTargetGates } from '~/lib/target-gates'
 import { HTTPError } from './lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
 import { createRuntimeApp } from './lib/server-runtime'
@@ -47,6 +48,8 @@ export interface ServerOptions {
   accountManager?: DashboardAccountManagement
   idleTimeout?: number
   logRequests?: boolean
+  /** Port the dashboard should advertise for a target's base URL. */
+  serverPort?: number
 }
 
 /**
@@ -191,6 +194,9 @@ export function createServer(options?: ServerOptions) {
     // (`sanitizeObservedError`). The client response is built by
     // `toErrorResponse`; nothing relies on Elysia serializing the error.
     .error({ HTTP: HTTPError })
+    // Observation runs before the target gates so a refused request is still
+    // recorded: the gates answer 400/403/503 without reaching a route, and a
+    // request that was never started cannot be completed into the history.
     // Block body, not a concise arrow: Elysia turns any non-undefined
     // `onRequest` return into the response, and a WeakMap setter returns the
     // WeakMap. `markRequestStart` is typed `: void` for the same reason.
@@ -207,6 +213,11 @@ export function createServer(options?: ServerOptions) {
         method: request.method,
         endpoint,
       })
+    })
+    .onRequest(async ({ request, server }) => {
+      const refusal = await enforceTargetGates(request, server)
+      if (refusal)
+        return refusal
     })
     .use(cors())
     .derive(({ request }) => ({
@@ -272,7 +283,10 @@ export function createServer(options?: ServerOptions) {
       modelsLoaded: !!modelCache.getModels(),
       version: VERSION,
     }))
-    .use(createDashboardRoutes({ accountManager: options?.accountManager }))
+    .use(createDashboardRoutes({
+      accountManager: options?.accountManager,
+      serverPort: options?.serverPort,
+    }))
     // Root-level routes: completions, decisions, models, embeddings, responses are
     // registered here for clients that omit the /v1 prefix. Token and usage routes
     // are root-only because they are proxy-specific endpoints, not part of any

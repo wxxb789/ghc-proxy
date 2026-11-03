@@ -15,6 +15,7 @@ import type { AuthStore } from '~/state/auth'
 
 import { randomUUID } from 'node:crypto'
 import { normalizeGheDomain } from '~/clients/ghe-domain'
+import { resetMscTokenCache } from '~/clients/msc-auth'
 import {
   beginAccountManagementTransaction,
   commitAccountManagementTransaction,
@@ -22,16 +23,19 @@ import {
 } from '~/lib/account-management-transaction'
 import {
   compileAccountRouting,
+  M365_DEFAULT_HOSTNAME,
   normalizeAccountName,
   normalizeDnsHostname,
+  RESERVED_M365_TARGET,
 } from '~/lib/account-routing'
-import { readConfig, writeConfigField } from '~/lib/config'
+import { getCachedConfig, readConfig, writeConfigField } from '~/lib/config'
 import { writeNewGitHubCredential } from '~/lib/credentials'
 import { PATHS } from '~/lib/paths'
-import { configureAccountRuntimes, disableAccountRouting } from '~/state'
+import { configureAccountRuntimes, disableAccountRouting, runWithAccountRuntime } from '~/state'
 import {
   beginAccountDeviceAuthentication,
 } from './device-auth'
+import { createTargetRuntime, initializeM365Target } from './target-runtime'
 
 export interface AddAccountInput {
   accountName: string
@@ -54,6 +58,11 @@ interface PersistAccountInput extends AddAccountInput {
   routing: AccountRoutingConfig
 }
 
+export interface PersistM365TargetInput {
+  routing: AccountRoutingConfig
+  account?: string
+}
+
 export interface AccountManagerPersistence {
   addAccount: (
     input: PersistAccountInput,
@@ -61,6 +70,11 @@ export interface AccountManagerPersistence {
   ) => Promise<void>
   persistRouting: (
     routing: AccountRoutingConfig,
+    applyRuntime: () => void,
+  ) => Promise<void>
+  /** Writes the routing block and the M365 credential identity in one journal. */
+  persistM365Target?: (
+    input: PersistM365TargetInput,
     applyRuntime: () => void,
   ) => Promise<void>
 }
@@ -136,6 +150,22 @@ export function createAccountManagerPersistence(
         applyRuntime()
       })
     },
+    persistM365Target: async (input, applyRuntime) => {
+      await runPersistedAccountMutation(paths, async () => {
+        await writeConfigField('accountRouting', input.routing, {
+          configPath: paths.CONFIG_PATH,
+          failOnReadError: true,
+        })
+        await writeConfigField('m365', {
+          ...getCachedConfig().m365,
+          account: input.account,
+        }, {
+          configPath: paths.CONFIG_PATH,
+          failOnReadError: true,
+        })
+        applyRuntime()
+      })
+    },
   }
 }
 
@@ -197,6 +227,26 @@ export class AccountManager {
     }
   }
 
+  getMscAuthExe(): string | undefined {
+    return this.authDefaults.mscAuthExe
+  }
+
+  private assertHostnameAvailable(hostname: string, owner: string): void {
+    const currentOwner = this.routing.hostnames.get(hostname)
+    if (currentOwner !== undefined && currentOwner !== owner) {
+      throw new AccountManagementError(
+        `Hostname ${JSON.stringify(hostname)} already reaches account ${JSON.stringify(currentOwner)}.`,
+        409,
+      )
+    }
+    if (currentOwner === undefined && this.reservedHostnames.has(hostname)) {
+      throw new AccountManagementError(
+        `Hostname ${JSON.stringify(hostname)} is reserved by an account authentication in progress.`,
+        409,
+      )
+    }
+  }
+
   getRoutingSummary(): AccountRoutingSummary {
     return {
       baseHostname: this.routing.baseHostname,
@@ -229,7 +279,7 @@ export class AccountManager {
         defaultAccount: this.routing.defaultAccount,
         hostnames: { [hostname]: this.routing.defaultAccount },
       }
-      const nextRouting = compileAccountRouting(nextConfig, this.runtimes.keys())
+      const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
       let runtimeApplied = false
       try {
         await this.dependencies.persistence.persistRouting(nextConfig, () => {
@@ -397,7 +447,7 @@ export class AccountManager {
         ...this.routing,
         defaultAccount: accountName,
       })
-      const nextRouting = compileAccountRouting(nextConfig, this.runtimes.keys())
+      const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
       let runtimeApplied = false
       try {
         await this.dependencies.persistence.persistRouting(nextConfig, () => {
@@ -419,6 +469,202 @@ export class AccountManager {
           { cause: error },
         )
       }
+    })
+  }
+
+  /**
+   * Registers the M365 target as a route target. The routing block and the
+   * broker identity are persisted together, and a failed persistence leaves
+   * the previous table, runtimes, and configuration untouched.
+   */
+  async registerM365Target(
+    input: { account?: string | null, hostname?: string } = {},
+  ): Promise<void> {
+    if (this.stopped) {
+      throw new AccountManagementError('Account management is shutting down.', 503)
+    }
+    await this.runMutation(async () => {
+      if (this.runtimes.has(RESERVED_M365_TARGET)) {
+        throw new AccountManagementError('The M365 target is already registered.', 409)
+      }
+      const persist = this.dependencies.persistence.persistM365Target
+      if (!persist) {
+        throw new AccountManagementError(
+          'This process cannot persist target changes.',
+          409,
+        )
+      }
+
+      const current = routingConfig(this.routing)
+      const hostname = normalizeDnsHostname(input.hostname ?? M365_DEFAULT_HOSTNAME)
+      this.assertHostnameAvailable(hostname, RESERVED_M365_TARGET)
+      const account = input.account ?? getCachedConfig().m365?.account
+      const nextConfig: AccountRoutingConfig = {
+        ...current,
+        hostnames: { ...current.hostnames, [hostname]: RESERVED_M365_TARGET },
+      }
+      const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
+      const runtime = createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
+        mscAuthExe: this.authDefaults.mscAuthExe,
+        mscAuthAccount: account,
+        mscAuthUpn: getCachedConfig().m365?.upn,
+        auth: this.authDefaults,
+      })
+      const nextRuntimes = new Map(this.runtimes)
+      nextRuntimes.set(RESERVED_M365_TARGET, runtime)
+
+      try {
+        await persist({ routing: nextConfig, account }, () => {})
+      }
+      catch (error) {
+        if (error instanceof AccountManagementError) {
+          throw error
+        }
+        throw new AccountManagementError(
+          'Could not register the M365 target.',
+          500,
+          { cause: error },
+        )
+      }
+
+      await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
+      configureAccountRuntimes(nextRouting, nextRuntimes.values())
+      this.routing = nextRouting
+      this.runtimes = nextRuntimes
+    })
+  }
+
+  /** Removes the M365 target; in-flight requests finish on the old runtime. */
+  async removeM365Target(): Promise<void> {
+    if (this.stopped) {
+      throw new AccountManagementError('Account management is shutting down.', 503)
+    }
+    await this.runMutation(async () => {
+      if (!this.runtimes.has(RESERVED_M365_TARGET)) {
+        throw new AccountManagementError('The M365 target is not registered.', 404)
+      }
+      if (this.runtimes.size === 1) {
+        throw new AccountManagementError(
+          'The M365 target is the only target and cannot be removed.',
+          409,
+        )
+      }
+      if (this.routing.defaultAccount === RESERVED_M365_TARGET) {
+        throw new AccountManagementError(
+          'Choose another default target before removing the M365 target.',
+          409,
+        )
+      }
+      const persist = this.dependencies.persistence.persistM365Target
+      if (!persist) {
+        throw new AccountManagementError(
+          'This process cannot persist target changes.',
+          409,
+        )
+      }
+
+      const current = routingConfig(this.routing)
+      const hostnames = Object.fromEntries(
+        Object.entries(current.hostnames).filter(([, target]) => target !== RESERVED_M365_TARGET),
+      )
+      const nextConfig: AccountRoutingConfig = { ...current, hostnames }
+      const nextRuntimes = new Map(this.runtimes)
+      nextRuntimes.delete(RESERVED_M365_TARGET)
+      const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
+
+      try {
+        await persist({ routing: nextConfig }, () => {})
+      }
+      catch (error) {
+        if (error instanceof AccountManagementError) {
+          throw error
+        }
+        throw new AccountManagementError(
+          'Could not remove the M365 target.',
+          500,
+          { cause: error },
+        )
+      }
+
+      configureAccountRuntimes(nextRouting, nextRuntimes.values())
+      this.routing = nextRouting
+      this.runtimes = nextRuntimes
+
+      const cleanup = this.refreshCleanups.get(RESERVED_M365_TARGET)
+      this.refreshCleanups.delete(RESERVED_M365_TARGET)
+      cleanup?.()
+    })
+  }
+
+  async configureM365Target(
+    input: { account?: string | null, hostname?: string },
+  ): Promise<void> {
+    if (this.stopped) {
+      throw new AccountManagementError('Account management is shutting down.', 503)
+    }
+    await this.runMutation(async () => {
+      const currentRuntime = this.runtimes.get(RESERVED_M365_TARGET)
+      if (!currentRuntime) {
+        throw new AccountManagementError('The M365 target is not registered.', 404)
+      }
+      const persist = this.dependencies.persistence.persistM365Target
+      if (!persist) {
+        throw new AccountManagementError(
+          'This process cannot persist target changes.',
+          409,
+        )
+      }
+
+      const current = routingConfig(this.routing)
+      const account = input.account === undefined
+        ? currentRuntime.auth.mscAuthAccount
+        : input.account ?? undefined
+      const hostname = input.hostname === undefined
+        ? dedicatedHostnamesByAccount(this.routing).get(RESERVED_M365_TARGET)!
+        : normalizeDnsHostname(input.hostname)
+      this.assertHostnameAvailable(hostname, RESERVED_M365_TARGET)
+      const hostnames = Object.fromEntries(
+        Object.entries(current.hostnames).filter(([, target]) => target !== RESERVED_M365_TARGET),
+      )
+      const nextConfig: AccountRoutingConfig = {
+        ...current,
+        hostnames: { ...hostnames, [hostname]: RESERVED_M365_TARGET },
+      }
+      const accountChanged = (input.account !== undefined)
+        && (account ?? undefined) !== currentRuntime.auth.mscAuthAccount
+      const runtime = accountChanged
+        ? createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
+            mscAuthExe: this.authDefaults.mscAuthExe,
+            mscAuthAccount: account,
+            mscAuthUpn: getCachedConfig().m365?.upn,
+            auth: this.authDefaults,
+          })
+        : currentRuntime
+      const nextRuntimes = new Map(this.runtimes)
+      nextRuntimes.set(RESERVED_M365_TARGET, runtime)
+      const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
+
+      try {
+        await persist({ routing: nextConfig, account }, () => {})
+      }
+      catch (error) {
+        if (error instanceof AccountManagementError) {
+          throw error
+        }
+        throw new AccountManagementError(
+          'Could not update the M365 target.',
+          500,
+          { cause: error },
+        )
+      }
+
+      if (accountChanged) {
+        resetMscTokenCache()
+        await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
+      }
+      configureAccountRuntimes(nextRouting, nextRuntimes.values())
+      this.routing = nextRouting
+      this.runtimes = nextRuntimes
     })
   }
 
@@ -461,7 +707,7 @@ export class AccountManager {
         nextRuntimes.set(session.accountName, authenticated.runtime)
         const nextConfig = routingConfig(this.routing)
         nextConfig.hostnames[session.hostname] = session.accountName
-        const nextRouting = compileAccountRouting(nextConfig, nextRuntimes.keys())
+        const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
         const previousRouting = this.routing
         let runtimeApplied = false
         try {
@@ -538,6 +784,10 @@ export class AccountManager {
     return result
   }
 
+  private githubAccountNames(): string[] {
+    return githubAccountNamesOf(this.runtimes)
+  }
+
   private assertManagedRoutingInvariant(): void {
     const hostnames = dedicatedHostnamesByAccount(this.routing)
     for (const accountName of this.runtimes.keys()) {
@@ -604,6 +854,7 @@ function cloneCompiledRouting(routing: CompiledAccountRouting): CompiledAccountR
     baseHostname: routing.baseHostname,
     defaultAccount: routing.defaultAccount,
     hostnames: new Map(routing.hostnames),
+    kinds: new Map(routing.kinds),
   }
 }
 
@@ -648,4 +899,8 @@ function parseGheDomain(value: string | undefined): string | undefined {
   catch (error) {
     throw new AccountManagementError('Invalid GHE tenant.', 400, { cause: error })
   }
+}
+
+function githubAccountNamesOf(runtimes: Map<string, AccountRuntime>): string[] {
+  return Array.from(runtimes.keys()).filter(name => name !== RESERVED_M365_TARGET)
 }

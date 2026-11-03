@@ -22,8 +22,13 @@ strategy. The order is load-bearing:
    strategy is selected from that model record and the request payload.
 
 An ID that is still unknown after these steps remains unknown. The common
-pipeline does **not** apply Claude family fallback before selecting Native
-Messages or Responses.
+pipeline does **not** apply the configured GitHub family fallbacks before
+selecting Native Messages or Responses.
+
+The M365 target is the exception: because the gateway serves a narrow catalog,
+`rewriteModel` maps unadvertised `claude-<family>-*` ids onto that target's
+catalog before strategy selection. The mapping is per target; it never turns
+into a process-wide fallback switch.
 
 ### Chat-Adapter Family Fallback
 

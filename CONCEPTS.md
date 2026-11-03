@@ -67,9 +67,16 @@ The strategy that translates an Anthropic Messages request into an OpenAI Chat C
 
 ## Routing
 
+### Route target
+A named entry in the hostname routing table that owns one upstream, its
+credential source, its model catalog, and its token lifecycle. GitHub accounts
+and the M365 Copilot gateway are both route targets, so a process can serve
+their requests side by side on one listener. Target identity is stable; the
+hostname that reaches it is editable.
+
 ### Hostname account selection
 The optional process-entry decision that maps the request URL's normalized DNS
-hostname to exactly one named credential. The configured base hostname selects
+hostname to exactly one route target. The configured base hostname selects
 the explicit default account as an alias, and the exact loopback hostname
 `127.0.0.1` selects the same default; every routed account also owns exactly one
 stable dedicated hostname. Changing the default affects only these default aliases.

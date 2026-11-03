@@ -25,6 +25,7 @@ import type {
 import { events } from 'fetch-event-stream'
 
 import { HTTPError, throwUpstreamError } from '~/lib/error'
+import { getCurrentAccountRuntime, setTargetAvailability } from '~/state/account-runtime'
 
 import { copilotBaseUrl, copilotHeaders } from './api-config'
 import { normalizeM365Catalog } from './m365-upstream'
@@ -81,11 +82,26 @@ export class CopilotClient {
     options: RequestOptions = {},
   ): Promise<QueuedUpstreamResponse> {
     if (this.config.upstream === 'm365') {
-      const token = await getMscToken({
-        exe: this.config.mscAuthExe,
-        account: this.config.mscAuthAccount,
-      })
-      this.auth.copilotToken = token.accessToken
+      try {
+        const token = await getMscToken({
+          exe: this.config.mscAuthExe,
+          account: this.config.mscAuthAccount,
+          upn: this.config.mscAuthUpn,
+        })
+        this.auth.copilotToken = token.accessToken
+        this.auth.copilotTokenExpiresAt = token.expiresOn.getTime()
+        setTargetAvailability(getCurrentAccountRuntime(), { status: 'ready' })
+      }
+      catch (error) {
+        const cause = (error as Error).message.slice(0, 400)
+        setTargetAvailability(getCurrentAccountRuntime(), { status: 'unavailable', cause })
+        throw new HTTPError(503, {
+          error: {
+            message: `The Microsoft 365 target is unavailable: ${cause}`,
+            type: 'invalid_request_error',
+          },
+        })
+      }
     }
 
     this.requireToken()

@@ -47,6 +47,7 @@ export function getClientConfig(): ClientConfig {
     upstream: runtime.auth.upstream,
     mscAuthExe: runtime.auth.mscAuthExe,
     mscAuthAccount: runtime.auth.mscAuthAccount,
+    mscAuthUpn: runtime.auth.mscAuthUpn,
     vsCodeVersion: runtime.models.getVSCodeVersion(),
     copilotApiBase: runtime.auth.copilotApiBase,
     githubBaseUrl: baseUrl,

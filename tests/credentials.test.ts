@@ -44,6 +44,13 @@ describe('credential store', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
+  test('refuses the reserved M365 target name for a GitHub credential', async () => {
+    await expect(
+      writeNewGitHubCredential('github-secret', undefined, credentialPaths, 'm365'),
+    ).rejects.toThrow('reserved')
+    await expect(fs.readFile(credentialPaths.CREDENTIALS_PATH, 'utf8')).rejects.toThrow()
+  })
+
   test('writes a versioned Base64 credential without persisting the raw token', async () => {
     await writeGitHubCredential('github-secret', 'corp.ghe.com', credentialPaths)
 

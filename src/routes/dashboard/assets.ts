@@ -69,12 +69,34 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <div class="table-scroll accounts-table"><table><thead><tr><th>Default</th><th>Name</th><th>Hostname</th><th>GitHub</th><th>Tenant</th><th>Copilot</th><th>Quota</th><th>Action</th></tr></thead><tbody id="accounts-body"></tbody></table></div>
 
       <section id="m365-panel" class="panel full-width account-add-panel" hidden>
-        <div class="section-heading"><h2>M365 Copilot account</h2><span id="m365-status" class="muted" role="status" aria-live="polite"></span></div>
-        <form id="m365-form" class="account-form">
-          <label><span>Broker account</span><select id="m365-account"></select></label>
-          <button id="m365-save" type="submit" class="command primary">Use this account</button>
-        </form>
-        <div class="muted account-help">Accounts come from the Windows token broker. Only an account with an M365 Copilot subscription can mint gateway tokens; the selection is stored in config.json.</div>
+        <div class="section-heading"><h2>M365 Copilot target</h2><span id="m365-status" class="muted" role="status" aria-live="polite"></span></div>
+
+        <div id="m365-absent" hidden>
+          <div class="muted account-help">Serve the M365 Copilot gateway next to your GitHub accounts on this same port. Requires Windows, the msc-auth helper, and a work account with an M365 Copilot subscription.</div>
+          <div id="m365-readiness" class="muted account-help"></div>
+          <div class="account-form"><button id="m365-probe" type="button" class="command">Check prerequisites</button></div>
+          <form id="m365-register-form" class="account-form" hidden>
+            <label><span>Broker account</span><select id="m365-register-account"></select></label>
+            <label><span>Hostname</span><input id="m365-register-hostname" type="text" maxlength="253" required autocomplete="off"></label>
+            <button id="m365-register" type="submit" class="command primary">Add M365 target</button>
+          </form>
+        </div>
+
+        <div id="m365-active" hidden>
+          <div id="m365-summary" class="muted account-help"></div>
+          <form id="m365-form" class="account-form">
+            <label><span>Broker account</span><select id="m365-account"></select></label>
+            <button id="m365-save" type="submit" class="command primary">Use this account</button>
+          </form>
+          <form id="m365-hostname-form" class="account-form">
+            <label><span>Hostname</span><input id="m365-hostname" type="text" maxlength="253" required autocomplete="off"></label>
+            <button id="m365-hostname-save" type="submit" class="command">Save hostname</button>
+          </form>
+          <div class="account-help"><span class="muted">Routing</span><div id="m365-routing" class="muted"></div></div>
+          <div class="account-form"><button id="m365-probe-active" type="button" class="command">Refresh broker accounts</button></div>
+          <div class="account-help"><span class="muted">Client</span><pre id="m365-client" class="mono"></pre></div>
+          <div class="account-form"><button id="m365-remove" type="button" class="command">Remove M365 target</button></div>
+        </div>
       </section>
 
       <section id="account-bootstrap-panel" class="panel full-width account-add-panel" hidden>
@@ -658,61 +680,207 @@ function renderAccountAuthentication(session) {
 }
 
 let m365Snapshot;
+let m365ProbeAccounts;
+let m365HostnameDirty = false;
+
+function fillM365Accounts(select, accounts) {
+  const current = select.value;
+  clearNode(select);
+  for (const account of accounts) {
+    const option = document.createElement('option');
+    option.value = account.homeAccountId;
+    option.textContent = account.upn + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026 (' + account.environment + ')';
+    if (current === account.homeAccountId) option.selected = true;
+    select.append(option);
+  }
+}
+
+function renderM365(state) {
+  const onboarding = state.onboarding || { status: 'available' };
+  const panel = byId('m365-panel');
+  panel.hidden = false;
+  const absent = byId('m365-absent');
+  const active = byId('m365-active');
+  absent.hidden = state.registered;
+  active.hidden = !state.registered;
+
+  const routing = state.routing || [];
+  byId('m365-routing').textContent = routing.length === 0
+    ? 'No targets registered yet.'
+    : routing.map(row => row.target + ' \u2192 ' + row.hostname).join('\n');
+
+  if (!state.registered) {
+    byId('m365-register-hostname').value ||= 'm365.localhost';
+    if (onboarding.status !== 'available') {
+      byId('m365-status').textContent = onboarding.reason || 'Onboarding is unavailable for this process.';
+      byId('m365-probe').disabled = true;
+    } else {
+      byId('m365-status').textContent = 'Not added. Check prerequisites, then add the target.';
+      byId('m365-probe').disabled = false;
+    }
+    return;
+  }
+
+  byId('m365-probe').disabled = false;
+  const availability = state.availability;
+  const parts = [state.hostname];
+  if (state.account) parts.push('account ' + state.account.slice(0, 12) + '\u2026');
+  parts.push(state.modelCount + ' models');
+  if (state.tokenExpiresAt) {
+    parts.push('token until ' + new Date(state.tokenExpiresAt).toLocaleTimeString());
+  }
+  if (availability && availability.status === 'unavailable') {
+    parts.push('unavailable: ' + (availability.cause || 'unknown cause'));
+  }
+  byId('m365-summary').textContent = parts.join(' \u00b7 ');
+  byId('m365-status').textContent = availability && availability.status === 'unavailable'
+    ? (availability.cause || 'The target is unavailable.')
+    : 'Ready.';
+
+  if (!m365HostnameDirty) byId('m365-hostname').value = state.hostname || '';
+  const select = byId('m365-account');
+  const previous = select.value;
+  clearNode(select);
+  const candidates = m365ProbeAccounts || (state.account
+    ? [{ homeAccountId: state.account, upn: 'Current selection', environment: 'broker' }]
+    : []);
+  for (const account of candidates) {
+    const option = document.createElement('option');
+    option.value = account.homeAccountId;
+    option.textContent = account.upn + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026';
+    if ((previous || state.account) === account.homeAccountId) option.selected = true;
+    select.append(option);
+  }
+  byId('m365-save').disabled = candidates.length === 0;
+
+  const baseUrl = state.client ? state.client.baseUrl : '';
+  const model = state.client ? state.client.model : '';
+  byId('m365-client').textContent = 'ANTHROPIC_BASE_URL=' + baseUrl + '\n'
+    + 'ANTHROPIC_AUTH_TOKEN=dummy-token\n'
+    + 'ANTHROPIC_MODEL=' + model;
+  byId('m365-remove').disabled = routing.length <= 1;
+}
 
 async function loadM365() {
-  const panel = byId('m365-panel');
   try {
     const state = await fetchJson('/dashboard/api/m365');
-    if (!state.enabled) {
-      panel.hidden = true;
-      m365Snapshot = undefined;
-      return;
-    }
-    panel.hidden = false;
-    const snapshot = JSON.stringify([state.accounts, state.selected, state.error || '']);
+    const snapshot = JSON.stringify([
+      state.registered,
+      state.hostname,
+      state.account,
+      state.modelCount,
+      state.models,
+      state.availability && { status: state.availability.status, cause: state.availability.cause },
+      state.routing,
+      state.client,
+      state.onboarding,
+    ]);
     if (snapshot === m365Snapshot) return;
     m365Snapshot = snapshot;
-    const select = byId('m365-account');
-    clearNode(select);
-    for (const account of state.accounts) {
-      const option = document.createElement('option');
-      option.value = account.homeAccountId;
-      option.textContent = account.upn + ' \u2014 ' + account.homeAccountId.slice(0, 12) + '\u2026 (' + account.environment + ')';
-      if (state.selected.account === account.homeAccountId) option.selected = true;
-      select.append(option);
-    }
-    byId('m365-save').disabled = state.accounts.length === 0;
-    if (state.error) byId('m365-status').textContent = state.error;
-    else if (state.selected.account) byId('m365-status').textContent = 'Using ' + state.selected.account.slice(0, 12) + '\u2026';
-    else byId('m365-status').textContent = 'No account selected; using the helper default';
+    renderM365(state);
   } catch (error) {
-    panel.hidden = false;
+    byId('m365-panel').hidden = false;
     m365Snapshot = undefined;
     byId('m365-status').textContent = error.message;
+  }
+}
+
+async function probeM365() {
+  const button = byId('m365-probe');
+  button.disabled = true;
+  byId('m365-readiness').textContent = 'Checking prerequisites\u2026';
+  try {
+    const readiness = await fetchJson('/dashboard/api/m365/probe', { method: 'POST' });
+    const lines = [];
+    lines.push(readiness.platformSupported ? 'Windows platform: ok' : 'Windows platform: required');
+    lines.push(readiness.helperAvailable ? 'msc-auth helper: found' : 'msc-auth helper: not found');
+    if (readiness.accountCount !== undefined) lines.push('Broker accounts: ' + readiness.accountCount);
+    if (readiness.error) lines.push(readiness.error);
+    byId('m365-readiness').textContent = lines.join('\n');
+    const form = byId('m365-register-form');
+    m365ProbeAccounts = readiness.accounts || [];
+    if (m365ProbeAccounts.length > 0) {
+      form.hidden = false;
+      fillM365Accounts(byId('m365-register-account'), m365ProbeAccounts);
+      byId('m365-register-hostname').value ||= 'm365.localhost';
+    } else {
+      form.hidden = true;
+    }
+    m365Snapshot = undefined;
+    await loadM365();
+  } catch (error) {
+    byId('m365-readiness').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function postM365(path, body) {
+  byId('m365-status').textContent = 'Working\u2026';
+  try {
+    const state = await fetchJson(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    m365Snapshot = undefined;
+    renderM365(state);
+    if (!state.availability || state.availability.status !== 'unavailable') {
+      byId('m365-status').textContent = 'Saved.';
+    }
+  } catch (error) {
+    byId('m365-status').textContent = error.message;
+  }
+}
+
+async function registerM365(event) {
+  event.preventDefault();
+  const button = byId('m365-register');
+  button.disabled = true;
+  try {
+    await postM365('/dashboard/api/m365/register', {
+      account: byId('m365-register-account').value || null,
+      hostname: byId('m365-register-hostname').value || 'm365.localhost',
+    });
+  } finally {
+    button.disabled = false;
   }
 }
 
 async function saveM365Selection(event) {
   event.preventDefault();
   const button = byId('m365-save');
-  const select = byId('m365-account');
   button.disabled = true;
-  byId('m365-status').textContent = 'Acquiring a token for the selected account\u2026';
   try {
-    const state = await fetchJson('/dashboard/api/m365/account', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account: select.value || null }),
-    });
-    byId('m365-status').textContent = state.error || 'Saved; the next request uses this account.';
-  } catch (error) {
-    byId('m365-status').textContent = error.message;
+    await postM365('/dashboard/api/m365/account', { account: byId('m365-account').value || null });
   } finally {
     button.disabled = false;
   }
 }
 
-async function loadAccounts(options) {
+async function saveM365Hostname(event) {
+  event.preventDefault();
+  const button = byId('m365-hostname-save');
+  button.disabled = true;
+  try {
+    await postM365('/dashboard/api/m365/hostname', { hostname: byId('m365-hostname').value });
+    m365HostnameDirty = false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function removeM365() {
+  const button = byId('m365-remove');
+  button.disabled = true;
+  try {
+    await postM365('/dashboard/api/m365/remove', {});
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadAccounts() {
   try {
     renderAccounts(await fetchJson('/dashboard/api/accounts'));
   } catch (error) {
@@ -724,7 +892,7 @@ async function loadAccounts(options) {
     byId('account-add-panel').hidden = true;
     byId('account-auth').hidden = true;
   } finally {
-    if (!options || options.includeM365 !== false) await loadM365();
+    await loadM365();
   }
 }
 
@@ -1201,7 +1369,7 @@ async function refreshLiveViews() {
     if (dashboardState.activeView === 'accounts') {
       loads.push({
         scope: 'accounts',
-        load: function () { return loadAccounts({ includeM365: false }); },
+        load: loadAccounts,
       });
     }
     await settleLoads(loads);
@@ -1248,6 +1416,12 @@ document.querySelectorAll('.tab').forEach(function (button) {
 
 byId('refresh-button').addEventListener('click', refreshDashboardMetadata);
 byId('m365-form').addEventListener('submit', saveM365Selection);
+byId('m365-probe').addEventListener('click', probeM365);
+byId('m365-probe-active').addEventListener('click', probeM365);
+byId('m365-hostname').addEventListener('input', function () { m365HostnameDirty = true; });
+byId('m365-register-form').addEventListener('submit', registerM365);
+byId('m365-hostname-form').addEventListener('submit', saveM365Hostname);
+byId('m365-remove').addEventListener('click', removeM365);
 byId('theme-toggle').addEventListener('change', function (event) {
   storeTheme(event.currentTarget.checked ? 'dark' : 'light');
 });

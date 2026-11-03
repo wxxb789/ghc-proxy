@@ -204,6 +204,12 @@ interface ConfigFile {
 }
 ```
 
+Routing values may name the reserved target `m365`, which the M365 gateway
+owns and which needs no credential entry: its hostname mapping is what creates
+it. GitHub accounts and GitHub credentials may not take that name. `m365.account`
+and `m365.upn` are the target's broker identity, and target availability lives
+in process memory rather than in configuration.
+
 `accountRouting` is a fail-closed boundary. Startup atomically migrates a
 legacy process to a one-account routing table only when its credential store
 contains exactly one account: a credential migrated from the former

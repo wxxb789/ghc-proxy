@@ -24,12 +24,50 @@ describe('account routing contract', () => {
         ['default.localhost', 'default'],
         ['account1.localhost', 'account1'],
       ]),
+      kinds: new Map([
+        ['default', 'github'],
+        ['account1', 'github'],
+      ]),
     })
     expect(resolveAccountName(routing, 'localhost')).toBe('default')
     expect(resolveAccountName(routing, '127.0.0.1')).toBe('default')
     expect(resolveAccountName(routing, '127.0.0.2')).toBeUndefined()
     expect(resolveAccountName(routing, 'ACCOUNT1.LOCALHOST.')).toBe('account1')
     expect(resolveAccountName(routing, 'unknown.localhost')).toBeUndefined()
+  })
+
+  test('admits the reserved M365 target without a credential', () => {
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: {
+        'default.localhost': 'default',
+        'account1.localhost': 'account1',
+        'm365.localhost': 'm365',
+      },
+    }, ['default', 'account1'])
+
+    expect(routing.kinds.get('m365')).toBe('m365')
+    expect(routing.kinds.get('default')).toBe('github')
+    expect(resolveAccountName(routing, 'm365.localhost')).toBe('m365')
+  })
+
+  test('rejects a GitHub credential named after the reserved target', () => {
+    expect(() => compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'm365',
+      hostnames: { 'm365.localhost': 'm365' },
+    }, ['m365'])).toThrow('reserved')
+  })
+
+  test('does not create an M365 target without a hostname mapping', () => {
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: { 'default.localhost': 'default' },
+    }, ['default'])
+
+    expect(routing.kinds.has('m365')).toBe(false)
   })
 
   test('rejects ambiguous or incomplete routing configuration', () => {

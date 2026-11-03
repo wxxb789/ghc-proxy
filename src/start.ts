@@ -8,15 +8,14 @@ import { defineCommand } from 'citty'
 import consola from 'consola'
 
 import { AccountManager } from '~/accounts/manager'
+import { createTargetRuntime, initializeM365Target } from '~/accounts/target-runtime'
 import { initProxyFromEnv } from '~/cli/proxy'
 import { generateEnvScript } from '~/cli/shell'
 import { printStartupBanner } from '~/cli/startup-banner'
 import { cacheModels, cacheVSCodeVersion, configureUpstreamRequestQueue, createCopilotClient } from '~/clients/factory'
 import { applyGheDomain } from '~/clients/ghe-domain'
-import { fetchM365Models, M365_MODELS } from '~/clients/m365-upstream'
-import { getMscToken } from '~/clients/msc-auth'
 import { recoverAccountManagementTransaction } from '~/lib/account-management-transaction'
-import { compileAccountRouting, normalizeAccountName } from '~/lib/account-routing'
+import { compileAccountRouting, M365_DEFAULT_HOSTNAME, normalizeAccountName, RESERVED_M365_TARGET } from '~/lib/account-routing'
 import {
   getCachedConfig,
   MAX_UPSTREAM_QUEUE_RETRIES,
@@ -33,12 +32,12 @@ import {
   aliasLegacyAccountRuntime,
   authStore,
   configureAccountRuntimes,
-  createAccountRuntime,
   modelCache,
   resetAccountRuntimes,
   runtimeStore,
   runWithAccountRuntime,
 } from '~/state'
+import { getTargetAvailability, isM365OnlyRouting } from '~/state/account-runtime'
 
 interface RunServerOptions {
   port: number
@@ -201,27 +200,29 @@ async function runServer(options: RunServerOptions): Promise<void> {
     cleanup: () => void | Promise<void>
   }
   if (upstream === 'm365') {
-    // No GitHub credentials, no account manager: the credential comes from the
-    // Windows token broker through msc-auth.
-    applyServerAuthOptions(authStore, options, accountType)
-    // Fail here, with the helper's own diagnostics, instead of surfacing a 500
-    // on the first proxied request.
-    const credential = await getMscToken({
-      exe: options.mscAuthExe,
-      account: authStore.mscAuthAccount,
+    // M365 only: one target, no GitHub credentials, loopback-only listener.
+    const target = createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
+      mscAuthExe: options.mscAuthExe,
+      mscAuthAccount: authStore.mscAuthAccount,
+      mscAuthUpn: cachedConfig.m365?.upn,
+      auth: serverAuthDefaults(options, accountType),
     })
-    consola.info(
-      `M365 credential acquired (account ${authStore.mscAuthAccount ?? 'default'}, `
-      + `tenant ${credential.tenant || 'unknown'}, `
-      + `expires ${credential.expiresOn.toISOString()})`,
+    await initializeM365Target(target)
+    const availability = getTargetAvailability(target)
+    if (availability?.status === 'ready') {
+      consola.info(`M365 target ready (account ${authStore.mscAuthAccount ?? 'default'})`)
+    }
+    else {
+      consola.warn(`M365 target unavailable: ${availability?.cause ?? 'unknown cause'}`)
+    }
+    configureAccountRuntimes(
+      compileAccountRouting({
+        baseHostname: 'localhost',
+        defaultAccount: RESERVED_M365_TARGET,
+        hostnames: { [M365_DEFAULT_HOSTNAME]: RESERVED_M365_TARGET },
+      }, []),
+      [target],
     )
-    // The gateway publishes its catalog (including the real context window), so
-    // the static list is only used when that call fails.
-    const catalog = await fetchM365Models(credential.accessToken).catch((error: unknown) => {
-      consola.warn(`Falling back to the static M365 catalog: ${(error as Error).message}`)
-      return M365_MODELS
-    })
-    modelCache.cacheModels(catalog)
     accountSetup = {
       accountManager: undefined,
       cleanup: () => {},
@@ -251,7 +252,8 @@ async function runServer(options: RunServerOptions): Promise<void> {
     }
   }
 
-  const serverHostname = upstream === 'm365'
+  const loopbackOnly = isM365OnlyRouting()
+  const serverHostname = loopbackOnly
     ? '127.0.0.1'
     : accountSetup.accountManager?.getRoutingSummary().baseHostname ?? 'localhost'
   const serverUrl = `http://${serverHostname}:${options.port}`
@@ -259,20 +261,27 @@ async function runServer(options: RunServerOptions): Promise<void> {
   try {
     if (options.claudeCode) {
       if (!modelCache.getModels()) {
-        throw new Error('Models should be loaded by now')
+        if (isM365OnlyRouting() || cachedConfig.accountRouting !== undefined) {
+          consola.warn('Skipping the Claude Code command: the default target has no models yet.')
+        }
+        else {
+          throw new Error('Models should be loaded by now')
+        }
       }
-      await maybeCopyClaudeCodeCommand(serverUrl)
+      if (modelCache.getModels())
+        await maybeCopyClaudeCodeCommand(serverUrl)
     }
 
     const app = createServer({
       accountManager: accountSetup.accountManager,
       idleTimeout: options.idleTimeoutSeconds,
+      serverPort: options.port,
     })
     // The M365 upstream authenticates with the user's own Microsoft credential,
     // so it must not be reachable from the network by default.
     const listener = await listenRuntimeServer(app, {
       port: options.port,
-      ...(upstream === 'm365' ? { hostname: '127.0.0.1' } : {}),
+      ...(loopbackOnly ? { hostname: '127.0.0.1' } : {}),
     })
     printStartupBanner(`http://${serverHostname}:${listener.port}`)
 
@@ -398,7 +407,7 @@ async function setupLegacyAccountManager(
 
     const accountManager = new AccountManager({
       authDefaults: serverAuthDefaults(options, accountType),
-      knownAccountNames: Object.keys(credentials.accounts),
+      knownAccountNames: credentials ? Object.keys(credentials.accounts) : [],
       refreshCleanups: new Map([[accountName, cleanup]]),
       routing: migration.routing,
       routingEnabled: false,
@@ -441,21 +450,27 @@ async function setupRoutedAccounts(
   }
 
   const credentials = await readGitHubCredentials()
-  if (!credentials) {
+  const compiled = compileAccountRouting(
+    routingConfig,
+    credentials ? Object.keys(credentials.accounts) : [],
+  )
+  const targetNames = Array.from(compiled.kinds.keys())
+  const githubTargets = targetNames.filter(name => compiled.kinds.get(name) === 'github')
+  if (githubTargets.length > 0 && !credentials) {
     throw new Error('accountRouting requires credentials.json with every referenced named account.')
   }
 
-  const compiled = compileAccountRouting(
-    routingConfig,
-    Object.keys(credentials.accounts),
-  )
-  const accountNames = new Set([
-    compiled.defaultAccount,
-    ...compiled.hostnames.values(),
-  ])
-  const runtimes = Array.from(accountNames, (accountName) => {
-    const credential = credentials.accounts[accountName]!
-    const runtime = createAccountRuntime(accountName)
+  const runtimes = targetNames.map((accountName) => {
+    if (compiled.kinds.get(accountName) === 'm365') {
+      return createTargetRuntime(accountName, 'm365', {
+        mscAuthExe: options.mscAuthExe,
+        mscAuthAccount: authStore.mscAuthAccount,
+        mscAuthUpn: getCachedConfig().m365?.upn,
+        auth: serverAuthDefaults(options, accountType),
+      })
+    }
+    const credential = credentials!.accounts[accountName]!
+    const runtime = createTargetRuntime(accountName, 'github')
     applyServerAuthOptions(runtime.auth, options, accountType)
     applyGheDomain(runtime.auth, credential.gheDomain)
     return runtime
@@ -465,6 +480,19 @@ async function setupRoutedAccounts(
   const cleanups = new Map<string, () => void>()
   try {
     for (const runtime of runtimes) {
+      if (compiled.kinds.get(runtime.name) === 'm365') {
+        await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
+        const availability = getTargetAvailability(runtime)
+        if (availability?.status === 'ready') {
+          consola.info(`M365 target ${JSON.stringify(runtime.name)} ready`)
+        }
+        else {
+          consola.warn(
+            `M365 target ${JSON.stringify(runtime.name)} unavailable: ${availability?.cause ?? 'unknown cause'}`,
+          )
+        }
+        continue
+      }
       consola.info(`Initializing GitHub account ${JSON.stringify(runtime.name)}`)
       const cleanup = await runWithAccountRuntime(runtime, async () => {
         await cacheVSCodeVersion()
@@ -492,7 +520,7 @@ async function setupRoutedAccounts(
   try {
     const accountManager = new AccountManager({
       authDefaults: serverAuthDefaults(options, accountType),
-      knownAccountNames: Object.keys(credentials.accounts),
+      knownAccountNames: credentials ? Object.keys(credentials.accounts) : [],
       refreshCleanups: cleanups,
       routing: compiled,
       runtimes,
@@ -521,6 +549,7 @@ function serverAuthDefaults(
     rateLimitSeconds: options.rateLimit,
     rateLimitWait: options.rateLimitWait,
     showToken: false,
+    mscAuthExe: options.mscAuthExe,
     upstreamTimeoutSeconds: options.upstreamTimeoutSeconds,
   }
 }

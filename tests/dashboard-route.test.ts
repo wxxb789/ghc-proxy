@@ -6,8 +6,11 @@ import type { CopilotUsageResponse } from '~/types'
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { Elysia } from 'elysia'
 import { AccountManager } from '~/accounts/manager'
+import { createTargetRuntime } from '~/accounts/target-runtime'
 import { compileAccountRouting } from '~/lib/account-routing'
+import { isLoopbackAddress } from '~/lib/peer'
 import { DashboardQuotaCache, dashboardQuotaCache } from '~/routes/dashboard/handler'
+import { getM365DashboardState } from '~/routes/dashboard/m365'
 import {
   DashboardMetadataRefresher,
 
@@ -15,7 +18,6 @@ import {
 import {
   createDashboardRoutes,
   DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY,
-  isLoopbackAddress,
 } from '~/routes/dashboard/route'
 import { createServer } from '~/server'
 import {
@@ -621,6 +623,9 @@ function accountManagerFixture(
 ): DashboardAccountManagement & {
   beginAddAccount: ReturnType<typeof mock>
   bootstrapAccountRouting: ReturnType<typeof mock>
+  registerM365Target: ReturnType<typeof mock>
+  removeM365Target: ReturnType<typeof mock>
+  configureM365Target: ReturnType<typeof mock>
   setDefaultAccount: ReturnType<typeof mock>
 } {
   let defaultAccount = 'default'
@@ -640,6 +645,9 @@ function accountManagerFixture(
         runtime,
       }],
     }),
+    registerM365Target: mock(async () => {}),
+    removeM365Target: mock(async () => {}),
+    configureM365Target: mock(async () => {}),
     beginAddAccount: mock(async () => ({
       id: 'session-1',
       state: 'pending' as const,
@@ -674,3 +682,84 @@ function accountManagerFixture(
     }),
   }
 }
+
+describe('M365 target projection', () => {
+  function targetManager(registered: boolean) {
+    const m365 = createTargetRuntime('m365', 'm365', { mscAuthAccount: 'home-account' })
+    m365.models.cacheModels({
+      object: 'list',
+      data: [{
+        id: 'claude-opus-5.5',
+        name: 'Claude Opus 5.5',
+        supported_endpoints: ['/v1/messages'],
+      }],
+    } as never)
+    const github = createAccountRuntime('default')
+    const accounts = [
+      { name: 'default', hostname: 'default.localhost', isDefault: true, runtime: github },
+      ...(registered
+        ? [{ name: 'm365', hostname: 'm365.localhost', isDefault: false, runtime: m365 }]
+        : []),
+    ]
+    return {
+      getAccountSnapshot: () => ({
+        routing: {
+          baseHostname: 'localhost',
+          defaultAccount: 'default',
+          routingEnabled: true,
+        },
+        accounts,
+      }),
+    }
+  }
+
+  test('reports the target as absent on a GitHub-only process', () => {
+    const state = getM365DashboardState({ manager: targetManager(false), serverPort: 4141 })
+
+    expect(state.registered).toBe(false)
+    expect(state.onboarding.status).toBe('available')
+    expect(state.routing.map(row => row.hostname)).toEqual(['default.localhost'])
+  })
+
+  test('projects registration, catalog, and the client base URL', () => {
+    const state = getM365DashboardState({ manager: targetManager(true), serverPort: 4141 })
+
+    expect(state).toMatchObject({
+      registered: true,
+      hostname: 'm365.localhost',
+      account: 'home-account',
+      modelCount: 1,
+      models: ['claude-opus-5.5'],
+      client: {
+        baseUrl: 'http://m365.localhost:4141',
+        model: 'claude-opus-5.5',
+      },
+    })
+    expect(state.routing.map(row => row.kind)).toEqual(['github', 'm365'])
+  })
+
+  test('reports onboarding unavailable without account management', () => {
+    const state = getM365DashboardState()
+    expect(state.onboarding).toMatchObject({ status: 'unavailable' })
+  })
+
+  test('serves the projection over the dashboard API', async () => {
+    const app = createDashboardRoutes({
+      accountManager: accountManagerFixture(),
+      serverPort: 4141,
+    })
+    const response = await app.handle(new Request('http://localhost/dashboard/api/m365'))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ registered: false })
+  })
+
+  test('reports a managerless process as unavailable over the API', async () => {
+    const app = createDashboardRoutes()
+    const response = await app.handle(new Request('http://localhost/dashboard/api/m365'))
+
+    expect(await response.json()).toMatchObject({
+      onboarding: { status: 'unavailable' },
+    })
+  })
+})
