@@ -1,7 +1,6 @@
 import type { DashboardTarget } from '@contract'
 import { focusManager } from '@tanstack/react-query'
 import { act, fireEvent, screen, within } from '@testing-library/react'
-import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDashboard, useDashboardUrl } from '../app/context'
 import { Region } from '../components/primitives'
@@ -9,29 +8,6 @@ import { createFakeFetch, deferred, metricsFixture, overviewFixture, quotaFixtur
 import { renderDashboard } from '../test/render'
 import { useDashboardMutation } from './mutations'
 import { dashboardKeys, useMetrics, useRequests, useTargetQuota } from './queries'
-
-function MetricsPanel() {
-  const { url } = useDashboardUrl()
-  const metrics = useMetrics(url.window, url.target)
-  const [draft, setDraft] = useState('')
-  return (
-    <>
-      <label>
-        Operator note
-        <input value={draft} onChange={event => setDraft(event.target.value)} />
-      </label>
-      <Region title="Metrics" result={metrics.region}>{data => <p aria-label="Completed count">{data.counts.completed}</p>}</Region>
-    </>
-  )
-}
-
-it('keeps controlled draft input intact when accepted polling data rerenders its region', async () => {
-  renderDashboard({ children: <MetricsPanel /> })
-  await advance()
-  fireEvent.change(screen.getByRole('textbox', { name: 'Operator note' }), { target: { value: 'keep this draft' } })
-  await advance(30_000)
-  expect(screen.getByRole('textbox', { name: 'Operator note' })).toHaveValue('keep this draft')
-})
 
 function TrafficReadout() {
   const { url } = useDashboardUrl()

@@ -251,6 +251,30 @@ export function RequestsPage() {
   const selected = url.request === undefined
     ? undefined
     : requests.data?.active.find(request => request.requestId === url.request) ?? requests.data?.recent.find(request => request.requestId === url.request)
+  let detail
+  if (url.request === undefined) {
+    detail = <p className="muted">Select a request to inspect its lifecycle and routing decisions.</p>
+  }
+  else if (selected) {
+    detail = <RequestDetail request={selected} />
+  }
+  else if (requests.data) {
+    detail = (
+      <p>
+        This request is not retained:
+        {' '}
+        <strong>{url.request}</strong>
+        . The URL has been kept. Only active requests and the last
+        {' '}
+        {requests.data.capacity}
+        {' '}
+        terminal requests are available; older failures may no longer be listed.
+      </p>
+    )
+  }
+  else {
+    detail = <p>{requests.region.state === 'loading' ? 'Loading the selected request…' : 'The selected request cannot be checked until request data is available. The URL has been kept.'}</p>
+  }
   return (
     <div className={url.request === undefined ? 'monitor-request-layout' : 'monitor-request-layout has-selection'}>
       <Region title="Request activity" result={{ ...requests.region, state: requests.region.state === 'empty' ? 'ready' : requests.region.state }} retry={() => { void requests.refetch() }}>
@@ -258,24 +282,7 @@ export function RequestsPage() {
       </Region>
       <Card title="Request detail">
         <div ref={detailRef} className="monitor-request-detail" role="group" aria-label="Selected request detail" tabIndex={-1}>
-          {url.request === undefined
-            ? <p className="muted">Select a request to inspect its lifecycle and routing decisions.</p>
-            : selected
-              ? <RequestDetail request={selected} />
-              : requests.data
-                ? (
-                    <p>
-                      This request is not retained:
-                      {' '}
-                      <strong>{url.request}</strong>
-                      . The URL has been kept. Only active requests and the last
-                      {' '}
-                      {requests.data.capacity}
-                      {' '}
-                      terminal requests are available; older failures may no longer be listed.
-                    </p>
-                  )
-                : <p>{requests.region.state === 'loading' ? 'Loading the selected request…' : 'The selected request cannot be checked until request data is available. The URL has been kept.'}</p>}
+          {detail}
         </div>
       </Card>
     </div>

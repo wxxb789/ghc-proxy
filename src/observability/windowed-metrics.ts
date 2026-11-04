@@ -176,6 +176,34 @@ export class WindowedMetrics {
     const series: DashboardMetricBucket[] = []
     let latencyCount = 0
     let latencySumMs = 0
+    let bucketLatencyCount = 0
+    let bucketLatencySumMs = 0
+
+    function accumulateCell(
+      accountName: string,
+      cell: MetricCell,
+      bucketCounts: DashboardStateCounts,
+      bucketEffects: Map<string, number>,
+    ): void {
+      mergeStateCounts(bucketCounts, cell.counts)
+      bucketLatencyCount += cell.latencyCount
+      bucketLatencySumMs += cell.latencySumMs
+      for (let bin = 0; bin < HISTOGRAM_SIZE; bin++)
+        bucketHistogram[bin] += cell.histogram[bin]
+      mergeDimensionCounts(models, cell.models)
+      mergeDimensionCounts(endpoints, cell.endpoints)
+      const requests = cell.counts.completed + cell.counts.failed + cell.counts.aborted
+      if (requests > 0) {
+        if (accountName === NO_TARGET) {
+          targets.none.requests += requests
+          targets.none.failures += cell.counts.failed
+        }
+        else {
+          addBreakdown(targets.named, accountName, requests, cell.counts.failed)
+        }
+      }
+      mergeEffects(bucketEffects, cell.effects)
+    }
 
     for (let bucketId = firstBucketId; bucketId <= currentBucketId; bucketId++) {
       const startMs = bucketId * tier.bucketMs
@@ -186,32 +214,19 @@ export class WindowedMetrics {
       const bucketCounts = emptyStateCounts()
       const bucketEffects = new Map<string, number>()
       bucketHistogram.fill(0)
-      let bucketLatencyCount = 0
-      let bucketLatencySumMs = 0
+      bucketLatencyCount = 0
+      bucketLatencySumMs = 0
       const slot = tier.slots[slotIndex(tier, bucketId)]
       if (!clockReset && coverage !== 'not-collected'
         && bucketId >= tier.oldestRetainedBucketId && slot?.bucketId === bucketId) {
-        for (const [accountName, cell] of slot.cells) {
-          if (target !== undefined && (target === NO_TARGET || accountName !== target))
-            continue
-          mergeStateCounts(bucketCounts, cell.counts)
-          bucketLatencyCount += cell.latencyCount
-          bucketLatencySumMs += cell.latencySumMs
-          for (let bin = 0; bin < HISTOGRAM_SIZE; bin++)
-            bucketHistogram[bin] += cell.histogram[bin]
-          mergeDimensionCounts(models, cell.models)
-          mergeDimensionCounts(endpoints, cell.endpoints)
-          const requests = cell.counts.completed + cell.counts.failed + cell.counts.aborted
-          if (requests > 0) {
-            if (accountName === NO_TARGET) {
-              targets.none.requests += requests
-              targets.none.failures += cell.counts.failed
-            }
-            else {
-              addBreakdown(targets.named, accountName, requests, cell.counts.failed)
-            }
-          }
-          mergeEffects(bucketEffects, cell.effects)
+        if (target === undefined) {
+          for (const [accountName, cell] of slot.cells)
+            accumulateCell(accountName, cell, bucketCounts, bucketEffects)
+        }
+        else if (target !== NO_TARGET) {
+          const cell = slot.cells.get(target)
+          if (cell)
+            accumulateCell(target, cell, bucketCounts, bucketEffects)
         }
       }
 

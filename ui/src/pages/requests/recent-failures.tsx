@@ -31,7 +31,7 @@ export function RecentFailures({ metrics, requests }: { metrics: DashboardMetric
                       return request.state === 'failed' && request.endpoint !== '/' && request.endpoint !== '/health'
                         && (url.target === undefined || request.accountName === url.target)
                         && completedAt >= Math.max(metrics.startMs, Date.parse(metrics.collectionStartedAt)) && completedAt < metrics.endMs
-                    }).slice().sort((left, right) => Date.parse(right.startedAt) + right.durationMs - Date.parse(left.startedAt) - left.durationMs).slice(0, 8)
+                    }).sort((left, right) => Date.parse(right.startedAt) + right.durationMs - Date.parse(left.startedAt) - left.durationMs).slice(0, 8)
                     return failures.length === 0
                       ? <p>No failures from this window are retained in the request list.</p>
                       : (

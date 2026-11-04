@@ -325,7 +325,6 @@ export class RequestActivityStore {
     if (!request || request.status !== undefined)
       return false
 
-    // The response hook owns the access log, not the end of a streamed body.
     request.status = status
     if (request.streamOpen && (status < 400 || request.state === 'aborted'))
       return true
@@ -341,8 +340,6 @@ export class RequestActivityStore {
 
     request.streamOpen = false
     request.streamFinishedAtMs = this.now()
-    // Before the first emission throws, onError still has to supply the real
-    // HTTP status and error metadata. Never manufacture a successful status.
     if (request.status !== undefined)
       this.finalize(request, request.status, request.streamFinishedAtMs)
   }
