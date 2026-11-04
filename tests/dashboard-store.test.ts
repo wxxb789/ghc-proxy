@@ -414,3 +414,68 @@ describe('dashboard metadata sanitizers', () => {
       .toBe('HTTP 404 (not_found_error)')
   })
 })
+
+describe('windowed metrics through the request store', () => {
+  test('records only committed effects and moves streamed completion to abort exactly once', () => {
+    let now = 1_000
+    const store = new RequestActivityStore(() => now)
+    store.start({ requestId: 'stream', accountName: 'work', method: 'POST', endpoint: '/v1/messages', requestedModel: 'test-model' })
+    store.beginEffectBuffer('stream')
+    store.recordEffect('stream', 'responses.parameter_filter', 2)
+    expect(store.queryMetrics('15m').effects).toEqual({})
+    store.commitEffectBuffer('stream')
+    store.markStreaming('stream')
+    store.complete('stream', 200)
+    now = 1_040
+    expect(store.queryMetrics('15m').counts).toEqual({ completed: 0, failed: 0, aborted: 0 })
+    store.finishStream('stream')
+    expect(store.queryMetrics('15m').latency.p95).toEqual({ valueMs: 40, kind: 'exact' })
+
+    store.markAborted('stream')
+    store.markAborted('stream')
+    const view = store.queryMetrics('15m')
+    expect(view.counts).toEqual({ completed: 0, failed: 0, aborted: 1 })
+    expect(view.latency.count).toBe(0)
+    expect(view.latency.p95).toBeNull()
+    expect(view.effects).toEqual({ 'responses.parameter_filter': 2 })
+    expect(store.summary().effectCounts).toEqual({ 'responses.parameter_filter': 2 })
+  })
+
+  test('keeps liveness in the ring without inflating traffic metrics', () => {
+    const store = new RequestActivityStore(() => 1_000)
+    for (const endpoint of ['/', '/health']) {
+      store.start({ requestId: endpoint, method: 'GET', endpoint })
+      store.complete(endpoint, 200)
+    }
+    expect(store.snapshot().recent.map(request => request.endpoint)).toEqual(['/health', '/'])
+    expect(store.queryMetrics('15m').counts).toEqual({ completed: 0, failed: 0, aborted: 0 })
+  })
+
+  test('resets collection identity and clears effects with the store', () => {
+    let now = 1_000
+    const store = new RequestActivityStore(() => now)
+    store.start({ requestId: 'before', method: 'POST', endpoint: '/v1/messages' })
+    store.recordEffect('before', 'responses.parameter_filter')
+    store.complete('before', 200)
+    now = 2_000
+    store.reset()
+
+    const view = store.queryMetrics('24h')
+    expect(Date.parse(view.collectionStartedAt)).toBe(2_000)
+    expect(view.counts).toEqual({ completed: 0, failed: 0, aborted: 0 })
+    expect(view.effects).toEqual({})
+    expect(store.summary().effectCounts).toEqual({})
+  })
+
+  test('projects only sanitized dimensions without retaining request identifiers', () => {
+    const store = new RequestActivityStore(() => 1_000)
+    store.start({ requestId: 'private-request-id', accountName: 'private@example.test', requestedModel: 'Bearer private token', method: 'POST', endpoint: '/v1/messages' })
+    store.complete('private-request-id', 200)
+    const view = store.queryMetrics('15m')
+    expect(view.counts.completed).toBe(1)
+    const json = JSON.stringify(view)
+    expect(json).not.toContain('private-request-id')
+    expect(json).not.toContain('private@example.test')
+    expect(json).not.toContain('Bearer private token')
+  })
+})

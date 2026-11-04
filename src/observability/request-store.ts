@@ -1,8 +1,10 @@
 import type { ProxyEffectId } from './effects'
 import type { ModelMappingInfo, ModelTransformStep } from '~/lib/request-logger'
+import type { DashboardMetrics, DashboardWindowId } from '~/types/dashboard'
 
 import { isTimeoutLikeError } from '~/lib/timeout-error'
 import { effectForModelTransform } from './effects'
+import { WindowedMetrics } from './windowed-metrics'
 
 export const RECENT_REQUEST_LIMIT = 256
 
@@ -169,9 +171,11 @@ export class RequestActivityStore {
   private failed = 0
   private aborted = 0
   private readonly now: () => number
+  private readonly metrics: WindowedMetrics
 
   constructor(now: () => number = Date.now) {
     this.now = now
+    this.metrics = new WindowedMetrics(now)
   }
 
   start(input: StartRequestInput): void {
@@ -274,6 +278,7 @@ export class RequestActivityStore {
     this.effectCounts[effect] = (this.effectCounts[effect] ?? 0) + normalizedCount
     request.effectCounts[effect]
       = (request.effectCounts[effect] ?? 0) + normalizedCount
+    this.metrics.recordEffect(request.accountName, request.endpoint, effect, normalizedCount)
   }
 
   recordError(requestId: string, summary: string): void {
@@ -300,7 +305,14 @@ export class RequestActivityStore {
 
     const reclassified = this.recent.updateFirst(
       request => request.requestId === requestId && request.state === 'completed',
-      request => ({ ...request, state: 'aborted' }),
+      (request) => {
+        const abortedRequest = { ...request, state: 'aborted' as const }
+        this.metrics.reclassifyAborted(
+          abortedRequest,
+          Date.parse(request.startedAt) + request.durationMs,
+        )
+        return abortedRequest
+      },
     )
     if (reclassified) {
       this.completed--
@@ -347,12 +359,17 @@ export class RequestActivityStore {
       status,
     )
     this.recent.push(completedRequest)
+    this.metrics.record(completedRequest, request.startedAtMs + completedRequest.durationMs)
     if (aborted)
       this.aborted++
     else
       this.completed++
     if (failed)
       this.failed++
+  }
+
+  queryMetrics(windowId: DashboardWindowId, target?: string): DashboardMetrics {
+    return this.metrics.query(windowId, target)
   }
 
   snapshot(): RequestActivitySnapshot {
@@ -402,6 +419,7 @@ export class RequestActivityStore {
     this.completed = 0
     this.failed = 0
     this.aborted = 0
+    this.metrics.reset()
   }
 }
 
@@ -457,12 +475,12 @@ export function sanitizeObservedError(
   return 'Unhandled proxy error'
 }
 
-function projectRequest(
+function projectRequest<State extends ObservedRequestState>(
   request: ActiveRequest,
   durationMs: number,
-  state: ObservedRequestState,
+  state: State,
   status?: number,
-): ObservedRequest {
+): ObservedRequest & { state: State } {
   return {
     requestId: request.requestId,
     ...(request.accountName ? { accountName: request.accountName } : {}),
