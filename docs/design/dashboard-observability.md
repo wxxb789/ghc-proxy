@@ -104,6 +104,8 @@ timers. Read-only queries merge retained slots and never rotate, reclaim, or
 revive them. Completion is attributed to its completion interval; effects are
 attributed when applied. A small clock regression may write an older retained
 slot; a regression larger than a tier's window resets that tier on its next write.
+Covered duration excludes discarded buckets even if a small clock rollback
+brings them back into the displayed range.
 
 Each target cell stores disjoint completed/failed/aborted counts, a 48-bin
 latency histogram with count/sum, bounded model/endpoint counters, and effects.

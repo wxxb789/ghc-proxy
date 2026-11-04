@@ -138,7 +138,6 @@ export class WindowedMetrics {
       if (!cell)
         continue
 
-      // The store reclassifies each retained successful request at most once.
       cell.counts.completed--
       cell.counts.aborted++
       cell.histogram[bin]--
@@ -165,7 +164,6 @@ export class WindowedMetrics {
     const tier = this.tiers[windowId]
     const currentBucketId = Math.floor(at / tier.bucketMs)
     const firstBucketId = currentBucketId - tier.slots.length + 1
-    // Reads never rotate slots, reclaim names, or commit a clock reset.
     const clockReset = tier.lastObservedAtMs - at > tier.durationMs
     const collectionStartedAtMs = tier.collectionStartedAtMs
     const counts = emptyStateCounts()
@@ -240,7 +238,7 @@ export class WindowedMetrics {
       collectionStartedAt: new Date(collectionStartedAtMs).toISOString(),
       startMs,
       endMs: (currentBucketId + 1) * tier.bucketMs,
-      coveredMs: clockReset ? 0 : Math.max(0, at - Math.max(startMs, collectionStartedAtMs)),
+      coveredMs: clockReset ? 0 : Math.max(0, at - Math.max(startMs, collectionStartedAtMs, tier.oldestRetainedBucketId * tier.bucketMs)),
       counts,
       latency: {
         ...summarizeLatency(histogram, latencyCount, latencySumMs),
@@ -291,7 +289,6 @@ function observeWrite(tier: MetricTier, at: number): void {
   }
   tier.lastObservedAtMs = at
   tier.collectionStartedAtMs = Math.min(tier.collectionStartedAtMs, at)
-  // Once expired on a write, a small clock step cannot revive a stamped slot.
   tier.oldestRetainedBucketId = Math.max(
     tier.oldestRetainedBucketId,
     Math.floor(at / tier.bucketMs) - tier.slots.length + 1,
@@ -350,11 +347,9 @@ function admitModel(tier: MetricTier, model: string, bucketId: number): boolean 
     return true
   }
 
-  // Retained overflow may already contain this name. Do not start a partial
-  // named history until all overflow has expired; no overflow-name set is kept.
-  const hasOverflow = tier.lastOverflowBucketId !== undefined
+  const hasRetainedOverflow = tier.lastOverflowBucketId !== undefined
     && tier.lastOverflowBucketId >= tier.oldestRetainedBucketId
-  if (!hasOverflow && tier.models.size < MODEL_LIMIT) {
+  if (!hasRetainedOverflow && tier.models.size < MODEL_LIMIT) {
     tier.models.set(model, bucketId)
     return true
   }

@@ -316,13 +316,16 @@ test('marks an expired range unavailable when a small clock rollback exposes it 
   let now = 0
   const metrics = new WindowedMetrics(() => now)
   record(metrics, now)
+  now = 880_000
+  record(metrics, now)
   now = 900_000
   record(metrics, now)
   now = 890_000
 
   const view = metrics.query('15m')
-  expect(view.counts).toEqual({ completed: 0, failed: 0, aborted: 0 })
+  expect(view.counts).toEqual({ completed: 1, failed: 0, aborted: 0 })
   expect(view.series.find(bucket => bucket.startMs === 0)?.coverage).toBe('not-collected')
+  expect(view.coveredMs).toBe(880_000)
 })
 
 test('keeps collection identity stable during query-only clock regression', () => {
