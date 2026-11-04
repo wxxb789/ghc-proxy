@@ -56,14 +56,16 @@ afterEach(() => {
 })
 
 describe('dashboard static routes', () => {
-  test('does not record dashboard polling in the request ring', async () => {
-    const response = await createServer().handle(
-      new Request('http://localhost/dashboard/api/requests'),
-    )
+  test('does not record dashboard polling or deep links in the request ring', async () => {
+    const app = createServer()
+    const response = await app.handle(new Request('http://localhost/dashboard/api/requests'))
+    const deepLink = await app.handle(new Request('http://localhost/dashboard/traffic?window=1h'))
     await response.text()
+    await deepLink.text()
     await new Promise(resolve => setTimeout(resolve, 50))
 
     expect(response.status).toBe(200)
+    expect(deepLink.headers.get('content-type')).toContain('text/html')
     expect(runtimeStore.requests.snapshot()).toMatchObject({ active: [], recent: [] })
   })
 })
@@ -101,6 +103,33 @@ describe('dashboard API security projection', () => {
     ))
 
     expect(response.status).toBe(403)
+  })
+
+  test('accepts a preserved dev-proxy Host and Origin without accepting a foreign production Origin', async () => {
+    const app = createDashboardRoutes({ ui: null })
+    const proxied = await app.handle(new Request('http://work.localhost:5173/dashboard/api/models', {
+      headers: { origin: 'http://work.localhost:5173' },
+    }))
+    const direct = await app.handle(new Request('http://work.localhost:4141/dashboard/api/models', {
+      headers: { origin: 'http://work.localhost:5173' },
+    }))
+    const localProxy = await app.handle(new Request('http://localhost:5173/dashboard/api/models', {
+      headers: { origin: 'http://localhost:5173' },
+    }))
+    const proxiedMutation = await app.handle(new Request('http://work.localhost:5173/dashboard/api/accounts', {
+      method: 'POST',
+      headers: { origin: 'http://work.localhost:5173' },
+    }))
+    const directMutation = await app.handle(new Request('http://work.localhost:4141/dashboard/api/accounts', {
+      method: 'POST',
+      headers: { origin: 'http://work.localhost:5173' },
+    }))
+
+    expect(proxied.status).toBe(200)
+    expect(localProxy.status).toBe(200)
+    expect(direct.status).toBe(403)
+    expect(proxiedMutation.status).toBe(409)
+    expect(directMutation.status).toBe(403)
   })
 
   test('validates the peer address on srvx live Node requests', async () => {

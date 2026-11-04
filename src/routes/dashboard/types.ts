@@ -1,3 +1,4 @@
+import type { EmbeddedUi } from './embedded-ui'
 import type { DashboardMetadataRefreshService } from './metadata-refresh'
 import type { DashboardQuotaCache } from './quota'
 import type {
@@ -28,4 +29,5 @@ export interface DashboardRouteOptions {
   metadataRefresher?: DashboardMetadataRefreshService
   quotaCache?: DashboardQuotaCache
   serverPort?: number
+  ui?: EmbeddedUi | null
 }

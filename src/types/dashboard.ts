@@ -1,4 +1,4 @@
-export const DASHBOARD_SCHEMA_VERSION = 1
+export const DASHBOARD_SCHEMA_VERSION = 2
 
 export const DASHBOARD_PAGES = [
   'overview',
@@ -321,6 +321,7 @@ export interface DashboardModel {
 
 export interface DashboardModels {
   hostTarget: string
+  apiBaseUrl: string
   models: DashboardModel[]
 }
 

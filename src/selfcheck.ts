@@ -10,6 +10,7 @@ import type { AccountRoutingConfig } from '~/lib/account-routing'
 import type { SSEStreamChunk } from '~/lib/execution-strategy'
 import type { RuntimeListener } from '~/lib/server-runtime'
 import type { CopilotUsageResponse, Model } from '~/types'
+import type { DashboardResponse, DashboardTargets } from '~/types/dashboard'
 
 import { deepStrictEqual } from 'node:assert'
 import { createHash } from 'node:crypto'
@@ -36,9 +37,10 @@ import {
 import { HTTPError, isRetryableConnectionEstablishmentError } from '~/lib/error'
 import { createRuntimeApp, listenRuntimeServer } from '~/lib/server-runtime'
 import { getTokenCount } from '~/lib/tokenizer'
+import { DASHBOARD_UI_ASSET_PATHS } from '~/routes/dashboard/embedded-ui'
 import { DashboardQuotaCache } from '~/routes/dashboard/quota'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
-import { createServer as createProxyServer } from '~/server'
+import { createServer as createProxyServer, toErrorResponse } from '~/server'
 import { DEFAULT_ACCOUNT_HOSTNAME, prepareLegacySingleAccountRoutingMigration } from '~/start'
 import {
   configureAccountRuntimes,
@@ -47,6 +49,10 @@ import {
   resolveRequestAccountRuntime,
   runtimeStore,
 } from '~/state'
+
+const DASHBOARD_ASSET_TAG_RE = /<(script|link)\b([^>]*)>/gi
+const DASHBOARD_ASSET_REFERENCE_RE = /\b(?:src|href)\s*=\s*["']([^"']+)["']/i
+const DASHBOARD_STYLESHEET_RE = /\brel\s*=\s*["']stylesheet["']/i
 
 interface RunSelfCheckOptions {
   json: boolean
@@ -758,56 +764,124 @@ async function probeCredentialStoreMigrationContract(): Promise<void> {
   }
 }
 
-async function probeDashboardBundleContract(): Promise<void> {
-  const app = createDashboardRoutes()
-  const [htmlResponse, cssResponse, jsResponse, accountsResponse] = await Promise.all([
-    app.handle(new Request('http://localhost/dashboard')),
-    app.handle(new Request('http://localhost/dashboard/styles.css')),
-    app.handle(new Request('http://localhost/dashboard/app.js')),
-    app.handle(new Request('http://localhost/dashboard/api/targets')),
-  ])
+interface DashboardAssetReference {
+  path: string
+  contentType: string
+}
 
-  assertProbe(htmlResponse.status === 200, `dashboard HTML returned ${htmlResponse.status}`)
-  assertProbe(cssResponse.status === 200, `dashboard CSS returned ${cssResponse.status}`)
-  assertProbe(jsResponse.status === 200, `dashboard JS returned ${jsResponse.status}`)
+function dashboardAssetReferences(shell: HttpProbeResult): DashboardAssetReference[] {
+  assertProbe(shell.status === 200, `dashboard HTML returned ${shell.status}; the embedded UI must be built`)
+  assertProbe(shell.headers.get('content-type')?.startsWith('text/html'), 'dashboard shell has the wrong content type')
+  assertProbe(shell.headers.get('cache-control') === 'no-store', 'dashboard shell is cacheable')
   assertProbe(
-    accountsResponse.status === 200,
-    `dashboard targets projection returned ${accountsResponse.status}`,
+    shell.headers.get('content-security-policy') === 'default-src \'none\'; script-src \'self\'; style-src \'self\'; connect-src \'self\'; img-src \'self\' data:; base-uri \'none\'; frame-ancestors \'none\'; form-action \'none\'; object-src \'none\'',
+    'dashboard shell lost its strict CSP',
   )
 
-  const [html, css, js] = await Promise.all([
-    htmlResponse.text(),
-    cssResponse.text(),
-    jsResponse.text(),
-  ])
-  assertProbe(html.includes('/dashboard/styles.css'), 'dashboard HTML lost its CSS route')
-  assertProbe(html.includes('/dashboard/app.js'), 'dashboard HTML lost its JS route')
-  assertProbe(html.includes('data-tab="accounts"'), 'dashboard HTML lost its Accounts view')
-  assertProbe(html.includes('id="account-bootstrap-form"'), 'dashboard HTML lost legacy routing bootstrap')
-  assertProbe(css.includes('.app-header'), 'dashboard CSS was not bundled')
-  assertProbe(css.includes('.account-auth[hidden]'), 'dashboard CSS lost hidden auth state')
-  assertProbe(js.includes('fetchJson(\'/dashboard/api/overview\')'), 'dashboard JS was not bundled')
-  assertProbe(js.includes('/dashboard/api/accounts/bootstrap'), 'dashboard JS lost legacy routing bootstrap')
-  assertProbe(js.includes('/dashboard/api/accounts/default'), 'dashboard JS lost default-account management')
-  assertProbe(!js.includes('innerHTML'), 'dashboard JS uses unsafe HTML insertion')
+  const references: DashboardAssetReference[] = []
+  for (const match of shell.body.matchAll(DASHBOARD_ASSET_TAG_RE)) {
+    const reference = DASHBOARD_ASSET_REFERENCE_RE.exec(match[2]!)?.[1]
+    if (!reference || reference.startsWith('data:'))
+      continue
+    const url = new URL(reference, 'http://localhost/dashboard')
+    assertProbe(url.origin === 'http://localhost', `dashboard references a foreign asset: ${reference}`)
+    const isScript = match[1]!.toLowerCase() === 'script'
+    assertProbe(isScript || DASHBOARD_STYLESHEET_RE.test(match[2]!), `dashboard references an unexpected link: ${reference}`)
+    references.push({ path: `${url.pathname}${url.search}`, contentType: isScript ? 'text/javascript' : 'text/css' })
+  }
+  deepStrictEqual(
+    references.map(reference => reference.path).sort(),
+    [...DASHBOARD_UI_ASSET_PATHS].sort(),
+    'dashboard shell must reference the complete embedded asset set',
+  )
+  return references
+}
+
+function assertDashboardAsset(response: HttpProbeResult, reference: DashboardAssetReference): void {
+  assertProbe(response.status === 200, `dashboard asset ${reference.path} returned ${response.status}`)
+  assertProbe(response.headers.get('content-type')?.startsWith(reference.contentType), `dashboard asset ${reference.path} has the wrong content type`)
+  assertProbe(response.headers.get('cache-control') === 'no-store', `dashboard asset ${reference.path} is cacheable`)
+  assertProbe(!response.headers.has('content-security-policy'), `dashboard asset ${reference.path} received a shell CSP`)
+}
+
+async function probeDashboardBundleContract(): Promise<void> {
+  const app = createDashboardRoutes()
+  const htmlResponse = await app.handle(new Request('http://localhost/dashboard'))
+  const shell: HttpProbeResult = {
+    body: await htmlResponse.text(),
+    headers: htmlResponse.headers,
+    status: htmlResponse.status,
+  }
+  for (const reference of dashboardAssetReferences(shell)) {
+    const response = await app.handle(new Request(`http://localhost${reference.path}`))
+    assertDashboardAsset({ body: await response.text(), headers: response.headers, status: response.status }, reference)
+  }
+
+  const targetsResponse = await app.handle(new Request('http://localhost/dashboard/api/targets'))
+  assertProbe(targetsResponse.status === 200, `dashboard targets projection returned ${targetsResponse.status}`)
+  const targets = await targetsResponse.json() as DashboardResponse<DashboardTargets>
+  assertProbe(
+    targets.capabilities.canAddAccount === false
+    && targets.capabilities.canBootstrap === false
+    && targets.capabilities.canManageM365 === false
+    && targets.capabilities.canRefreshMetadata === false,
+    'managerless dashboard advertises management capabilities',
+  )
+  assertProbe(targets.targets.length > 0, 'dashboard targets projection omitted the implicit target')
+  assertProbe(
+    targets.targets.every(target => target.actions.canRemove === false && target.actions.canSetDefault === false),
+    'managerless dashboard advertises mutable target actions',
+  )
+  const mutation = await app.handle(new Request('http://localhost/dashboard/api/accounts', {
+    method: 'POST',
+    headers: { origin: 'http://localhost' },
+  }))
+  assertProbe(mutation.status === 409, `managerless dashboard mutation returned ${mutation.status}`)
 }
 
 async function probeDashboardNodeListenerBoundary(): Promise<void> {
-  const app = createRuntimeApp().use(createDashboardRoutes())
+  const app = createRuntimeApp()
+    .onError(({ code, error }) => toErrorResponse({ code, error }))
+    .use(createDashboardRoutes())
   let listener: RuntimeListener | undefined
 
   try {
     listener = await listenRuntimeServer(app, { hostname: '0.0.0.0', port: 0 })
     const port = listener.port
-
-    const loopback = await requestDashboard('127.0.0.1', port)
-    assertProbe(loopback.status === 200, `loopback dashboard request returned ${loopback.status}`)
-    assertProbe(loopback.body.includes('/dashboard/styles.css'), 'loopback dashboard response lost its HTML')
+    const host = `localhost:${port}`
+    const shell = await requestLocal('127.0.0.1', port, host, '/dashboard')
+    const references = dashboardAssetReferences(shell)
+    for (const reference of references) {
+      const response = await requestLocal('127.0.0.1', port, host, reference.path)
+      assertDashboardAsset(response, reference)
+    }
+    for (const page of ['/dashboard/traffic?window=1h', '/dashboard/requests/']) {
+      const deepLink = await requestLocal('127.0.0.1', port, host, page)
+      dashboardAssetReferences(deepLink)
+      assertProbe(deepLink.body === shell.body, `dashboard deep link ${page} did not return the shell`)
+    }
+    for (const unknown of ['/dashboard/api/nope', '/dashboard/assets/nope.js', '/dashboard/nope']) {
+      const response = await requestLocal('127.0.0.1', port, host, unknown)
+      assertProbe(response.status === 404, `unknown dashboard path ${unknown} returned ${response.status}`)
+      assertProbe(response.headers.get('content-type')?.startsWith('application/json'), `unknown dashboard path ${unknown} did not return JSON`)
+      const body = JSON.parse(response.body) as { error?: { type?: string } }
+      assertProbe(body.error?.type === 'not_found_error', `unknown dashboard path ${unknown} lost its error envelope`)
+    }
 
     const remoteAddress = firstNonLoopbackIpv4Address()
-    if (remoteAddress) {
-      const remote = await requestDashboard(remoteAddress, port)
-      assertProbe(remote.status === 403, `non-loopback dashboard request returned ${remote.status}`)
+    for (const guardedPath of ['/dashboard/traffic', references[0]!.path, '/dashboard/api/models']) {
+      const foreign = await requestLocal('127.0.0.1', port, host, guardedPath, {
+        headers: { origin: 'https://attacker.example' },
+      })
+      assertProbe(foreign.status === 403, `foreign-Origin dashboard path ${guardedPath} returned ${foreign.status}`)
+      const foreignHost = await requestLocal('127.0.0.1', port, `attacker.example:${port}`, guardedPath, {
+        headers: { origin: `http://attacker.example:${port}` },
+      })
+      assertProbe(foreignHost.status === 403, `foreign-host dashboard path ${guardedPath} returned ${foreignHost.status}`)
+      if (remoteAddress) {
+        const remote = await requestLocal(remoteAddress, port, host, guardedPath)
+        assertProbe(remote.status === 403, `non-loopback dashboard path ${guardedPath} returned ${remote.status}`)
+      }
     }
   }
   finally {
@@ -1633,10 +1707,6 @@ function firstNonLoopbackIpv4Address(): string | undefined {
   }
 }
 
-function requestDashboard(address: string, port: number): Promise<HttpProbeResult> {
-  return requestLocal(address, port, `localhost:${port}`, '/dashboard')
-}
-
 function requestLocal(
   address: string,
   port: number,
@@ -1646,6 +1716,7 @@ function requestLocal(
 ): Promise<HttpProbeResult> {
   return new Promise((resolve, reject) => {
     const request = httpRequest({
+      agent: false,
       headers: {
         connection: 'close',
         host,

@@ -20,9 +20,9 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
     return rejectDashboardAccess(request, peer.address, peer.live)
   })
 
-  registerServingRoutes(app)
+  registerServingRoutes(app, options.ui)
   registerMonitorRoutes(app, options)
-  registerConfigRoutes(app)
+  registerConfigRoutes(app, options.serverPort)
   registerTargetRoutes(app, options, quotaCache)
   registerM365Routes(app, options)
 
