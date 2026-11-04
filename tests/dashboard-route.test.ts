@@ -3,7 +3,7 @@ import type { DashboardMetadataRefreshService } from '~/routes/dashboard/metadat
 
 import type { DashboardAccountManagement } from '~/routes/dashboard/types'
 import type { CopilotUsageResponse } from '~/types'
-import type { DashboardResponse, DashboardTargets } from '~/types/dashboard'
+import type { DashboardResponse, DashboardTargetQuota, DashboardTargets } from '~/types/dashboard'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -146,7 +146,8 @@ describe('dashboard API security projection', () => {
     authStore.copilotToken = 'copilot-secret-token'
     authStore.githubLogin = 'octocat'
     authStore.githubValidatedAt = Date.now()
-    const quotaCache = new DashboardQuotaCache(async () => usageFixture())
+    const loadQuota = mock(async () => usageFixture())
+    const quotaCache = new DashboardQuotaCache(loadQuota)
     const app = new Elysia().use(createDashboardRoutes({ quotaCache }))
 
     const responses = await Promise.all([
@@ -155,9 +156,31 @@ describe('dashboard API security projection', () => {
       app.handle(new Request('http://localhost/dashboard/api/behavior')),
       app.handle(new Request('http://localhost/dashboard/api/requests')),
     ])
-    const body = (await Promise.all(responses.map(response => response.text()))).join('\n')
+    const quotaResponse = await app.handle(new Request('http://localhost/dashboard/api/targets/default/quota'))
+    const quotaBody = await quotaResponse.text()
+    const body = [...await Promise.all(responses.map(response => response.text())), quotaBody].join('\n')
 
     expect(responses.every(response => response.status === 200)).toBe(true)
+    expect(quotaResponse.status).toBe(200)
+    expect(loadQuota).toHaveBeenCalledTimes(1)
+    const quotaDetail = {
+      entitlement: 100,
+      remaining: 80,
+      percentRemaining: 80,
+      unlimited: false,
+      overagePermitted: false,
+    }
+    expect(JSON.parse(quotaBody) as DashboardResponse<DashboardTargetQuota>).toMatchObject({
+      target: 'default',
+      quota: {
+        status: 'ok',
+        plan: 'individual',
+        resetDate: '2026-09-01',
+        chat: quotaDetail,
+        completions: quotaDetail,
+        premiumInteractions: quotaDetail,
+      },
+    })
     expect(body).not.toContain('github-secret-token')
     expect(body).not.toContain('copilot-secret-token')
     expect(body).not.toContain('analytics-secret')

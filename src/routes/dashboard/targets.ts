@@ -1,5 +1,4 @@
 import type { Elysia } from 'elysia'
-import type { DashboardQuotaCache } from './quota'
 import type { DashboardRouteOptions } from './types'
 import type { DashboardAuthenticationResult, DashboardRouting } from '~/types/dashboard'
 
@@ -7,6 +6,7 @@ import { z } from 'zod'
 
 import { accountManagementError, accountManagementUnavailable, apiError, apiResponse } from './http'
 import { dashboardMetadataRefresher } from './metadata-refresh'
+import { dashboardQuotaCache } from './quota'
 import { getDashboardTargetQuota, getDashboardTargets } from './targets-projection'
 
 const addAccountSchema = z.object({
@@ -26,10 +26,10 @@ const setDefaultAccountSchema = z.object({
 export function registerTargetRoutes(
   app: Elysia,
   options: DashboardRouteOptions,
-  quotaCache: DashboardQuotaCache,
 ) {
   const accountManager = options.accountManager
   const metadataRefresher = options.metadataRefresher ?? dashboardMetadataRefresher
+  const quotaCache = options.quotaCache ?? dashboardQuotaCache
 
   return app
     .get('/dashboard/api/targets', ({ request }) =>

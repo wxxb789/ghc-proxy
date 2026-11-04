@@ -1,5 +1,5 @@
 import { isLoopbackAddress } from '~/lib/peer'
-import { BASE_HEADERS } from './http'
+import { apiError } from './http'
 
 export function rejectDashboardAccess(
   request: Request,
@@ -20,15 +20,7 @@ export function rejectDashboardAccess(
 }
 
 function dashboardAccessDenied(): Response {
-  return Response.json(
-    {
-      error: {
-        message: 'Dashboard access is restricted to the local machine.',
-        type: 'invalid_request_error',
-      },
-    },
-    { status: 403, headers: BASE_HEADERS },
-  )
+  return apiError('Dashboard access is restricted to the local machine.', 403)
 }
 
 function isLoopbackHostname(hostname: string): boolean {

@@ -7,12 +7,10 @@ import { registerConfigRoutes } from './config'
 import { rejectDashboardAccess } from './guard'
 import { registerM365Routes } from './m365-routes'
 import { registerMonitorRoutes } from './monitor'
-import { dashboardQuotaCache } from './quota'
 import { registerServingRoutes } from './serving'
 import { registerTargetRoutes } from './targets'
 
 export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
-  const quotaCache = options.quotaCache ?? dashboardQuotaCache
   const app = new Elysia({ name: 'dashboard' })
 
   app.onBeforeHandle(({ request, server }) => {
@@ -23,7 +21,7 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
   registerServingRoutes(app, options.ui)
   registerMonitorRoutes(app, options)
   registerConfigRoutes(app, options.serverPort)
-  registerTargetRoutes(app, options, quotaCache)
+  registerTargetRoutes(app, options)
   registerM365Routes(app, options)
 
   return app
