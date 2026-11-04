@@ -4,6 +4,8 @@ node_modules/
 # build & cache
 dist/
 .eslintcache
+/ui/dist/
+/src/routes/dashboard/embedded-ui.generated.ts
 
 # local config
 *.local

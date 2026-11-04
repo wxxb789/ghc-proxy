@@ -1,0 +1,112 @@
+import type { EmbeddedUiAsset, EmbeddedUiPath } from '../src/routes/dashboard/embedded-ui'
+import { Buffer } from 'node:buffer'
+import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { gzipSync } from 'node:zlib'
+import { build } from 'vite'
+import { DASHBOARD_UI_INDEX_PATH, EMBEDDED_UI_PATHS } from '../src/routes/dashboard/embedded-ui'
+
+const repoRoot = fileURLToPath(new URL('../', import.meta.url))
+const outputDirectory = join(repoRoot, 'ui/dist')
+const generatedModule = join(repoRoot, 'src/routes/dashboard/embedded-ui.generated.ts')
+const contentTypes: Record<EmbeddedUiPath, string> = {
+  '/dashboard/index.html': 'text/html; charset=utf-8',
+  '/dashboard/assets/app.js': 'text/javascript; charset=utf-8',
+  '/dashboard/assets/app.css': 'text/css; charset=utf-8',
+  '/dashboard/theme-init.js': 'text/javascript; charset=utf-8',
+}
+const HTML_SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi
+const HTML_SCRIPT_SOURCE_RE = /\bsrc\s*=\s*["'][^"']+["']/i
+const HTML_STYLE_ELEMENT_RE = /<style\b/i
+const HTML_STYLE_ATTRIBUTE_RE = /<[^>]*\sstyle\s*=/i
+const JAVASCRIPT_EVAL_RE = /\beval\s*\(/
+const JAVASCRIPT_FUNCTION_RE = /\bnew\s+Function\s*\(/
+
+async function listFiles(directory: string, prefix = ''): Promise<string[]> {
+  const files: string[] = []
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory())
+      files.push(...await listFiles(join(directory, entry.name), relativePath))
+    else if (entry.isFile())
+      files.push(relativePath)
+    else
+      throw new Error(`Unsupported UI output: ${relativePath}`)
+  }
+  return files
+}
+
+function assertHtmlPolicy(html: string): void {
+  for (const match of html.matchAll(HTML_SCRIPT_RE)) {
+    if (!HTML_SCRIPT_SOURCE_RE.test(match[1] ?? '') || match[2]?.trim())
+      throw new Error('UI output contains an inline script')
+  }
+  if (HTML_STYLE_ELEMENT_RE.test(html))
+    throw new Error('UI output contains an inline style element')
+  if (HTML_STYLE_ATTRIBUTE_RE.test(html))
+    throw new Error('UI output contains an inline style attribute')
+}
+
+function assertJavaScriptPolicy(path: string, content: string): void {
+  if (JAVASCRIPT_EVAL_RE.test(content))
+    throw new Error(`UI output contains eval(): ${path}`)
+  if (JAVASCRIPT_FUNCTION_RE.test(content))
+    throw new Error(`UI output contains new Function(): ${path}`)
+}
+
+function formatSize(bytes: number): string {
+  return `${(bytes / 1000).toFixed(2)} kB (${bytes} bytes)`
+}
+
+await build({ configFile: join(repoRoot, 'ui/vite.config.ts') })
+
+const expectedFiles = EMBEDDED_UI_PATHS.map(path => path.slice('/dashboard/'.length)).sort()
+const actualFiles = (await listFiles(outputDirectory)).sort()
+const missing = expectedFiles.filter(path => !actualFiles.includes(path))
+const extra = actualFiles.filter(path => !expectedFiles.includes(path))
+if (missing.length || extra.length)
+  throw new Error(`Unexpected UI output set. Missing: ${missing.join(', ') || 'none'}. Extra: ${extra.join(', ') || 'none'}.`)
+
+const assets = new Map<EmbeddedUiPath, EmbeddedUiAsset>()
+const gzipSizes = new Map<EmbeddedUiPath, number>()
+for (const path of EMBEDDED_UI_PATHS) {
+  const relativePath = path.slice('/dashboard/'.length)
+  const content = await readFile(join(outputDirectory, relativePath), 'utf8')
+  if (path === DASHBOARD_UI_INDEX_PATH)
+    assertHtmlPolicy(content)
+  if (path.endsWith('.js'))
+    assertJavaScriptPolicy(path, content)
+  assets.set(path, { content, contentType: contentTypes[path] })
+  const gzipBytes = gzipSync(content, { level: 9 }).byteLength
+  gzipSizes.set(path, gzipBytes)
+  console.log(`${path}: ${formatSize(Buffer.byteLength(content))} raw, ${formatSize(gzipBytes)} gzip`)
+}
+
+let javaScriptBytes = 0
+let cssBytes = 0
+for (const [path, bytes] of gzipSizes) {
+  if (path.endsWith('.js'))
+    javaScriptBytes += bytes
+  if (path.endsWith('.css'))
+    cssBytes += bytes
+}
+
+// Both scripts load with the shell; the fixed output has no lazy chunks.
+console.log(`Initial JavaScript (app + theme): ${formatSize(javaScriptBytes)} gzip; soft 200 kB, hard 250 kB`)
+console.log(`Total JavaScript: ${formatSize(javaScriptBytes)} gzip; hard 300 kB`)
+console.log(`CSS: ${formatSize(cssBytes)} gzip; soft 20 kB, hard 35 kB`)
+if (javaScriptBytes > 300_000)
+  throw new Error('UI total JavaScript exceeds the 300 kB hard gzip budget')
+if (javaScriptBytes > 250_000)
+  throw new Error('UI initial JavaScript exceeds the 250 kB hard gzip budget')
+if (cssBytes > 35_000)
+  throw new Error('UI CSS exceeds the 35 kB hard gzip budget')
+if (javaScriptBytes > 200_000)
+  console.warn('UI initial JavaScript exceeds the 200 kB soft gzip budget')
+if (cssBytes > 20_000)
+  console.warn('UI CSS exceeds the 20 kB soft gzip budget')
+
+const manifest = JSON.stringify(Object.fromEntries(assets))
+await writeFile(generatedModule, `// Generated by scripts/build-ui.ts. Do not edit.\nimport type { EmbeddedUi } from '~/routes/dashboard/embedded-ui'\n\nexport const embeddedUi = ${manifest} satisfies EmbeddedUi\n`, 'utf8')
+console.log(`Embedded ${assets.size} UI files in src/routes/dashboard/embedded-ui.generated.ts`)

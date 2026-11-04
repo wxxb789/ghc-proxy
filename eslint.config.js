@@ -3,8 +3,17 @@ import antfu from '@antfu/eslint-config'
 export default antfu({
   type: 'app',
   stylistic: true,
+  react: {
+    files: ['ui/src/**/*.{ts,tsx}'],
+    filesTypeAware: ['ui/src/**/*.{ts,tsx}'],
+    overrides: {
+      'react-dom/no-dangerously-set-innerhtml': 'error',
+    },
+  },
   ignores: [
     'dist/**',
+    'ui/dist/**',
+    'src/routes/dashboard/embedded-ui.generated.ts',
     'node_modules/**',
     'plans/**',
     // .NET project: no JavaScript to lint, and bin/obj hold generated JSON.

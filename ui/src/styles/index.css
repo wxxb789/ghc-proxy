@@ -1,0 +1,81 @@
+@import 'tailwindcss' source('../');
+
+:root {
+  color-scheme: light;
+  --page: #f5f7fb;
+  --surface: #ffffff;
+  --surface-soft: #edf1f8;
+  --ink: #172339;
+  --ink-muted: #525f75;
+  --border: #d5dce7;
+  --focus: #315ad3;
+  --completed: #2456c4;
+  --failed: #bd3043;
+  --aborted: #906000;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --page: #101723;
+  --surface: #192334;
+  --surface-soft: #222f44;
+  --ink: #edf2fb;
+  --ink-muted: #acbad0;
+  --border: #374459;
+  --focus: #91b5ff;
+  --completed: #8ab4ff;
+  --failed: #ff98a4;
+  --aborted: #f1c05e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --page: #101723;
+    --surface: #192334;
+    --surface-soft: #222f44;
+    --ink: #edf2fb;
+    --ink-muted: #acbad0;
+    --border: #374459;
+    --focus: #91b5ff;
+    --completed: #8ab4ff;
+    --failed: #ff98a4;
+    --aborted: #f1c05e;
+  }
+}
+
+@theme static {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-soft: var(--surface-soft);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-border: var(--border);
+  --color-focus: var(--focus);
+  --color-completed: var(--completed);
+  --color-failed: var(--failed);
+  --color-aborted: var(--aborted);
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 4px;
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+
+.recharts-default-tooltip {
+  border-color: var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--ink);
+}
