@@ -38,14 +38,18 @@ export function deriveRegion<T>(query: Pick<UseQueryResult<T, Error>, 'data' | '
   const explanation = automaticReadsBlocked(error)
     ? error instanceof SchemaMismatchError ? error.message : 'Automatic updates stopped. Open this Dashboard on its local target hostname and reload.'
     : undefined
-  const state: RegionState = error
-    ? data !== undefined && failures >= 2 ? 'stale' : 'error'
-    : unavailable
-      ? 'unavailable'
-      : isPending
-        ? 'loading'
-        : empty
-          ? 'empty'
-          : isFetching ? 'refreshing' : 'ready'
+  let state: RegionState
+  if (error)
+    state = data !== undefined && failures >= 2 ? 'stale' : 'error'
+  else if (unavailable)
+    state = 'unavailable'
+  else if (isPending)
+    state = 'loading'
+  else if (empty)
+    state = 'empty'
+  else if (isFetching)
+    state = 'refreshing'
+  else
+    state = 'ready'
   return { state, data, error, explanation }
 }

@@ -1,4 +1,4 @@
-import type { DashboardBreakdown, DashboardMetrics } from '@contract'
+import type { DashboardBreakdown, DashboardMetricBucket, DashboardMetrics } from '@contract'
 import { formatDateTime, formatDuration, formatInteger, formatQuantile } from './format'
 
 export interface TimePoint {
@@ -104,13 +104,28 @@ export function buildBreakdown(source: readonly DashboardBreakdown[], limit = 8)
 }
 
 export function metricSummary(metrics: DashboardMetrics, kind: 'requests' | 'latency'): string {
-  const rows = buildTimeSeries(metrics).filter(row => row.total !== null)
-  const latest = rows.at(-1)
+  let latest: DashboardMetricBucket | undefined
+  let peakRequests = 0
+  let peakLatency: DashboardMetricBucket | undefined
+  for (const bucket of metrics.series) {
+    if (bucket.coverage === 'not-collected')
+      continue
+    latest = bucket
+    if (kind === 'requests') {
+      peakRequests = Math.max(peakRequests, bucket.counts.completed + bucket.counts.failed + bucket.counts.aborted)
+    }
+    else {
+      const p95 = bucket.latency.p95
+      if (p95 !== null && p95.valueMs > (peakLatency?.latency.p95?.valueMs ?? -Infinity))
+        peakLatency = bucket
+    }
+  }
   const collection = `Collection began ${formatDateTime(metrics.collectionStartedAt)}.`
   if (kind === 'requests') {
-    const peak = rows.reduce((max, row) => Math.max(max, row.total ?? 0), 0)
-    return `${metrics.window} window: ${metrics.coveredMs > 0 ? `${formatInteger(windowKpis(metrics).requests)} terminal requests` : 'no collected time; terminal counts unavailable'}. Latest ${latest ? formatInteger(latest.total) : 'not collected'} requests; peak ${rows.length ? formatInteger(peak) : 'not collected'} requests per interval. ${collection}`
+    const total = metrics.counts.completed + metrics.counts.failed + metrics.counts.aborted
+    const latestTotal = latest ? latest.counts.completed + latest.counts.failed + latest.counts.aborted : null
+    return `${metrics.window} window: ${metrics.coveredMs > 0 ? `${formatInteger(total)} terminal requests` : 'no collected time; terminal counts unavailable'}. Latest ${latest ? formatInteger(latestTotal) : 'not collected'} requests; peak ${latest ? formatInteger(peakRequests) : 'not collected'} requests per interval. ${collection}`
   }
-  const peak = rows.reduce<TimePoint | undefined>((max, row) => row.p95 !== null && row.p95 > (max?.p95 ?? -Infinity) ? row : max, undefined)
-  return `${metrics.window} window: p95 ${formatQuantile(metrics.latency.p95)} from ${formatInteger(metrics.latency.count)} observed completed-request samples. Latest p95 ${latest?.p95Label ?? 'not collected'}; peak p95 ${peak?.p95Label ?? 'No samples'}. ${collection}`
+  const latestP95 = latest ? latest.latency.p95 === null ? 'No samples' : formatQuantile(latest.latency.p95) : 'not collected'
+  return `${metrics.window} window: p95 ${formatQuantile(metrics.latency.p95)} from ${formatInteger(metrics.latency.count)} observed completed-request samples. Latest p95 ${latestP95}; peak p95 ${peakLatency ? formatQuantile(peakLatency.latency.p95) : 'No samples'}. ${collection}`
 }

@@ -118,8 +118,6 @@ const RUNTIME_PROBES = [
   ['dashboard-node-listener-boundary', probeDashboardNodeListenerBoundary],
 ] as const
 
-// These probes replace process-wide account routing or client behavior and
-// must not overlap any other runtime probe.
 const SERIAL_RUNTIME_PROBES = [
   ['account-hostname-routing', probeAccountHostnameRouting],
   ['legacy-single-account-routing-migration', probeLegacySingleAccountRoutingMigration],
@@ -1161,7 +1159,6 @@ async function probeRequestStreamLifecycle(): Promise<void> {
           assertProbe(!chunk.done, `${outcome} stream ended before its first chunk`)
           body += decoder.decode(chunk.value, { stream: true })
         }
-        // A macrotask and a meaningful delay expose first-chunk completion.
         const delayMs = 40
         await delay(delayMs)
         const midway = runtimeStore.requests.snapshot()

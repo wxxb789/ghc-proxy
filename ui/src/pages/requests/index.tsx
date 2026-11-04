@@ -239,7 +239,6 @@ export function RequestsPage() {
   useEffect(() => {
     if (url.request === undefined || !hasData)
       return
-    // Let the route shell's heading focus run before selecting the detail surface.
     let current = true
     queueMicrotask(() => {
       if (current)
@@ -249,7 +248,9 @@ export function RequestsPage() {
       current = false
     }
   }, [url.request, hasData])
-  const selected = requests.data && [...requests.data.active, ...requests.data.recent].find(request => request.requestId === url.request)
+  const selected = url.request === undefined
+    ? undefined
+    : requests.data?.active.find(request => request.requestId === url.request) ?? requests.data?.recent.find(request => request.requestId === url.request)
   return (
     <div className={url.request === undefined ? 'monitor-request-layout' : 'monitor-request-layout has-selection'}>
       <Region title="Request activity" result={{ ...requests.region, state: requests.region.state === 'empty' ? 'ready' : requests.region.state }} retry={() => { void requests.refetch() }}>

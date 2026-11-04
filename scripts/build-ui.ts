@@ -92,7 +92,6 @@ for (const [path, bytes] of gzipSizes) {
     cssBytes += bytes
 }
 
-// Both scripts load with the shell; the fixed output has no lazy chunks.
 console.log(`Initial JavaScript (app + theme): ${formatSize(javaScriptBytes)} gzip; soft 200 kB, hard 250 kB`)
 console.log(`Total JavaScript: ${formatSize(javaScriptBytes)} gzip; hard 300 kB`)
 console.log(`CSS: ${formatSize(cssBytes)} gzip; soft 20 kB, hard 35 kB`)

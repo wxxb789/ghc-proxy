@@ -24,8 +24,7 @@ export const PAGE_LABELS: Record<DashboardPage, string> = {
 export function parseUrl(input: string | URL): DashboardUrlState {
   const url = input instanceof URL ? input : new URL(input, 'http://localhost')
   const path = url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname
-  const segment = path === '/dashboard' ? 'overview' : path.slice('/dashboard/'.length)
-  const page = DASHBOARD_PAGES.find(page => path === `/dashboard/${page}` && page === segment)
+  const page = DASHBOARD_PAGES.find(page => path === `/dashboard/${page}`)
     ?? (path === '/dashboard' ? 'overview' : null)
   const window = url.searchParams.get('window')
   const value = (key: string) => url.searchParams.get(key) ?? undefined
