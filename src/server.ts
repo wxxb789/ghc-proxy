@@ -1,5 +1,5 @@
 import type { Elysia } from 'elysia'
-import type { DashboardAccountManagement } from './routes/dashboard/route'
+import type { DashboardAccountManagement } from './routes/dashboard/types'
 import { cors } from '@elysiajs/cors'
 import { enforceTargetGates } from '~/lib/target-gates'
 import { HTTPError } from './lib/error'

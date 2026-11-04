@@ -2,7 +2,7 @@ import { createContext, Script } from 'node:vm'
 import { describe, expect, test } from 'bun:test'
 
 import { DASHBOARD_HTML, DASHBOARD_JS } from '~/routes/dashboard/assets'
-import { getDashboardBehavior } from '~/routes/dashboard/handler'
+import { getDashboardBehavior } from '~/routes/dashboard/config-projection'
 
 class FakeElement {
   children: FakeElement[] = []

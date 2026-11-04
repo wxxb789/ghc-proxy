@@ -1,7 +1,7 @@
 import type { Mock } from 'bun:test'
 import type { DashboardMetadataRefreshService } from '~/routes/dashboard/metadata-refresh'
 
-import type { DashboardAccountManagement } from '~/routes/dashboard/route'
+import type { DashboardAccountManagement } from '~/routes/dashboard/types'
 import type { CopilotUsageResponse } from '~/types'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,16 +15,14 @@ import { createTargetRuntime } from '~/accounts/target-runtime'
 import { resetMscTokenCache, setMscHelperRunner } from '~/clients/msc-auth'
 import { compileAccountRouting } from '~/lib/account-routing'
 import { isLoopbackAddress } from '~/lib/peer'
-import { DashboardQuotaCache, dashboardQuotaCache } from '~/routes/dashboard/handler'
 import { getM365DashboardState } from '~/routes/dashboard/m365'
 import {
   DashboardMetadataRefresher,
 
 } from '~/routes/dashboard/metadata-refresh'
-import {
-  createDashboardRoutes,
-  DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY,
-} from '~/routes/dashboard/route'
+import { DashboardQuotaCache, dashboardQuotaCache } from '~/routes/dashboard/quota'
+import { createDashboardRoutes } from '~/routes/dashboard/route'
+import { DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY } from '~/routes/dashboard/targets-projection'
 import { createServer } from '~/server'
 import {
   authStore,

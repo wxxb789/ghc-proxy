@@ -6,12 +6,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { UpstreamRequestQueue } from '~/clients/upstream-queue'
 import { getCachedConfig } from '~/lib/config'
-import {
-  DashboardQuotaCache,
-  getDashboardAccount,
-  getDashboardBehavior,
-  getDashboardModels,
-} from '~/routes/dashboard/handler'
+import { getDashboardBehavior, getDashboardModels } from '~/routes/dashboard/config-projection'
+import { DashboardQuotaCache } from '~/routes/dashboard/quota'
+import { getDashboardAccount } from '~/routes/dashboard/targets-projection'
 import {
   authStore,
   createAccountRuntime,

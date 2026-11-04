@@ -1,4 +1,4 @@
-import type { DashboardQuota, DashboardQuotaCache } from './handler'
+import type { DashboardQuota, DashboardQuotaCache } from './quota'
 import type { RoutedAccountDescriptor } from '~/accounts/descriptor'
 
 import { cacheModels } from '~/clients/factory'

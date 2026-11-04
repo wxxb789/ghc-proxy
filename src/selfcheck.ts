@@ -36,7 +36,7 @@ import {
 import { HTTPError, isRetryableConnectionEstablishmentError } from '~/lib/error'
 import { createRuntimeApp, listenRuntimeServer } from '~/lib/server-runtime'
 import { getTokenCount } from '~/lib/tokenizer'
-import { DashboardQuotaCache } from '~/routes/dashboard/handler'
+import { DashboardQuotaCache } from '~/routes/dashboard/quota'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
 import { createServer as createProxyServer } from '~/server'
 import { DEFAULT_ACCOUNT_HOSTNAME, prepareLegacySingleAccountRoutingMigration } from '~/start'

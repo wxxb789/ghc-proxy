@@ -2,8 +2,8 @@ import type { RoutedAccountDescriptor } from '~/accounts/descriptor'
 
 import { describe, expect, test } from 'bun:test'
 
-import { DashboardQuotaCache } from '~/routes/dashboard/handler'
 import { DashboardMetadataRefresher } from '~/routes/dashboard/metadata-refresh'
+import { DashboardQuotaCache } from '~/routes/dashboard/quota'
 import { authStore, createAccountRuntime, getCurrentAccountName, modelCache } from '~/state'
 
 describe('DashboardMetadataRefresher', () => {

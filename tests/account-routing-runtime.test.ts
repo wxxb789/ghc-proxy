@@ -11,7 +11,7 @@ import { runGuard } from '~/guard'
 import { compileAccountRouting } from '~/lib/account-routing'
 import { refreshCopilotToken } from '~/lib/token'
 import { createRecoveryRecord } from '~/pipeline/runner'
-import { dashboardQuotaCache } from '~/routes/dashboard/handler'
+import { dashboardQuotaCache } from '~/routes/dashboard/quota'
 import { createServer } from '~/server'
 import {
   authStore,

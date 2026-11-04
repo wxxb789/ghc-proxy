@@ -15,7 +15,7 @@ import {
   resolveMscAuthExe,
   setMscHelperRunner,
 } from '~/clients/msc-auth'
-import { getDashboardOverview } from '~/routes/dashboard/handler'
+import { getDashboardOverview } from '~/routes/dashboard/monitor-projection'
 
 import { getTargetAvailability, runWithAccountRuntime } from '~/state/account-runtime'
 
