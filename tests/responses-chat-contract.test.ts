@@ -169,6 +169,13 @@ function chatChunk(
   }
 }
 
+async function waitForTerminalRequest(): Promise<void> {
+  const deadline = performance.now() + 1_000
+  while (runtimeStore.requests.summary().active > 0 && performance.now() < deadline)
+    await Bun.sleep(1)
+  expect(runtimeStore.requests.summary().active).toBe(0)
+}
+
 function post(
   app: ReturnType<typeof createServer>,
   path: string,
@@ -993,6 +1000,7 @@ describe('Responses Chat bridge streaming contract', () => {
       })
       await cancelled
       await generatorFinished
+      await waitForTerminalRequest()
 
       expect(received).not.toContain('response.completed')
       expect(received).not.toContain('response.failed')
@@ -1064,6 +1072,7 @@ describe('Responses Chat bridge streaming contract', () => {
       })
       await cancelled
       await generatorFinished
+      await waitForTerminalRequest()
 
       expect(received).not.toContain('response.completed')
       expect(received).not.toContain('response.failed')
