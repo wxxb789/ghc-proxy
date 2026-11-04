@@ -1,0 +1,7 @@
+export { createDashboardQueryClient } from '../lib/query-client'
+export type { DashboardNavigation, DashboardRuntime } from './context'
+export { useDashboard, useDashboardUrl } from './context'
+export type { DashboardRootProps } from './root'
+export { DashboardRoot } from './root'
+export type { ShellProps } from './shell'
+export { Shell } from './shell'

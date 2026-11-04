@@ -11,6 +11,7 @@
       "@contract": ["../src/types/dashboard.ts"]
     },
     "types": ["vite/client", "node"],
+    "allowImportingTsExtensions": true,
     "strict": true,
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true,
