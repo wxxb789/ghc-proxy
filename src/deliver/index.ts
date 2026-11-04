@@ -18,8 +18,17 @@ export function deliverResult(
   if (result.kind === 'json') {
     return { streaming: false, data: result.data }
   }
-  runtimeStore.requests.markStreaming(
-    getOrCreateRequestCorrelation(request).requestId,
-  )
-  return { streaming: true, stream: sseAdapter(result.generator) }
+  const { requestId } = getOrCreateRequestCorrelation(request)
+  runtimeStore.requests.markStreaming(requestId)
+  return {
+    streaming: true,
+    stream: (async function* () {
+      try {
+        yield* sseAdapter(result.generator)
+      }
+      finally {
+        runtimeStore.requests.finishStream(requestId)
+      }
+    })(),
+  }
 }

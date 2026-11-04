@@ -46,6 +46,8 @@ describe('RequestActivityStore', () => {
 
     now = 1_040
     store.complete('req-1', 200)
+    expect(store.snapshot().recent).toEqual([])
+    store.finishStream('req-1')
 
     expect(store.snapshot()).toMatchObject({
       active: [],
@@ -169,6 +171,12 @@ describe('RequestActivityStore', () => {
     now = 1_025
     store.markAborted('req-aborted')
     store.complete('req-aborted', 200)
+    expect(store.snapshot()).toMatchObject({
+      active: [{ requestId: 'req-aborted', state: 'aborted' }],
+      recent: [],
+    })
+    now = 1_060
+    store.finishStream('req-aborted')
 
     expect(store.snapshot()).toMatchObject({
       active: [],
@@ -176,7 +184,7 @@ describe('RequestActivityStore', () => {
         requestId: 'req-aborted',
         state: 'aborted',
         status: 200,
-        durationMs: 25,
+        durationMs: 60,
       }],
       totals: {
         started: 1,
@@ -228,6 +236,7 @@ describe('RequestActivityStore', () => {
     })
     store.markStreaming('req-late-abort')
     store.complete('req-late-abort', 200)
+    store.finishStream('req-late-abort')
 
     store.markAborted('req-late-abort')
     store.markAborted('req-late-abort')
@@ -250,8 +259,10 @@ describe('RequestActivityStore', () => {
       method: 'POST',
       endpoint: '/v1/responses',
     })
+    store.markStreaming('req-failed-before-abort')
     store.recordError('req-failed-before-abort', 'Upstream HTTP 500 (upstream_error)')
     store.complete('req-failed-before-abort', 200)
+    store.finishStream('req-failed-before-abort')
 
     store.markAborted('req-failed-before-abort')
 
@@ -276,6 +287,7 @@ describe('RequestActivityStore', () => {
       method: 'POST',
       endpoint: '/v1/responses',
     })
+    store.markStreaming(ordering)
 
     if (ordering === 'error-before-abort') {
       store.recordError(ordering, 'Upstream HTTP 500 (upstream_error)')
@@ -286,6 +298,7 @@ describe('RequestActivityStore', () => {
       store.recordError(ordering, 'Upstream HTTP 500 (upstream_error)')
     }
     store.complete(ordering, 200)
+    store.finishStream(ordering)
 
     expect(store.snapshot()).toMatchObject({
       recent: [{
@@ -301,6 +314,64 @@ describe('RequestActivityStore', () => {
       },
     })
   })
+
+  test.each(['response-first', 'stream-first'])(
+    'finalizes once at stream end for %s callback ordering',
+    (ordering) => {
+      let now = 1_000
+      const store = new RequestActivityStore(() => now)
+      store.start({ requestId: ordering, method: 'POST', endpoint: '/v1/messages' })
+      store.markStreaming(ordering)
+
+      if (ordering === 'response-first') {
+        now = 1_010
+        expect(store.complete(ordering, 201)).toBe(true)
+        expect(store.complete(ordering, 201)).toBe(false)
+        expect(store.snapshot()).toMatchObject({
+          active: [{ state: 'streaming' }],
+          recent: [],
+        })
+      }
+
+      now = 1_080
+      store.finishStream(ordering)
+      now = 1_100
+      store.finishStream(ordering)
+      if (ordering === 'stream-first') {
+        expect(store.complete(ordering, 201)).toBe(true)
+        expect(store.complete(ordering, 201)).toBe(false)
+      }
+
+      expect(store.snapshot()).toMatchObject({
+        active: [],
+        recent: [{ state: 'completed', status: 201, durationMs: 80 }],
+        totals: { started: 1, completed: 1, failed: 0, aborted: 0 },
+      })
+      expect(store.snapshot().recent).toHaveLength(1)
+    },
+  )
+
+  test.each(['response-first', 'stream-first'])(
+    'preserves pre-stream failure status for %s callback ordering',
+    (ordering) => {
+      const store = new RequestActivityStore(() => 1_000)
+      store.start({ requestId: ordering, method: 'POST', endpoint: '/v1/messages' })
+      store.markStreaming(ordering)
+      if (ordering === 'response-first')
+        store.complete(ordering, 413)
+      store.finishStream(ordering)
+      store.recordError(ordering, 'HTTP 413 (invalid_request_error)')
+      if (ordering === 'stream-first')
+        store.complete(ordering, 413)
+
+      expect(store.snapshot()).toMatchObject({
+        active: [],
+        recent: [{ state: 'failed', status: 413 }],
+        totals: { started: 1, completed: 1, failed: 1, aborted: 0 },
+      })
+      expect(store.snapshot().recent).toHaveLength(1)
+    },
+  )
 })
 
 describe('dashboard metadata sanitizers', () => {

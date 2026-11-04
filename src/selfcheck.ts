@@ -18,6 +18,7 @@ import { createServer as createHttpServer, request as httpRequest } from 'node:h
 import { networkInterfaces, tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
+import { setTimeout as delay } from 'node:timers/promises'
 import { defineCommand } from 'citty'
 
 import { AccountManager } from '~/accounts/manager'
@@ -44,6 +45,7 @@ import {
   createAccountRuntime,
   resetAccountRuntimes,
   resolveRequestAccountRuntime,
+  runtimeStore,
 } from '~/state'
 
 interface RunSelfCheckOptions {
@@ -108,6 +110,17 @@ const RUNTIME_PROBES = [
   ['credential-store-migration-contract', probeCredentialStoreMigrationContract],
   ['dashboard-bundle-contract', probeDashboardBundleContract],
   ['dashboard-node-listener-boundary', probeDashboardNodeListenerBoundary],
+] as const
+
+// These probes replace process-wide account routing or client behavior and
+// must not overlap any other runtime probe.
+const SERIAL_RUNTIME_PROBES = [
+  ['account-hostname-routing', probeAccountHostnameRouting],
+  ['legacy-single-account-routing-migration', probeLegacySingleAccountRoutingMigration],
+  ['dashboard-node-quota-projection', probeDashboardNodeQuotaProjection],
+  ['responses-chat-completions-bridge', probeResponsesChatCompletionsBridge],
+  ['request-stream-lifecycle', probeRequestStreamLifecycle],
+  ['http-error-transport-contract', probeHttpErrorTransportContract],
 ] as const
 
 async function probeEncoding(encoding: string): Promise<EncodingProbe> {
@@ -984,6 +997,159 @@ async function probeAccountHostnameRouting(): Promise<void> {
   }
 }
 
+async function probeRequestStreamLifecycle(): Promise<void> {
+  const accountName = 'selfcheck-stream-lifecycle'
+  const modelId = 'selfcheck-stream-chat'
+  const runtime = createAccountRuntime(accountName)
+  runtime.auth.copilotToken = 'selfcheck-stream-token'
+  runtime.auth.upstreamTimeoutSeconds = 0
+  runtime.models.cacheModels({
+    object: 'list',
+    data: [{
+      id: modelId,
+      model_picker_enabled: true,
+      name: modelId,
+      object: 'model',
+      preview: false,
+      vendor: 'selfcheck',
+      version: 'selfcheck',
+      capabilities: {
+        family: 'gpt',
+        limits: {
+          max_context_window_tokens: 128_000,
+          max_output_tokens: 4_096,
+          max_prompt_tokens: 100_000,
+        },
+        object: 'model_capabilities',
+        supports: { streaming: true, tool_calls: true },
+        tokenizer: 'o200k_base',
+        type: 'chat',
+      },
+      supported_endpoints: ['/chat/completions'],
+    } satisfies Model],
+  })
+  const originalCreateChatCompletions = CopilotClient.prototype.createChatCompletions
+  let listener: RuntimeListener | undefined
+  let releaseStream: (() => void) | undefined
+  let controller: AbortController | undefined
+
+  try {
+    configureAccountRuntimes(compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: accountName,
+      hostnames: { [DEFAULT_ACCOUNT_HOSTNAME]: accountName },
+    }, [accountName]), [runtime])
+    listener = await listenRuntimeServer(createProxyServer({ logRequests: false }), {
+      hostname: '127.0.0.1',
+      port: 0,
+    })
+
+    for (const outcome of ['completed', 'failed', 'aborted'] as const) {
+      runtimeStore.requests.reset()
+      const gate = Promise.withResolvers<void>()
+      releaseStream = gate.resolve
+      const fakeCreateChatCompletions: typeof CopilotClient.prototype.createChatCompletions = async (_payload, options) => {
+        const signal = options?.signal
+        assertProbe(signal, 'stream lifecycle request did not receive an upstream signal')
+        return (async function* () {
+          yield { data: JSON.stringify(createSelfcheckChatChunk(modelId, { content: 'lifecycle first' })) }
+          const onAbort = () => gate.resolve()
+          signal.addEventListener('abort', onAbort, { once: true })
+          try {
+            if (!signal.aborted)
+              await gate.promise
+            signal.throwIfAborted()
+            if (outcome === 'failed')
+              throw new Error('selfcheck private upstream stream detail')
+            yield { data: JSON.stringify(createSelfcheckChatChunk(modelId, { content: 'lifecycle last' }, 'stop')) }
+            yield { data: '[DONE]' }
+          }
+          finally {
+            signal.removeEventListener('abort', onAbort)
+          }
+        })()
+      }
+      CopilotClient.prototype.createChatCompletions = fakeCreateChatCompletions
+      controller = new AbortController()
+      const response = await fetch(`http://127.0.0.1:${listener.port}/v1/chat/completions`, {
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: 'selfcheck lifecycle' }],
+          model: modelId,
+          stream: true,
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
+      })
+      assertProbe(response.status === 200, `${outcome} stream returned ${response.status}`)
+      const reader = response.body?.getReader()
+      assertProbe(reader, `${outcome} stream has no body`)
+      try {
+        const decoder = new TextDecoder()
+        let body = ''
+        while (!body.includes('lifecycle first')) {
+          const chunk = await reader.read()
+          assertProbe(!chunk.done, `${outcome} stream ended before its first chunk`)
+          body += decoder.decode(chunk.value, { stream: true })
+        }
+        // A macrotask and a meaningful delay expose first-chunk completion.
+        const delayMs = 40
+        await delay(delayMs)
+        const midway = runtimeStore.requests.snapshot()
+        assertProbe(midway.active.length === 1 && midway.active[0]?.state === 'streaming', `${outcome} request left active before stream end`)
+        assertProbe(midway.recent.length === 0, `${outcome} request was recorded terminal before stream end`)
+
+        if (outcome === 'aborted') {
+          controller.abort()
+        }
+        else {
+          gate.resolve()
+          while (true) {
+            const chunk = await reader.read()
+            if (chunk.done)
+              break
+            body += decoder.decode(chunk.value, { stream: true })
+          }
+          if (outcome === 'completed')
+            assertProbe(body.includes('lifecycle last') && body.includes('[DONE]'), 'normal lifecycle stream omitted its final delivery')
+        }
+
+        const deadline = Date.now() + 2_000
+        while (runtimeStore.requests.summary().active > 0 && Date.now() < deadline)
+          await delay(10)
+        const snapshot = runtimeStore.requests.snapshot()
+        const terminal = snapshot.recent[0]
+        assertProbe(snapshot.active.length === 0 && snapshot.recent.length === 1, `${outcome} stream did not finalize exactly once`)
+        assertProbe(terminal?.state === outcome && terminal.status === 200, `${outcome} stream has the wrong terminal state or HTTP status`)
+        assertProbe(terminal.durationMs >= delayMs, `${outcome} stream duration omitted the delayed delivery`)
+        deepStrictEqual(snapshot.totals, {
+          started: 1,
+          completed: outcome === 'aborted' ? 0 : 1,
+          failed: outcome === 'failed' ? 1 : 0,
+          aborted: outcome === 'aborted' ? 1 : 0,
+        })
+        if (outcome === 'failed') {
+          assertProbe(terminal.errorSummary === 'Unhandled proxy error', 'stream failure lost its sanitized summary')
+          assertProbe(!JSON.stringify(snapshot).includes('selfcheck private upstream stream detail'), 'stream failure retained raw upstream text')
+        }
+      }
+      finally {
+        controller.abort()
+        gate.resolve()
+        reader.releaseLock()
+      }
+    }
+  }
+  finally {
+    controller?.abort()
+    releaseStream?.()
+    await listener?.close(true)
+    CopilotClient.prototype.createChatCompletions = originalCreateChatCompletions
+    runtimeStore.requests.reset()
+    resetAccountRuntimes()
+  }
+}
+
 async function probeResponsesChatCompletionsBridge(): Promise<void> {
   const accountName = 'selfcheck-responses-chat'
   const modelId = 'selfcheck-chat-only'
@@ -1548,15 +1714,9 @@ async function runSelfCheck(options: RunSelfCheckOptions): Promise<void> {
   const parallelRuntimeProbes = await Promise.all(
     RUNTIME_PROBES.map(([name, probe]) => runRuntimeProbe(name, probe)),
   )
-  const runtimeProbes = [
-    ...parallelRuntimeProbes,
-    await runRuntimeProbe('account-hostname-routing', probeAccountHostnameRouting),
-    await runRuntimeProbe('legacy-single-account-routing-migration', probeLegacySingleAccountRoutingMigration),
-    await runRuntimeProbe('dashboard-node-quota-projection', probeDashboardNodeQuotaProjection),
-    await runRuntimeProbe('responses-chat-completions-bridge', probeResponsesChatCompletionsBridge),
-    // Runs last: it swaps the global account runtimes for its own listener.
-    await runRuntimeProbe('http-error-transport-contract', probeHttpErrorTransportContract),
-  ]
+  const runtimeProbes = [...parallelRuntimeProbes]
+  for (const [name, probe] of SERIAL_RUNTIME_PROBES)
+    runtimeProbes.push(await runRuntimeProbe(name, probe))
   const failed = [...probes, ...runtimeProbes].filter(p => !p.ok)
 
   const result = {

@@ -214,8 +214,12 @@ describe('per-target gates', () => {
 
     expect(response.status).toBe(503)
     const snapshot = runtimeStore.requests.snapshot()
-    expect(snapshot.totals.started).toBeGreaterThan(0)
-    expect(snapshot.active.some(entry => entry.endpoint === '/v1/messages')).toBe(true)
+    expect(snapshot.active).toEqual([])
+    expect(snapshot.recent[0]).toMatchObject({
+      endpoint: '/v1/messages',
+      state: 'failed',
+      status: 503,
+    })
   })
 })
 

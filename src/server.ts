@@ -201,6 +201,9 @@ export function createServer(options?: ServerOptions) {
     // `onRequest` return into the response, and a WeakMap setter returns the
     // WeakMap. `markRequestStart` is typed `: void` for the same reason.
     .onRequest(({ request }) => {
+      if (request.method === 'OPTIONS')
+        return
+
       const endpoint = classifyObservedEndpoint(request.url)
       if (endpoint === undefined)
         return
@@ -216,8 +219,13 @@ export function createServer(options?: ServerOptions) {
     })
     .onRequest(async ({ request, server }) => {
       const refusal = await enforceTargetGates(request, server)
-      if (refusal)
+      if (refusal) {
+        runtimeStore.requests.complete(
+          getOrCreateRequestCorrelation(request).requestId,
+          refusal.status,
+        )
         return refusal
+      }
     })
     .use(cors())
     .derive(({ request }) => ({

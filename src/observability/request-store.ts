@@ -78,6 +78,8 @@ export interface ObservedRequest {
 interface ActiveRequest extends Omit<ObservedRequest, 'durationMs' | 'effects' | 'startedAt'> {
   startedAtMs: number
   effectCounts: Partial<Record<ProxyEffectId, number>>
+  streamOpen: boolean
+  streamFinishedAtMs?: number
 }
 
 export interface RequestActivitySnapshot {
@@ -184,6 +186,7 @@ export class RequestActivityStore {
       endpoint: input.endpoint,
       state: 'in_flight',
       startedAtMs,
+      streamOpen: false,
       ...(input.requestedModel
         ? { requestedModel: sanitizeModelId(input.requestedModel) }
         : {}),
@@ -281,7 +284,10 @@ export class RequestActivityStore {
 
   markStreaming(requestId: string): void {
     const request = this.active.get(requestId)
-    if (request && request.state !== 'aborted')
+    if (!request)
+      return
+    request.streamOpen = true
+    if (request.state !== 'aborted')
       request.state = 'streaming'
   }
 
@@ -304,16 +310,39 @@ export class RequestActivityStore {
 
   complete(requestId: string, status: number): boolean {
     const request = this.active.get(requestId)
-    if (!request)
+    if (!request || request.status !== undefined)
       return false
 
-    this.active.delete(requestId)
-    this.effectBuffers.delete(requestId)
+    // The response hook owns the access log, not the end of a streamed body.
+    request.status = status
+    if (request.streamOpen && (status < 400 || request.state === 'aborted'))
+      return true
+
+    this.finalize(request, status, request.streamFinishedAtMs ?? this.now())
+    return true
+  }
+
+  finishStream(requestId: string): void {
+    const request = this.active.get(requestId)
+    if (!request?.streamOpen)
+      return
+
+    request.streamOpen = false
+    request.streamFinishedAtMs = this.now()
+    // Before the first emission throws, onError still has to supply the real
+    // HTTP status and error metadata. Never manufacture a successful status.
+    if (request.status !== undefined)
+      this.finalize(request, request.status, request.streamFinishedAtMs)
+  }
+
+  private finalize(request: ActiveRequest, status: number, finishedAtMs: number): void {
+    this.active.delete(request.requestId)
+    this.effectBuffers.delete(request.requestId)
     const aborted = request.state === 'aborted' && request.errorSummary === undefined
     const failed = !aborted && (status >= 400 || request.errorSummary !== undefined)
     const completedRequest = projectRequest(
       request,
-      Math.max(0, this.now() - request.startedAtMs),
+      Math.max(0, finishedAtMs - request.startedAtMs),
       aborted ? 'aborted' : failed ? 'failed' : 'completed',
       status,
     )
@@ -324,7 +353,6 @@ export class RequestActivityStore {
       this.completed++
     if (failed)
       this.failed++
-    return true
   }
 
   snapshot(): RequestActivitySnapshot {

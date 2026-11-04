@@ -3,6 +3,7 @@ import type { CapturedMessagesCall, CapturedResponsesCall } from './helpers'
 
 import { Buffer } from 'node:buffer'
 import { createConnection } from 'node:net'
+import { setImmediate } from 'node:timers/promises'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { CopilotClient } from '~/clients'
@@ -437,6 +438,9 @@ describe('dashboard request lifecycle', () => {
         }),
       })
 
+      const response = await responsePromise
+      await setImmediate()
+      expect(response.status).toBe(200)
       await streamStarted
       expect(runtimeStore.requests.snapshot().active[0]).toMatchObject({
         endpoint: '/v1/chat/completions',
@@ -444,7 +448,6 @@ describe('dashboard request lifecycle', () => {
       })
 
       releaseStream?.()
-      const response = await responsePromise
       expect(response.status).toBe(200)
       expect(await response.text()).toContain('hello')
       await new Promise(resolve => setTimeout(resolve, 50))
@@ -463,6 +466,20 @@ describe('dashboard request lifecycle', () => {
       releaseStream?.()
       await listener.close(true)
     }
+  })
+
+  test('does not observe CORS preflight requests', async () => {
+    const response = await createServer().handle(new Request('http://localhost/v1/messages', {
+      method: 'OPTIONS',
+      headers: {
+        'origin': 'http://localhost',
+        'access-control-request-method': 'POST',
+      },
+    }))
+    await settleResponse(response)
+
+    expect(response.status).toBe(204)
+    expect(runtimeStore.requests.snapshot()).toMatchObject({ active: [], recent: [] })
   })
 
   test('records a client-aborted streaming delivery as aborted', async () => {

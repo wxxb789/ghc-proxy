@@ -36,6 +36,7 @@ const EXPECTED_RUNTIME_PROBES = [
   'dashboard-node-quota-projection',
   'responses-chat-completions-bridge',
   'http-error-transport-contract',
+  'request-stream-lifecycle',
   'server-lifecycle-contract',
 ]
 
