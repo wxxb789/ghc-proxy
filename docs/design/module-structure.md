@@ -99,15 +99,33 @@ routes/embeddings/
 └── handler.ts                      # Validation + upstream-shape normalization
 
 routes/dashboard/
-├── route.ts                        # Loopback access checks, projections, and account mutations
-├── handler.ts                      # Sanitized overview/model/behavior/request projections
-└── assets.ts                       # Embedded HTML/CSS/JavaScript assets
+├── route.ts                        # Register resource families behind one loopback/Origin guard
+├── guard.ts / http.ts              # Access checks and shared response envelopes/headers
+├── monitor.ts / monitor-projection.ts # Local activity and windowed metrics
+├── config.ts / config-projection.ts # Typed models and behavior projections
+├── targets.ts / targets-projection.ts # Unified target status, quota and account mutations
+├── quota.ts / metadata-refresh.ts   # Runtime-identity quota cache and explicit refresh
+├── m365.ts / m365-routes.ts         # Broker readiness/sign-in and M365 target management
+├── serving.ts / embedded-ui.ts      # Exact guarded pages/assets and lazy manifest loader
+└── embedded-ui.generated.d.ts       # Source-checkout type stub; build emits the ignored .ts
 ```
 
 `src/accounts/manager.ts` owns serialized legacy bootstrap, account addition,
 default selection, persistence rollback, and authentication-session lifecycle.
 `src/accounts/device-auth.ts` builds and validates a new isolated account runtime
 before the manager makes it routable.
+
+`src/types/dashboard.ts` is a zero-import contract shared with the independent
+`ui/` TypeScript program through its `@contract` alias. The frontend separates
+`app/` shell/navigation/session ownership, Query-backed `lib/` data policy,
+`components/` primitives/chart seam, and six `pages/` directories. Tests live
+beside frontend sources and run through Vitest, not the server's Bun runner.
+`scripts/build-ui.ts` checks the fixed asset set, CSP and gzip budgets before
+generating the embedded module; the package serves constants, not runtime files.
+
+`src/observability/request-store.ts` owns active requests, the retained terminal
+ring, and `windowed-metrics.ts`. Recording is bounded work; snapshots and window
+aggregation run only on Dashboard reads. See [Dashboard Observability](dashboard-observability.md).
 
 ### `src/translator/` -- Protocol Translation
 

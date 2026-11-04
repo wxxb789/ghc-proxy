@@ -111,3 +111,23 @@ The set of requests held behind one upstream capacity deadline. A `429` creates 
 
 ### Recovery budget
 The one request-local monotonic deadline created at the first approved retryable outcome or the first encounter with an already-active cooldown. It defaults to 60 seconds and covers later cooldown/backoff waits, queue acquisition, attempts until `fetch()` returns a `Response`, and an optional overload fallback. The first attempt uses the normal upstream timeout. A committed `Response` ends recovery timing; body and stream handling continue under their normal timeout and are never replayed.
+
+## Observability
+
+### Metric window and tier
+A bounded view of process-local observations. The Dashboard keeps independent
+15-minute, 1-hour, and 24-hour tiers with 10-second, 1-minute, and 15-minute
+buckets. Collection coverage distinguishes unknown pre-start time from measured
+zero traffic; these aggregates are not persistent request history.
+
+### Terminal request state
+The final lifecycle classification: completed, failed, or aborted. A successful
+stream stays active until delivery ends; its first response chunk is not a
+terminal event. Failures take precedence over cancellation, while a late abort
+may correct a retained successful completion once.
+
+### Route-target filter
+A Dashboard Monitor scope selecting All or one named route target. All is an
+absent URL parameter, distinct from a target literally named `all`. It narrows
+activity and windowed metrics, not hostname routing or the host-target Models
+and Behavior configuration projections.

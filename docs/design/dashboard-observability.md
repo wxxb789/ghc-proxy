@@ -1,58 +1,73 @@
 # Dashboard Observability
 
-The built-in dashboard is a safe projection of the current ghc-proxy process
-and, in named-account routing mode, the local management surface for adding an
-account and selecting the explicit default. It is intentionally not a request
-history or analytics system.
+The built-in Dashboard projects the current ghc-proxy process and provides local
+route-target management. Its typed frontend and time-windowed aggregates are
+embedded in the package. It is not persistent request history: all observations
+are content-free, process-local, and reset on restart.
 
 ## Scope
 
-The dashboard exposes five views under `/dashboard`:
+The sidebar groups six independently addressable pages under `/dashboard`:
 
-- Overview: process health, version, authentication state, quota, active
-  requests, and upstream queue activity. Authentication identifies the current
-  request account, the configured default account, and the count of active
-  routed accounts.
-- Accounts: each routed account's stable hostname, upstream identity and tenant,
-  authentication/Copilot state, quota, and default marker. GitHub device auth
-  and M365 broker sign-in are separate actions. M365 shows its email and
-  Microsoft tenant, with GitHub-only fields marked `not_applicable`. Broker
-  discovery runs once on the first Accounts visit or on an explicit probe,
-  never on every Live poll. Accounts can select the default and remove a
-  non-default target. The M365 projection reads committed routing and target
-  availability, independent of the hostname used to open the Dashboard.
-- Models: cached upstream model metadata plus ghc-proxy's effective routing
-  and compatibility decisions.
-- Behavior: current configuration, strategy order, and process-local effect
-  counters.
-- Requests: active requests plus the most recent 256 terminal requests.
+| Group | Page | Purpose |
+| --- | --- | --- |
+| Monitor | Overview | Current health, window KPIs, traffic and completed-request latency trends, per-target health/quota, and recent failures |
+| Monitor | Traffic | Terminal-state counts, approximate p50/p95, latency distribution, and request/failure breakdowns by model, target, and endpoint |
+| Monitor | Requests | Active requests and the latest 256 terminal requests, URL filters, and structured lifecycle/routing/effect/error detail |
+| Configure | Targets | GitHub and M365 identities, hostnames, health, client snippets, and capability-gated management actions |
+| Configure | Models | Host-target metadata, routing/compatibility decisions, filtering, grouping, sorting, and multi-select TSV export |
+| Configure | Behavior | Host-target configuration and selected-window effects beside process-wide cumulative totals |
 
-It does not use a database, retain token statistics, rename accounts, or expose
-request/response content. Account management writes the existing credential
-and routing files through the transaction described below. Removal affects
-proxy configuration and credentials, not GitHub or Windows account registration.
+The global target filter scopes Monitor pages and is hidden for a single target.
+An absent `target` means All; a literal target named `all` remains distinct.
+Managerless legacy processes show one implicit target read-only and Monitor shows
+all traffic. A manager with routing disabled may offer the bootstrap action.
+Models and Behavior describe the host target, not the Monitor filter.
+
+The header carries aggregate health/version, Live, explicit metadata Refresh,
+and System/Light/Dark theme selection. Narrow layouts use a keyboard-accessible
+navigation menu. M365 prerequisite discovery and sign-in are explicit actions;
+opening a page or polling never starts broker discovery.
+
+The Dashboard stores no tokens, request/response content, or persistent analytics.
+It does not rename accounts or measure first-token latency. Management writes the
+existing credential/routing files through the transaction below; removing a
+proxy target never removes a GitHub or Windows account.
 
 ## Request Lifecycle Storage
 
-`RequestActivityStore` uses two structures:
+`RequestActivityStore` owns three process-local structures:
 
 1. `Map<requestId, ActiveRequest>` for in-flight requests. Start and update are
    average O(1) for direct field updates. Recording a model trace is linear in
    that request's transform-step count.
 2. A fixed 256-slot circular buffer for terminal requests. Completion writes
    one slot and advances one cursor in O(1), after projecting that request's
-   per-request metadata arrays. A process restart clears both structures.
+   per-request metadata arrays.
+3. `WindowedMetrics`, a fixed set of lazy time-bucket rings described below.
+
+A process restart clears active requests, retained terminal requests, and metrics.
 
 Active requests are separate from the completed ring so high concurrency does
 not overwrite an entry that still needs lifecycle updates.
 
-Active requests use `in_flight` and `streaming` states. Terminal requests use
-`completed`, `failed`, or `aborted`. Client cancellation is recorded as
-`aborted` without synthesizing a protocol error. A real failure remains
-authoritative if failure and cancellation race, so a late abort never
-reclassifies a failed request. The store can reclassify a just-completed entry
-as aborted when framework callback ordering reports the client disconnect
-after HTTP completion.
+Active requests use `in_flight` and `streaming`; terminal requests use `completed`,
+`failed`, or `aborted`. JSON and pre-stream HTTP failures finalize at the response
+hook. A successful streamed response stays active until the delivery wrapper's
+finalizer observes stream end, upstream failure, or client cancellation. This
+works whether stream end occurs before or after the framework response hook.
+Duration therefore includes the full stream, not just its first chunk.
+
+Upstream iterator cleanup precedes the outer delivery wrapper's finalizer.
+Listener checks wait for the observed terminal state rather than treating
+producer cleanup as the request's completion barrier.
+
+The console access log still reports response start once; it is not the terminal
+metrics timestamp. Target-gate refusals finalize with their refusal status and
+`OPTIONS` preflights are not observed. Client cancellation records `aborted`
+without a synthetic protocol error. A real failure wins a failure/cancellation
+race. A late abort may reclassify a retained completed entry once, but not a
+failed entry.
 
 Each request stores only allowlisted metadata:
 
@@ -74,12 +89,53 @@ bounded category. Categories extracted from error payloads must match the
 explicit allowlist in `request-store.ts`; unknown text collapses to `Unhandled
 proxy error` rather than entering the ring.
 
+## Windowed Metrics
+
+The store records terminal events and effects into three independent tiers:
+
+| Window | Bucket width | Slots |
+| --- | --- | --- |
+| 15 minutes | 10 seconds | 90 |
+| 1 hour | 1 minute | 60 |
+| 24 hours | 15 minutes | 96 |
+
+Slots carry absolute bucket identities and rotate lazily on writes, without
+timers. Read-only queries merge retained slots and never rotate, reclaim, or
+revive them. Completion is attributed to its completion interval; effects are
+attributed when applied. A small clock regression may write an older retained
+slot; a regression larger than a tier's window resets that tier on its next write.
+
+Each target cell stores disjoint completed/failed/aborted counts, a 48-bin
+latency histogram with count/sum, bounded model/endpoint counters, and effects.
+Only completed requests contribute latency samples. The 47 finite bounds run
+from 50 ms through 2,000,000 ms on an R10 ladder, plus overflow. A single sample
+has an exact quantile; multiple samples report a histogram upper bound with
+`approximate`, `at-most`, or `at-least` quality. Empty distributions return null.
+
+Model admission is shared across the entire tier and capped at 16 names, not 16
+per bucket or target. Excess values fold into a tagged `other`; the model recap
+returns at most eight named rows plus folds. Named `other` and missing dimensions
+remain distinct. Endpoint maps are capped at 64 entries per cell. All is a merge
+of target cells, including legacy requests with no named target. Reusing a target
+name merges its retained aggregate history for up to 24 hours, while quota cache
+identity remains tied to the runtime instance.
+
+Late-abort correction changes only the original retained slot/cell: completed
+becomes aborted and its latency sample is removed. Expired or reused slots are
+not recreated. `/` and `/health` remain in the request ring but are excluded from
+windowed metrics; Dashboard traffic enters neither.
+
+The API reports `collectionStartedAt`, covered duration, and `not-collected`,
+`partial-start`, `open`, or `full` coverage. Uncollected time is unknown, not zero.
+Request rate divides by covered time; error rate is failed / (completed + failed),
+excluding aborted. Window effects and since-startup totals are separate values.
+
 ## Source Instrumentation
 
 Observability is emitted where behavior is actually selected or applied:
 
 - `server.ts` owns HTTP start, model discovery, error classification, and
-  completion.
+  non-stream completion; `deliverResult()` owns stream-end finalization.
 - `runPipeline()` records the shared model trace and the actual selected
   `StrategyEntry.name`.
 - Hostname-routed requests record the selected operator-defined account name;
@@ -140,10 +196,11 @@ and quota IDs are discarded before caching. A five-second dashboard-only
 timeout aborts a hung quota fetch so later polls can recover; the public
 `/usage` route keeps its existing behavior.
 
-The Accounts GET projection processes at most four accounts concurrently, so a
-cold or expired cache cannot fan out an unbounded number of quota reads. Its
-response preserves the routing snapshot order, and each projection remains in
-the selected account's runtime context.
+`GET /dashboard/api/targets` and the lightweight overview read local health and
+queue state only. Each target's `GET /dashboard/api/targets/:name/quota` owns its
+quota failure domain, so a cold or failing upstream quota cannot hold up local
+KPIs or other target cards. Runtime replacement changes the projection identity
+and cannot reuse its predecessor's safe quota.
 
 `POST /dashboard/api/refresh` forces metadata refresh in each active account's
 runtime context. GitHub refreshes identity, quota, and models; M365 refreshes
@@ -205,19 +262,39 @@ the same journal before installing routing.
 
 ## Serving and Security
 
-HTML, CSS, and browser JavaScript are TypeScript string constants bundled into
-the existing `dist/main.mjs` graph. The package performs no runtime asset file
-reads and adds no frontend dependency or build step.
+`ui/` is a React/Vite project using Tailwind, Recharts, TanStack Query, and wouter.
+`scripts/build-ui.ts` builds the fixed shell/scripts/stylesheet, scans for CSP
+violations, checks gzip budgets, and emits a gitignored TypeScript asset module.
+The server lazily imports its string constants through the bundled `dist/*.mjs`
+graph. Consumers need only their selected runtime, with no asset file reads or
+separate frontend installation/build. An unbuilt source checkout returns a small,
+script-free 503 page instead of pretending the UI exists.
 
-Dashboard responses use `Cache-Control: no-store`, a strict self-only Content
-Security Policy, `nosniff`, `no-referrer`, same-origin resource policy, and
-frame denial. On a live server, dashboard routes require the actual peer socket
-address to be loopback. The URL hostname must be `localhost`, any
-`*.localhost` name, `0.0.0.0`, or an explicit loopback IPv4/IPv6 address;
-browser requests with a cross-origin `Origin` header receive 403. The peer
-check means a remote client cannot bypass the boundary by spoofing one of those
-Host values. Runtime values are inserted with DOM `textContent`, not HTML
-parsing.
+Exact shell routes cover `/dashboard` and `/dashboard/{overview,traffic,requests,
+targets,models,behavior}`, including trailing slashes. Assets are
+`/dashboard/assets/app.js`, `/dashboard/assets/app.css`, and
+`/dashboard/theme-init.js`. Unknown page/API/asset paths remain JSON 404; no
+wildcard swallows API errors. `src/types/dashboard.ts` is the zero-import shared
+contract; response envelopes carry schema/version and process identity.
+
+Responses keep `no-store`, `nosniff`, `no-referrer`, same-origin resource policy,
+and frame denial. The unchanged strict self-only CSP is applied to the HTML shell,
+not asset/API responses. There are no external fonts/resources, inline script or
+style tags, or eval. The theme initializer is an external classic script; chart
+styles use React's CSSOM path, not injected markup.
+
+Every registered Dashboard surface requires an actual loopback socket peer on a
+live server and a loopback URL hostname. A supplied `Origin` must match that URL's
+origin. The hostname guard accepts `localhost`, `*.localhost`, `0.0.0.0`, and
+explicit loopback IPv4/IPv6 addresses; hostname routing still applies its own
+target admission. A remote peer cannot bypass access by spoofing Host. Runtime
+values are escaped React text; lint rejects unsafe HTML insertion.
+
+For hot reload, Vite proxies `/dashboard/api` to the proxy with object-form
+`server.proxy` and no `changeOrigin`. Host and Origin are preserved, so named
+hostnames still select the target and the production guard is not loosened.
+A direct cross-origin dev-server request to the production API still gets 403.
+Model TSV/client endpoints advertise the backend port rather than the Vite port.
 
 The same guard covers all account-management methods. Ordinary legacy startup
 completes its one-account routing migration before the Dashboard is available.
@@ -227,13 +304,46 @@ account management and returns `409` rather than persisting ambiguous state.
 `/dashboard` requests are excluded from both the request ring and access log so
 polling does not displace proxy traffic or create console noise.
 
+## Frontend State and Accessibility
+
+The URL owns page, target, window, request selection, and request filters. Page
+navigation and opening a request push history; filters/window/normalization replace
+it. Missing retained requests keep their URL and show an explicit state without
+selecting another request. A changed process or collection identity clears
+selection/cached charts and announces a session change; schema mismatch requires
+reload. Removed targets fall back to All with a notice.
+
+TanStack Query owns fetching, cancellation, visibility, and timers. Header/local
+activity poll at about 3 s, metric windows at 10/30/60 s, and quota at 30 s. Models
+and M365 configuration load on mount, explicit Refresh, or mutation; broker
+discovery never runs as a read. Live pauses hidden page reads and resumes stale
+sources on return. Device-auth task observers remain above routes and continue
+hidden or during navigation. Transport/5xx failures back off; 403/421 stop
+automatic reads. Mutations suspend/cancel affected reads and refetch afterward;
+host-changing navigation stops all reads first.
+
+Each failure domain derives loading, ready, refreshing, empty, stale, unavailable,
+or error state from its query, preserving last good data. Stale starts after two
+failures, and only that source's success clears its error. Partial metadata
+refresh names the target and failed source; a later metadata success does not
+erase another region's error. Empty traffic is distinct from zero failures.
+
+The shell owns route focus/title, a native mobile menu, persisted theme choice,
+and one transition-only status region. Native dialogs return focus. Charts have
+fixed time boundaries/coverage, generated summaries, numeric tables, and stable
+timestamp/interval/dimension keyboard selection with Arrow/Home/End/Escape.
+Recharts' accessibility layer and data animations are disabled; polled content
+is not an assertive live region. Token contrast is checked in both themes.
+
+
 ## Performance Boundary
 
-The proxy request path performs direct `Map`/record updates, counter increments,
-and work proportional to the small model-transform/effect arrays attached to
-that request. It does not clone or serialize request bodies for observability.
+The proxy path performs bounded Map/record updates and counter increments, with
+work proportional to the small per-request transform/effect arrays. Each metric
+event touches three tiers and fixed-size histogram/admission structures. It does
+not serialize request bodies, scan history, or sort on the write path.
 
-Dashboard snapshots sort the active set in O(a log a), where `a` is the number
-of active observed requests, and copy at most 256 terminal entries. Model
-projection, quota fetches, snapshot sorting, and DOM rendering occur only on
-dashboard requests.
+Dashboard snapshots sort active requests in O(a log a) and copy at most 256
+terminal entries. Window queries walk only retained tier slots/cells and merge
+their bounded dimensions. Model projection, quota loading, aggregation, sorting,
+and React/chart rendering run only for Dashboard reads, not inference requests.

@@ -1,7 +1,7 @@
 ---
 title: "A green suite is evidence about the runtime you ran it on"
 date: 2026-07-29
-last_updated: 2026-08-25
+last_updated: 2026-11-04
 category: testing
 module: upstream timeout classification across Bun and Node
 problem_type: convention
@@ -33,10 +33,11 @@ tags:
 
 ## Problem
 
-`AGENTS.md` commits this repo to a two-runtime contract: "Route code under
-`src/` must work on both Bun and Node." The test suite runs on one of them.
-`.github/workflows/ci.yml` runs `bun test` under Bun; nothing in CI executes the
-suite under Node.
+`AGENTS.md` commits this repo to a two-runtime contract: route code under
+`src/` must work on both Bun and Node. The server route suite runs on one of
+them. CI runs `bun test` under Bun; the separate Vitest/jsdom Dashboard suite
+runs under Node but is not a server-runtime oracle. Nothing turns the Bun-native
+route suite into Node coverage.
 
 That gap is invisible to every defence this repo already has. `docs/solutions/
 conventions/duplicated-semantic-rules-diverge-silently.md` says to grep for every
@@ -91,14 +92,15 @@ qualifier. At the time of PR #69, the gate behind that sentence was
 `PROBE_ENCODINGS`. It proved the bundle loaded and resolved under Node, but it
 never constructed a `fetch`, an error, a stream, or a `Response`.
 
-**Current state (2026-08-25).** Packaged smoke still runs `selfcheck` under both
-Bun and Node, but `selfcheck` now contains 13 probes: five tokenizer probes and
-eight entries in `RUNTIME_PROBES`. Those runtime probes cover the HTTP error
-`Response` contract, connection-error classification, response-body
-cancellation, response commit boundaries, caller cancellation, protocol
-payloads, the Dashboard bundle, and the Node Dashboard listener boundary. This
-materially widens the Node gate; it does not turn the Bun-native test suite into
-a Node test suite or prove every route behavior under Node.
+**Current state (2026-11-04).** Packaged smoke runs 21 selfcheck probes under
+both Bun and Node: five tokenizer probes and 16 runtime probes. The runtime
+checks cover listener lifecycle, HTTP response/error transport and classification,
+body/caller cancellation, response commitment, protocol payloads, credential and
+legacy-routing migration, hostname routing, embedded Dashboard serving/access and
+quota, the Responses-to-Chat bridge, and full stream-end lifecycle outcomes.
+Each runtime child has the opposite executable unavailable; launcher and debug
+contracts are also exercised. This widens the Node gate without proving every
+server route behavior under Node.
 
 ## Solution
 

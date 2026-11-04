@@ -17,7 +17,7 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 | Validation      | Zod                             |
 | Token Counting  | gpt-tokenizer                   |
 | SSE Streaming   | fetch-event-stream              |
-| Build Tool      | tsdown                          |
+| Build Tool      | Vite/Tailwind for the typed `ui/` frontend, tsdown for the CLI and embedded chunks |
 | Linting         | ESLint (@antfu/eslint-config)   |
 | Published As    | `ghc-proxy` npm package          |
 
@@ -155,11 +155,20 @@ Root OpenAI-compatible routes are mirrored under `/v1`. Anthropic Messages is
 | `GET /token` | Proxy | Return the current Copilot token state |
 | `GET /usage` | Proxy | Fetch Copilot quota/usage statistics |
 | `GET /health` | Proxy | Health state (`status`, `copilotToken`, `modelsLoaded`, `version`) |
-| `GET /dashboard` and `/dashboard/{styles.css,app.js}` | Proxy UI | Loopback-guarded operational Dashboard assets |
-| `GET /dashboard/api/{overview,models,behavior,requests}` | Proxy UI | Sanitized Dashboard data projections |
+| `GET /dashboard` and `/dashboard/{overview,traffic,requests,targets,models,behavior}` | Proxy UI | Exact loopback-guarded application pages |
+| `GET /dashboard/assets/{app.js,app.css}`, `/dashboard/theme-init.js` | Proxy UI | Embedded frontend assets; shell-only strict CSP |
+| `GET /dashboard/api/{overview,metrics,requests,targets,models,behavior,m365}` | Proxy UI | Typed, content-free local projections; target quota is a separate resource |
 
 `GET /` is a minimal liveness response. Dashboard routes do not run through the
 model execution pipeline described below.
+
+The Dashboard is an independent React/Vite project in `ui/`. Its zero-import
+`src/types/dashboard.ts` contract is shared with server projections. The build
+scans CSP/size constraints and embeds fixed assets into the CLI's import graph;
+consumers still install only their selected runtime. A process-local, lazy
+three-tier aggregation supplies window trends without storing content or doing
+query work on the inference path. See [Dashboard Observability](dashboard-observability.md)
+for frontend state, collection coverage, lifecycle timing and the dev proxy.
 
 ## Pipeline Runner
 

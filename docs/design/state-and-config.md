@@ -96,9 +96,13 @@ class RuntimeStore {
 ```
 
 `RuntimeStore` is not persisted to `config.json`. It owns the process start time,
-the request-activity projection used by the dashboard (with a fixed completed
-history), and the `dumpFailedPayloads` debug flag. `recordStreamError()`
-sanitizes a stream failure before storing it; raw errors are not retained.
+the Dashboard request-activity store (active requests and a fixed terminal ring),
+its in-memory 15m/1h/24h metric tiers, and the `dumpFailedPayloads` debug flag.
+Streamed requests finalize at delivery end rather than the first response chunk.
+`recordStreamError()` sanitizes a stream failure before storage; raw errors are
+not retained. Restart clears both retained requests and metric windows. See
+[Dashboard Observability](dashboard-observability.md) for collection/coverage,
+cardinality and query semantics.
 
 ### ModelCache (`src/state/model-cache.ts`)
 

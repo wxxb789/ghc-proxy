@@ -104,10 +104,11 @@ planned for minting gateway tokens for an MSA.
   `config.json#m365.upn` → a unique broker account in the authority tenant, or
   the only broker account. There is no hard-coded email or substring fallback;
   an ambiguous selector requires a home account ID.
-- The Dashboard displays the selected email and Microsoft tenant ID instead of
-  a GitHub tenant. It discovers broker accounts on the first Accounts visit and
-  on explicit probes, not on every Live poll. Empty broker usernames retain
-  their stable IDs and display as unavailable rather than shifting TSV columns.
+- The Dashboard Targets page displays the selected email and Microsoft tenant ID
+  instead of a GitHub tenant. Broker discovery runs only after an explicit
+  prerequisite check; opening the page and Live polling never spawn the helper.
+  Empty broker usernames retain their stable IDs and display as unavailable
+  rather than shifting TSV columns.
 - `GET /dashboard/api/m365` reads the committed routing table and availability.
   `/register`, `/remove`, `/account`, and `/hostname` mutations use the account
   manager. `POST /dashboard/api/m365/sign-in` opens WAM only on an explicit user

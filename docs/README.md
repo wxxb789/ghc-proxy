@@ -14,7 +14,7 @@ See [docs/design/](design/README.md) for the full index. Key documents:
 - [Streaming](design/streaming.md) -- SSE streaming architecture and error recovery
 - [Error Handling](design/error-handling.md) -- Error classification and translation policy
 - [State and Configuration](design/state-and-config.md) -- Global state, config file, CLI flags
-- [Dashboard Observability](design/dashboard-observability.md) -- Read-only runtime projection, lifecycle storage, local-access guard, and Dashboard API routes
+- [Dashboard Observability](design/dashboard-observability.md) -- Typed frontend, process-local metric windows, lifecycle storage, target management, and local-access guard
 
 ## Research
 
@@ -46,6 +46,8 @@ Investigation notes and findings from upstream API behavior analysis. Treat each
 
 - `bun test` is part of the publish gate and includes the public API smoke suite in `tests/contract-smoke.test.ts`.
 - Use route-specific tests such as `tests/embeddings.test.ts` for proxy-side normalization that should not regress.
+- `bun run test:ui` runs the separate Vitest/jsdom Dashboard suite; `bun test`
+  intentionally collects only the server tests. The local full gate includes both.
 - CI runs the main suite first, then re-runs `tests/token-file-removal.test.ts` and `tests/token-refresh-retry.test.ts` in a separate Bun process. Those two files `mock.module()` the GitHub client, and Bun's process-wide module-mock registry leaks the stub into `tests/clients-auth.test.ts`'s real-client routing tests.
 - This split should be removed once Bun isolates `mock.module()` per file.
 

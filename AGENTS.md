@@ -22,14 +22,17 @@ ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Cop
 
 ```bash
 bun install                          # Install dependencies (frozen lockfile in CI)
-bun run dev                          # Start with --watch (hot reload)
-bun run build                        # Build dist/main.mjs plus dynamic chunks
+bun run dev                          # Proxy API with --watch
+bun run dev:ui                       # Dashboard Vite HMR (second terminal; Node >= 26)
+bun run build:ui                     # Build, CSP/size scan, and embed Dashboard assets
+bun run build                        # Build Dashboard, dist/main.mjs, and dynamic chunks
 bun run build:msc-auth               # Windows-only: publish msc-auth into dist/msc-auth
                                      # (skipped elsewhere; MSC_AUTH_DIR copies a prebuilt one)
 bun run lint                         # ESLint with cache
 bun run lint:all                     # ESLint full scan (used in CI)
-bun run typecheck                    # tsc --noEmit
-bun test                             # Run all tests (Bun native test runner)
+bun run typecheck                    # Server + independent UI TypeScript programs
+bun test                             # Server tests (Bun native runner)
+bun run test:ui                      # Dashboard tests (Vitest/jsdom, Node >= 26)
 bun test tests/validation.test.ts    # Run a single test file
 bun test tests/contract-smoke.test.ts # Publish gate for public schema compatibility
 bun run start                        # Production server (NODE_ENV=production)
@@ -44,8 +47,13 @@ Docker image smoke as independent jobs. The runtime jobs build and run
 `smoke:packaged`; the Docker job builds the image and exercises its non-root CLI
 entrypoint. There is no cross-job execution order.
 
-**Local full gate:** `bun run lint:all && bun run typecheck && bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts && bun run build && bun run smoke:packaged`.
+**Local full gate:** `bun run lint:all && bun run typecheck && bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts && bun run test:ui && bun run build && bun run smoke:packaged`.
 The `/verify` skill carries the same command in a readable multi-line form.
+
+Dashboard development runs `dev` and `dev:ui` in separate terminals. The Vite API
+proxy preserves Host/Origin; keep the production guard unchanged. Read
+`docs/design/dashboard-observability.md` for frontend, polling, CSP and metrics
+boundaries.
 
 ## Compatibility Contract
 

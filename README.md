@@ -203,15 +203,15 @@ The proxy normalizes and persists the GHE domain automatically after a successfu
 
 A second upstream for the Microsoft 365 Copilot gateway, which serves the Anthropic Messages protocol directly. It uses your own work account through the Windows token broker instead of a GitHub credential.
 
-M365 is a route target beside your GitHub accounts, not a separate mode: one process serves both upstreams on one port, and the request hostname picks the target. Add it from the Dashboard Accounts view — no restart, no second instance, no hosts entry per port. `--upstream m365` still works as a shorthand for an M365-only process.
+M365 is a route target beside your GitHub accounts, not a separate mode: one process serves both upstreams on one port, and the request hostname picks the target. Add it from the Dashboard Targets page — no restart, no second instance, no hosts entry per port. `--upstream m365` still works as a shorthand for an M365-only process.
 
 ```bash
 bunx --bun ghc-proxy@latest start --upstream m365
 ```
 
 - **Windows only.** The credential comes from the bundled `msc-auth` helper over WAM/MSAL; the client has no device-code or loopback flow. The helper ships in the npm artifact (`dist/msc-auth/`). Windows source startup (`bun run start`) prepares a complete, current helper automatically; the first local build needs the .NET 10 SDK, C++ build tools, and Windows SDK. A complete `MSC_AUTH_DIR` payload or `--msc-auth-exe` / `GHC_MSC_AUTH_EXE` override avoids compiling. See [helper setup](./msc-auth/README.md#starting-the-proxy-from-source).
-- **Broker accounts.** Opening Accounts discovers Windows broker accounts once; Live polling does not repeatedly spawn the helper. Emails and Microsoft tenant IDs are displayed separately from GitHub identities. `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`; select an exact email or home ID with `--msc-auth-account`, or use the Dashboard picker, which persists `m365.account`. A profile signed in only inside the Copilot app may not be visible to WAM: use **Sign in another M365 account**, finish the Windows dialog, then apply the selection. Consumer accounts (MSA) do not support this gateway.
-- **Account removal.** Accounts has a **Remove** action for each non-default target. Choose another default before removing the current default; the only remaining target cannot be removed. GitHub removal deletes its local proxy credential and hostname mappings transactionally. Removing M365 deletes its proxy target, not its Windows broker account.
+- **Broker accounts.** In Targets, choose **Check prerequisites** to discover Windows broker accounts; neither opening the page nor Live polling spawns the helper. Emails and Microsoft tenant IDs are displayed separately from GitHub identities. `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`; select an exact email or home ID with `--msc-auth-account`, or use the Dashboard picker, which persists `m365.account`. A profile signed in only inside the Copilot app may not be visible to WAM: use **Sign in to Microsoft**, finish the Windows dialog, then apply the selection. Consumer accounts (MSA) do not support this gateway.
+- **Account removal.** Targets has a **Remove** action for each non-default target. Choose another default before removing the current default; the only remaining target cannot be removed. GitHub removal deletes its local proxy credential and hostname mappings transactionally. Removing M365 deletes its proxy target, not its Windows broker account.
 - **Mixed targets.** Register the target once (`accountRouting.hostnames["m365.localhost"] = "m365"`, or the Dashboard section) and point a client at that hostname. Requests that select it are accepted only from the local machine, serve Anthropic Messages only, and answer `503` with the recorded cause while the account is unavailable. GitHub hostnames are unaffected.
 - **Live catalog.** The current upstream `GET /api/v1/llmapi/models` returned 10 models on 2026-11-03: five Messages models and five Responses models. The proxy exposes its supported Messages subset through `http://m365.localhost:4141/models` and `/v1/models`; use the M365 hostname rather than a GitHub hostname. Transient discovery failures may use the built-in catalog; 401/403 access failures leave the target unavailable instead of reporting it ready.
 - **Loopback only when it is the only target.** `--upstream m365` binds `127.0.0.1` because the credential spends your own account's quota; in a mixed process the M365 hostname alone is restricted to loopback peers.
@@ -504,7 +504,7 @@ When the Copilot token response includes `endpoints.api`, `ghc-proxy` now prefer
 
 Incoming requests hit an [Elysia](https://elysiajs.com/) server. `chat/completions` requests are validated, normalized into the shared planning pipeline, and then forwarded to Copilot. `responses` requests use native Responses when the selected model advertises `/responses`, or an explicitly enabled Responses-to-Chat bridge when it advertises only `/chat/completions`. `messages` requests are routed per-model and can use native Anthropic passthrough, the Responses translation path, or the existing chat-completions fallback. The translator tracks exact vs lossy vs unsupported behavior explicitly; see the [Messages Routing and Translation Guide](./docs/messages-routing-and-translation.md) and the [Anthropic Translation Matrix](./docs/anthropic-translation-matrix.md) for the current support surface.
 
-The built-in Dashboard projects process health, named account status, model routing, behavior, and recent request lifecycle metadata without storing request or response content. Legacy single-account startup automatically migrates to named routing; its protected Accounts view can then authenticate a new account with a dedicated hostname and switch the default account. See [Dashboard Observability](./docs/design/dashboard-observability.md).
+The built-in Dashboard groups Overview, Traffic, and Requests under Monitor, and Targets, Models, and Behavior under Configure. A global target filter scopes Monitor, with 15-minute, 1-hour, and 24-hour views of terminal traffic and approximate completed-request latency. Metrics and the latest 256 terminal request summaries stay in memory and reset on restart; no tokens or request/response content are stored. Targets manages named accounts and M365 under the existing loopback boundary. See [Dashboard Observability](./docs/design/dashboard-observability.md).
 
 For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-opus-4.6` on Copilot native `/v1/messages` accepted top-level search results and pure search-result tool outputs, but rejected top-level `citations` and mixed text/search-result tool output arrays. The native path sanitizes those observed rejection cases, while translated paths flatten search results to text; re-run the probe before treating that dated upstream result as universal.
 
@@ -561,18 +561,23 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/dashboard` | Dashboard application |
-| `GET` | `/dashboard/styles.css` | Dashboard stylesheet |
-| `GET` | `/dashboard/app.js` | Dashboard client script |
-| `GET` | `/dashboard/api/overview` | Process, authentication, quota, request, and queue summary |
-| `GET` | `/dashboard/api/models` | Upstream model metadata and effective proxy capabilities |
-| `GET` | `/dashboard/api/behavior` | Active routing, compatibility policies, strategies, and effect counters |
-| `GET` | `/dashboard/api/requests` | Active requests and the most recent 256 completed request summaries |
-| `GET` | `/dashboard/api/accounts` | Safe per-account identity, tenant, authentication, Copilot status, quota, hostname, and default marker |
-| `POST` | `/dashboard/api/accounts/bootstrap` | Compatibility bootstrap for an existing legacy account manager |
-| `POST` | `/dashboard/api/accounts` | Start device authentication for a new named account and its dedicated hostname |
-| `GET` | `/dashboard/api/account-auth/:id` | Read the safe state of an in-progress account authentication |
+| `GET` | `/dashboard`, `/dashboard/{overview,traffic,requests,targets,models,behavior}` | Dashboard pages, with bookmarkable target/window/request state |
+| `GET` | `/dashboard/assets/{app.js,app.css}`, `/dashboard/theme-init.js` | Embedded application assets |
+| `GET` | `/dashboard/api/overview` | Fast local process, health, request, and queue summary |
+| `GET` | `/dashboard/api/metrics?window=1h&target=work` | In-memory 15m/1h/24h metrics; omit target for All |
+| `GET` | `/dashboard/api/models` | Host-target metadata, effective capabilities, and the real backend API endpoint |
+| `GET` | `/dashboard/api/behavior?window=1h` | Host-target configuration, window effects, and cumulative effect totals |
+| `GET` | `/dashboard/api/requests` | Active requests and the most recent 256 terminal summaries |
+| `GET` | `/dashboard/api/targets` | Unified local target identity, health, routing, queue, capabilities, and client snippets |
+| `GET` | `/dashboard/api/targets/:name/quota` | Independently cached quota for one runtime instance |
+| `POST` | `/dashboard/api/refresh` | Explicit metadata refresh, never triggered by Live polling |
+| `POST` | `/dashboard/api/accounts/bootstrap` | Bootstrap for an existing legacy account manager |
+| `POST` | `/dashboard/api/accounts` | Start device authentication for a new named account |
+| `GET` | `/dashboard/api/account-auth/:id` | Public state of an account authentication task |
 | `POST` | `/dashboard/api/accounts/default` | Persist and activate an explicit default account |
+| `DELETE` | `/dashboard/api/accounts/:name` | Remove a non-default GitHub target and its local proxy credential |
+| `GET` | `/dashboard/api/m365` | Local M365 status without broker discovery |
+| `POST` | `/dashboard/api/m365/{probe,sign-in,register,account,hostname,remove}` | Explicit broker and target-management actions |
 
 Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. A normal legacy single-account process automatically migrates to named routing at startup, so adding accounts and changing the default are available after startup. Processes using `start --github-token` or `start --ghe-domain` retain legacy behavior and return `409` for account management because those overrides cannot be assigned safely. Dashboard requests are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection, transaction, and security contract.
 
@@ -736,10 +741,10 @@ volumes:
 
 ## Running from Source
 
-Repository development uses Bun >= 1.4 even if you run the published package with Node.js.
-Install dev dependencies when building from source: `gpt-tokenizer` is a
-build-time dependency whose five encodings are still bundled into the published
-runtime for the local count endpoints and packaged `selfcheck`.
+Repository tooling uses Bun >= 1.4; frontend dev/test commands also use Node.js
+>= 26. This is separate from the published package, which still needs only the
+selected runtime. Install dev dependencies when building: tokenizer sources and
+the frontend libraries are embedded into the published artifact.
 
 ```bash
 git clone https://github.com/wxxb789/ghc-proxy.git
@@ -758,16 +763,35 @@ tooling only; a release or complete explicit helper payload does not need .NET.
 ## Development
 
 ```bash
-bun install              # Install dependencies, including build-time tokenizer sources
-bun run dev              # Start with --watch
-bun run start            # Start without --watch
-bun run build            # Build with tsdown
-bun run lint             # ESLint
-bun run typecheck        # tsc --noEmit
-bun test                 # Run tests
+bun install              # Install source/build dependencies
+bun run dev              # Proxy API with --watch
+bun run dev:ui           # Vite Dashboard hot reload, in a second terminal
+bun run start            # Proxy without --watch
+bun run build:ui         # Build/scan/embed the Dashboard
+bun run build            # Build Dashboard, CLI chunks, and optional Windows helper
+bun run lint:all         # Server + frontend lint
+bun run typecheck        # Independent server and frontend TypeScript programs
+bun test                 # Bun server suite
+bun run test:ui          # Vitest/jsdom Dashboard suite
 bun run matrix:live      # Real Copilot upstream compatibility matrix
 bun run matrix:live --vision-only --all-responses-models --json
 bun run matrix:live --stateful-only --json --model=gpt-5.2-codex
+```
+
+Open the URL Vite prints with `/dashboard/` (or use the same named `*.localhost`
+host as the proxy). Its API proxy preserves Host and Origin; do not enable
+`changeOrigin` or weaken the production Origin guard. A source server without
+generated assets serves a script-free 503 page at `/dashboard`; use Vite while
+editing or run `bun run build:ui` for embedded serving. Package consumers do not
+run a separate frontend build. See the [Dashboard design](./docs/design/dashboard-observability.md).
+
+Before publishing, run the ordered local gate:
+
+```bash
+bun run lint:all && bun run typecheck \
+  && bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' \
+  && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts \
+  && bun run test:ui && bun run build && bun run smoke:packaged
 ```
 
 > **Note:** `bun run matrix:live` uses your configured GitHub/Copilot credentials and spends real upstream requests. Use it when you want end-to-end verification against the current Copilot service, not for every local edit.

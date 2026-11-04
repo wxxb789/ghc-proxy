@@ -8,4 +8,9 @@
 !scripts/**
 !src/
 !src/**
+!ui/
+!ui/**
+ui/dist/
+ui/node_modules/
+src/routes/dashboard/embedded-ui.generated.ts
 !entrypoint.sh

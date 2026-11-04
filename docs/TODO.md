@@ -70,3 +70,9 @@ Tracked items for future work. Items are roughly ordered by priority.
     - Confirm the exact set of Anthropic-supported document source variants and their fields against the current Messages API spec (`text | base64 | url | content | file` differ per type). A precise union that omits a real variant would 400 otherwise-valid requests.
     - Check whether the loose `Record<string, unknown>` is deliberate forward-compat passthrough; the point-of-use narrowing may already make the leak acceptable.
     - Weigh the type-design blast radius (this type feeds multiple translation paths) against the parse-don't-validate benefit before committing.
+
+## Maintenance Candidates
+
+- [ ] **Reconcile the Dashboard guard's `0.0.0.0` hostname allowance with named routing**
+  - `src/routes/dashboard/guard.ts:isLoopbackHostname` accepts `0.0.0.0`, but `src/lib/account-routing.ts:resolveAccountName` rejects it through `normalizeDnsHostname` (IP literals are not DNS hostnames; only `127.0.0.1` has an explicit default alias).
+  - Named routing therefore answers `421` before that Dashboard allowance can apply. Revalidate intended admission before changing the guard or routing; do not broaden the loopback boundary incidentally.

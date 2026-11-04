@@ -21,6 +21,20 @@ bun test tests/contract-smoke.test.ts # Publish gate for public schema compatibi
 `tests/contract-smoke.test.ts` is the **publish gate** for public schema
 compatibility — if it fails, the package must not ship.
 
+## Dashboard UI Runner
+
+`bunfig.toml` restricts Bun discovery to `tests/`. Dashboard cases live beside
+`ui/src/` as `*.test.ts(x)` and run separately with `bun run test:ui` under
+Vitest/jsdom and Node >= 26. They are part of the full local and CI gate.
+
+Use the typed factories and `createFakeFetch()` request log in
+`ui/src/test/fixtures.ts`, plus `renderDashboard()` for Query/root/shell setup
+and cleanup. Inject fetch rather than replacing the global transport. Assert
+roles, labels, public output, URL/state transitions and explicit network rules;
+chart geometry, classes, legacy IDs and sliced source strings are not contracts.
+The jsdom dialog shim is only a unit-test boundary; real native dialog, chart,
+responsive-layout and CSP proof belongs to the browser pass.
+
 ## Helper inventory (`tests/helpers.ts`)
 
 | Group | Exports |
