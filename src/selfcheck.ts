@@ -764,15 +764,15 @@ async function probeDashboardBundleContract(): Promise<void> {
     app.handle(new Request('http://localhost/dashboard')),
     app.handle(new Request('http://localhost/dashboard/styles.css')),
     app.handle(new Request('http://localhost/dashboard/app.js')),
-    app.handle(new Request('http://localhost/dashboard/api/accounts')),
+    app.handle(new Request('http://localhost/dashboard/api/targets')),
   ])
 
   assertProbe(htmlResponse.status === 200, `dashboard HTML returned ${htmlResponse.status}`)
   assertProbe(cssResponse.status === 200, `dashboard CSS returned ${cssResponse.status}`)
   assertProbe(jsResponse.status === 200, `dashboard JS returned ${jsResponse.status}`)
   assertProbe(
-    accountsResponse.status === 409,
-    `dashboard account management availability returned ${accountsResponse.status}`,
+    accountsResponse.status === 200,
+    `dashboard targets projection returned ${accountsResponse.status}`,
   )
 
   const [html, css, js] = await Promise.all([
@@ -917,25 +917,20 @@ async function probeDashboardNodeQuotaProjection(): Promise<void> {
     listener = await listenRuntimeServer(app, { hostname: '127.0.0.1', port: 0 })
     const port = listener.port
 
-    const [overviewResponse, accountsResponse] = await Promise.all([
+    const [overviewResponse, targetsResponse] = await Promise.all([
       requestLocal('127.0.0.1', port, `localhost:${port}`, '/dashboard/api/overview'),
-      requestLocal('127.0.0.1', port, `localhost:${port}`, '/dashboard/api/accounts'),
+      requestLocal('127.0.0.1', port, `localhost:${port}`, '/dashboard/api/targets'),
     ])
     assertProbe(overviewResponse.status === 200, `Node dashboard overview returned ${overviewResponse.status}`)
-    assertProbe(accountsResponse.status === 200, `Node dashboard accounts returned ${accountsResponse.status}`)
+    assertProbe(targetsResponse.status === 200, `Node dashboard targets returned ${targetsResponse.status}`)
+    const localQuotaLoads = quotaLoads
+    assertProbe(localQuotaLoads === 0, 'local Dashboard status triggered a quota load')
+    const quotaResponse = await requestLocal('127.0.0.1', port, `localhost:${port}`, '/dashboard/api/targets/default/quota')
+    assertProbe(quotaResponse.status === 200, `Node dashboard quota returned ${quotaResponse.status}`)
     assertProbe(quotaLoads === 1, `cold Dashboard quota projection loaded ${quotaLoads} time(s)`)
-
-    const overview = JSON.parse(overviewResponse.body) as {
-      quota?: { chat?: { remaining?: number }, status?: string }
-    }
-    const accounts = JSON.parse(accountsResponse.body) as {
-      accounts?: Array<{ quota?: { chat?: { remaining?: number }, status?: string } }>
-    }
-    assertProbe(overview.quota?.status === 'ok', 'Node dashboard overview did not project cold-cache quota')
-    assertProbe(overview.quota?.chat?.remaining === 80, 'Node dashboard overview projected the wrong quota')
-    assertProbe(accounts.accounts?.length === 1, 'Node dashboard accounts did not project the default account')
-    assertProbe(accounts.accounts[0]?.quota?.status === 'ok', 'Node dashboard accounts did not project cold-cache quota')
-    assertProbe(accounts.accounts[0]?.quota?.chat?.remaining === 80, 'Node dashboard accounts projected the wrong quota')
+    const quota = JSON.parse(quotaResponse.body) as { quota?: { chat?: { remaining?: number }, status?: string } }
+    assertProbe(quota.quota?.status === 'ok', 'Node dashboard did not project cold-cache quota')
+    assertProbe(quota.quota?.chat?.remaining === 80, 'Node dashboard projected the wrong quota')
   }
   finally {
     await listener?.close(true)

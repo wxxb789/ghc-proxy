@@ -21,7 +21,7 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
   })
 
   registerServingRoutes(app)
-  registerMonitorRoutes(app, quotaCache, options.accountManager)
+  registerMonitorRoutes(app, options)
   registerConfigRoutes(app)
   registerTargetRoutes(app, options, quotaCache)
   registerM365Routes(app, options)

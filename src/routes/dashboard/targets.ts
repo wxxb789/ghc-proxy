@@ -1,12 +1,13 @@
 import type { Elysia } from 'elysia'
 import type { DashboardQuotaCache } from './quota'
 import type { DashboardRouteOptions } from './types'
+import type { DashboardAuthenticationResult, DashboardRouting } from '~/types/dashboard'
 
 import { z } from 'zod'
 
 import { accountManagementError, accountManagementUnavailable, apiError, apiResponse } from './http'
 import { dashboardMetadataRefresher } from './metadata-refresh'
-import { getDashboardAccounts } from './targets-projection'
+import { getDashboardTargetQuota, getDashboardTargets } from './targets-projection'
 
 const addAccountSchema = z.object({
   accountName: z.string(),
@@ -31,14 +32,11 @@ export function registerTargetRoutes(
   const metadataRefresher = options.metadataRefresher ?? dashboardMetadataRefresher
 
   return app
-    .get('/dashboard/api/accounts', async () => {
-      if (!accountManager)
-        return accountManagementUnavailable()
-      const snapshot = accountManager.getAccountSnapshot()
-      return apiResponse({
-        ...snapshot.routing,
-        accounts: await getDashboardAccounts(snapshot.accounts, quotaCache),
-      })
+    .get('/dashboard/api/targets', ({ request }) =>
+      apiResponse(getDashboardTargets(options, request)))
+    .get('/dashboard/api/targets/:targetName/quota', async ({ params, request }) => {
+      const result = await getDashboardTargetQuota(params.targetName, options, request, quotaCache)
+      return result ? apiResponse(result) : apiError('Route target was not found.', 404)
     })
     .post('/dashboard/api/refresh', async () => {
       if (!accountManager)
@@ -59,7 +57,7 @@ export function registerTargetRoutes(
           ...parsed.data,
           gheDomain: parsed.data.gheDomain?.trim() || undefined,
         })
-        return apiResponse({ authentication: session }, 202)
+        return apiResponse<DashboardAuthenticationResult>({ authentication: session }, 202)
       }
       catch (error) {
         return accountManagementError(error)
@@ -73,7 +71,7 @@ export function registerTargetRoutes(
         return apiError('Invalid account routing bootstrap request.', 400)
       try {
         await accountManager.bootstrapAccountRouting(parsed.data.hostname)
-        return apiResponse(accountManager.getAccountSnapshot().routing)
+        return apiResponse<DashboardRouting>(accountManager.getAccountSnapshot().routing)
       }
       catch (error) {
         return accountManagementError(error)
@@ -84,7 +82,7 @@ export function registerTargetRoutes(
         return accountManagementUnavailable()
       const session = accountManager.getAuthenticationSession(params.id)
       return session
-        ? apiResponse({ authentication: session })
+        ? apiResponse<DashboardAuthenticationResult>({ authentication: session })
         : apiError('Account authentication session was not found.', 404)
     })
     .post('/dashboard/api/accounts/default', async ({ body }) => {
@@ -95,7 +93,7 @@ export function registerTargetRoutes(
         return apiError('Invalid default account request.', 400)
       try {
         await accountManager.setDefaultAccount(parsed.data.accountName)
-        return apiResponse(accountManager.getAccountSnapshot().routing)
+        return apiResponse<DashboardRouting>(accountManager.getAccountSnapshot().routing)
       }
       catch (error) {
         return accountManagementError(error)
@@ -106,7 +104,7 @@ export function registerTargetRoutes(
         return accountManagementUnavailable()
       try {
         await accountManager.removeAccount(params.accountName)
-        return apiResponse(accountManager.getAccountSnapshot().routing)
+        return apiResponse<DashboardRouting>(accountManager.getAccountSnapshot().routing)
       }
       catch (error) {
         return accountManagementError(error)

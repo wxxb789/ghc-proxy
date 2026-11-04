@@ -1,4 +1,5 @@
 import type { Model } from '~/types'
+import type { DashboardBehavior, DashboardModel, DashboardWindowId } from '~/types/dashboard'
 
 import { getModelFallbackConfig } from '~/lib/model-resolver'
 import { PROXY_EFFECT_DEFINITIONS } from '~/observability/effects'
@@ -6,17 +7,18 @@ import { chatCompletionsStrategyRegistry } from '~/routes/chat-completions/strat
 import { defaultStrategyRegistry, resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
 import { resolveResponsesStrategyName } from '~/routes/responses/capabilities'
 import { responsesStrategyRegistry } from '~/routes/responses/strategy-registry'
-import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
+import { configStore, getCurrentAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 import { resolveResponsesCompactThreshold } from '~/transform/context-management'
 import { getChatCompletionsTokenParameter, resolveStrippedResponsesParams, RESPONSES_MIN_OUTPUT_TOKENS } from '~/transform/parameter-filter'
 import { RESPONSES_INPUT_POLICY } from '~/transform/responses-input'
 
-export function getDashboardModels() {
+export function getDashboardModels(): DashboardModel[] {
   return (modelCache.getModels()?.data ?? []).map(projectModel)
 }
 
-export function getDashboardBehavior() {
+export function getDashboardBehavior(window: DashboardWindowId = '1h'): DashboardBehavior {
   const requestSummary = runtimeStore.requests.summary()
+  const metrics = runtimeStore.requests.queryMetrics(window)
   const rewrites = configStore.getModelRewrites().map(rule => ({ ...rule }))
   const cachedModels = modelCache.getModels()
   const knownModelIds = cachedModels
@@ -26,9 +28,13 @@ export function getDashboardBehavior() {
     id,
     ...definition,
     count: requestSummary.effectCounts[id as keyof typeof requestSummary.effectCounts] ?? 0,
+    windowCount: metrics.effects[id] ?? 0,
   }))
 
   return {
+    hostTarget: getCurrentAccountName(),
+    window,
+    collectionStartedAt: metrics.collectionStartedAt,
     modelRouting: {
       rewrites,
       autoCorrect: { enabled: modelCache.getModelIds().length > 0 },
@@ -69,7 +75,7 @@ export function getDashboardBehavior() {
   }
 }
 
-function projectModel(model: Model) {
+function projectModel(model: Model): DashboardModel {
   const nativeMessagesAvailable = modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
   const responsesAvailable = modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT)
   const nativeStructuredOutput = modelCache.supportsStructuredOutputs(model)
@@ -113,7 +119,7 @@ function projectModel(model: Model) {
   }
 }
 
-function projectModelCapabilities(capabilities: Model['capabilities'] | undefined) {
+function projectModelCapabilities(capabilities: Model['capabilities'] | undefined): DashboardModel['upstream']['capabilities'] {
   const limits = capabilities?.limits
   const supports = capabilities?.supports
   return {

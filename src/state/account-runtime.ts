@@ -163,6 +163,20 @@ export interface RoutingTargetView {
   isDefault: boolean
 }
 
+export interface RoutingStateView {
+  baseHostname?: string
+  defaultAccount: string
+  routingEnabled: boolean
+}
+
+export function getRoutingState(): RoutingStateView {
+  return {
+    baseHostname: routing?.baseHostname,
+    defaultAccount: routing?.defaultAccount ?? defaultRuntime.name,
+    routingEnabled: routing !== undefined,
+  }
+}
+
 /** Committed targets with their hostnames, for projections without an account manager. */
 export function getRoutingTargets(): RoutingTargetView[] {
   if (!routing)

@@ -1,6 +1,7 @@
 import type { Elysia } from 'elysia'
 import type { DashboardRouteOptions } from './types'
 
+import type { DashboardM365SignIn } from '~/types/dashboard'
 import { z } from 'zod'
 
 import { signInMscAccount } from '~/clients/msc-auth'
@@ -35,7 +36,7 @@ export function registerM365Routes(app: Elysia, options: DashboardRouteOptions) 
           exe: accountManager.getMscAuthExe?.(),
           upn: parsed.data.upn,
         })
-        return apiResponse({ account })
+        return apiResponse<DashboardM365SignIn>({ account })
       }
       catch (error) {
         return apiError((error as Error).message, 502)

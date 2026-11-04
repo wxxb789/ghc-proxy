@@ -1,61 +1,80 @@
-import type { DashboardQuota, DashboardQuotaCache } from './quota'
-import type { RoutedAccountDescriptor } from '~/accounts/descriptor'
+import type { DashboardQuotaCache } from './quota'
+import type { DashboardRouteOptions } from './types'
 import type { AccountManagementSnapshot } from '~/accounts/manager'
+import type { AccountRuntime } from '~/state/account-runtime'
+import type { DashboardTarget, DashboardTargetQuota, DashboardTargets } from '~/types/dashboard'
 
-import { authStore, modelCache, runWithAccountRuntime } from '~/state'
-import { getCurrentAccountRuntime, getTargetAvailability } from '~/state/account-runtime'
+import { getUpstreamRequestQueueSnapshot } from '~/clients/factory'
+import { authStore, getCurrentAccountName, modelCache, runWithAccountRuntime } from '~/state'
+import { getCurrentAccountRuntime, getRoutingState, getRoutingTargets, getTargetAvailability } from '~/state/account-runtime'
 import { dashboardQuotaCache } from './quota'
 
-export const DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY = 4
+const runtimeIds = new WeakMap<AccountRuntime, string>()
+let nextRuntimeId = 1
 
-export async function getDashboardAccount(
-  account: RoutedAccountDescriptor,
+export function getDashboardTargets(options: DashboardRouteOptions, request: Request): DashboardTargets {
+  const snapshot = readTargetSnapshot(options, request)
+  const manager = options.accountManager
+  const canManage = Boolean(manager && snapshot.routing.routingEnabled)
+  const url = new URL(request.url)
+  const port = options.serverPort || url.port
+  return {
+    hostTarget: getCurrentAccountName(),
+    routing: snapshot.routing,
+    capabilities: {
+      canAddAccount: canManage,
+      canBootstrap: Boolean(manager && !snapshot.routing.routingEnabled),
+      canManageM365: Boolean(manager),
+      canRefreshMetadata: canManage,
+      ...(!canManage
+        ? { refreshUnavailableReason: manager ? 'Enable named-account routing to refresh metadata.' : 'This process was started without account management.' }
+        : {}),
+    },
+    targets: snapshot.accounts.map(account => runWithAccountRuntime(account.runtime, () => {
+      const baseUrl = `${url.protocol}//${account.hostname}${port ? `:${port}` : ''}`
+      return {
+        runtimeId: runtimeId(account.runtime),
+        name: account.name,
+        hostname: account.hostname,
+        isDefault: account.isDefault,
+        kind: authStore.upstream,
+        identity: authStore.upstream === 'm365' ? authStore.mscAuthUsername ?? authStore.mscAuthUpn : authStore.githubLogin,
+        tenant: authStore.upstream === 'm365' ? authStore.mscAuthTenant || 'Microsoft 365' : authStore.gheDomain ?? 'github.com',
+        health: getTargetHealth(),
+        queue: getUpstreamRequestQueueSnapshot(),
+        actions: {
+          canSetDefault: canManage && !account.isDefault,
+          canRemove: canManage && !account.isDefault && snapshot.accounts.length > 1,
+        },
+        client: {
+          openAIBaseUrl: `${baseUrl}/v1`,
+          anthropicBaseUrl: baseUrl,
+          model: modelCache.getModels()?.data[0]?.id,
+        },
+      }
+    })),
+  }
+}
+
+export async function getDashboardTargetQuota(
+  targetName: string,
+  options: DashboardRouteOptions,
+  request: Request,
   quotaCache: DashboardQuotaCache = dashboardQuotaCache,
-) {
-  return runWithAccountRuntime(account.runtime, async () => {
-    const health = await getDashboardAccountHealth(quotaCache)
-    return {
-      name: account.name,
-      hostname: account.hostname,
-      isDefault: account.isDefault,
-      upstream: authStore.upstream,
-      identity: authStore.upstream === 'm365'
-        ? authStore.mscAuthUsername ?? authStore.mscAuthUpn
-        : authStore.githubLogin,
-      tenant: authStore.upstream === 'm365'
-        ? authStore.mscAuthTenant || 'Microsoft 365'
-        : authStore.gheDomain ?? 'github.com',
-      github: health.github,
-      copilot: health.copilot,
-      quota: health.quota,
-    }
-  })
-}
-
-export async function getDashboardAccounts(
-  accounts: AccountManagementSnapshot['accounts'],
-  quotaCache: DashboardQuotaCache,
-) {
-  const results: Array<Awaited<ReturnType<typeof getDashboardAccount>>> = []
-  let nextIndex = 0
-  const workerCount = Math.min(DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY, accounts.length)
-
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < accounts.length) {
-      const index = nextIndex++
-      const account = accounts[index]
-      if (!account)
-        return
-      results[index] = await getDashboardAccount(account, quotaCache)
-    }
+): Promise<DashboardTargetQuota | undefined> {
+  const target = readTargetSnapshot(options, request).accounts.find(account => account.name === targetName)
+  if (!target)
+    return undefined
+  return runWithAccountRuntime(target.runtime, async () => ({
+    target: target.name,
+    runtimeId: runtimeId(target.runtime),
+    quota: authStore.upstream === 'm365'
+      ? { status: 'not_applicable' }
+      : authStore.githubToken ? await quotaCache.get() : { status: 'unavailable' },
   }))
-
-  return results
 }
 
-export async function getDashboardAccountHealth(
-  quotaCache: DashboardQuotaCache,
-) {
+function getTargetHealth(): DashboardTarget['health'] {
   const modelsLoaded = modelCache.getModels() !== undefined
   const isM365 = authStore.upstream === 'm365'
   const githubConfigured = Boolean(authStore.githubToken)
@@ -67,11 +86,6 @@ export async function getDashboardAccountHealth(
     && !copilotExpired
     && authStore.copilotTokenLastRefreshSucceeded !== false
     && (!isM365 || getTargetAvailability(getCurrentAccountRuntime())?.status !== 'unavailable')
-  const quota: DashboardQuota = isM365
-    ? { status: 'not_applicable' }
-    : githubConfigured
-      ? await quotaCache.get()
-      : { status: 'unavailable' }
 
   return {
     status: copilotHealthy ? 'ok' : 'degraded',
@@ -94,8 +108,29 @@ export async function getDashboardAccountHealth(
       lastRefreshAt: toIso(authStore.copilotTokenLastRefreshAt),
       lastRefreshSucceeded: authStore.copilotTokenLastRefreshSucceeded,
     },
-    quota,
   }
+}
+
+function readTargetSnapshot(options: DashboardRouteOptions, request: Request): AccountManagementSnapshot {
+  if (options.accountManager)
+    return options.accountManager.getAccountSnapshot()
+  const state = getRoutingState()
+  const baseHostname = state.baseHostname ?? new URL(request.url).hostname
+  const committed = getRoutingTargets()
+  const current = getCurrentAccountRuntime()
+  return {
+    routing: { ...state, baseHostname },
+    accounts: committed.length > 0 ? committed : [{ name: current.name, hostname: baseHostname, runtime: current, isDefault: true }],
+  }
+}
+
+function runtimeId(runtime: AccountRuntime): string {
+  let id = runtimeIds.get(runtime)
+  if (id === undefined) {
+    id = `target-${nextRuntimeId++}`
+    runtimeIds.set(runtime, id)
+  }
+  return id
 }
 
 function toIso(timestamp: number | undefined): string | undefined {

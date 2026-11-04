@@ -8,9 +8,7 @@
  * Live refresh free of helper subprocesses.
  */
 import type { AccountManagementSnapshot } from '~/accounts/manager'
-import type { MscAccount } from '~/clients/msc-auth'
-import type { TargetKind } from '~/lib/account-routing'
-import type { TargetAvailability } from '~/state/account-runtime'
+import type { DashboardM365, DashboardM365Readiness } from '~/types/dashboard'
 
 import process from 'node:process'
 
@@ -18,37 +16,6 @@ import { listMscAccounts, resolveMscAuthExe } from '~/clients/msc-auth'
 import { M365_DEFAULT_HOSTNAME, RESERVED_M365_TARGET } from '~/lib/account-routing'
 import { getCachedConfig } from '~/lib/config'
 import { getRoutingTargets, getTargetAvailability } from '~/state/account-runtime'
-
-export interface M365Readiness {
-  platformSupported: boolean
-  helperAvailable: boolean
-  accountCount?: number
-  accounts?: MscAccount[]
-  failedStep?: 'platform' | 'helper' | 'accounts'
-  error?: string
-}
-
-export interface M365RoutingRow {
-  target: string
-  hostname: string
-  kind: TargetKind
-  isDefault: boolean
-}
-
-export interface M365DashboardState {
-  registered: boolean
-  hostname?: string
-  account?: string
-  username?: string
-  tenant?: string
-  tokenExpiresAt?: string
-  modelCount: number
-  models: string[]
-  availability?: TargetAvailability
-  routing: M365RoutingRow[]
-  client?: { baseUrl: string, model: string }
-  onboarding: { status: 'available' | 'unavailable', reason?: string }
-}
 
 export interface M365AccountSnapshotSource {
   getAccountSnapshot: () => AccountManagementSnapshot
@@ -59,7 +26,7 @@ export interface M365DashboardOptions {
   serverPort?: number
 }
 
-function routingRows(snapshot: AccountManagementSnapshot): M365RoutingRow[] {
+function routingRows(snapshot: AccountManagementSnapshot): DashboardM365['routing'] {
   return snapshot.accounts.map(account => ({
     target: account.name,
     hostname: account.hostname,
@@ -74,9 +41,10 @@ function baseUrlFor(hostname: string, port: number | undefined): string {
 
 export function getM365DashboardState(
   options: M365DashboardOptions = {},
-): M365DashboardState {
+): DashboardM365 {
   const manager = options.manager
-  const onboarding: M365DashboardState['onboarding'] = manager
+  const platformSupported = process.platform === 'win32'
+  const onboarding: DashboardM365['onboarding'] = manager
     ? { status: 'available' }
     : {
         status: 'unavailable',
@@ -85,7 +53,7 @@ export function getM365DashboardState(
 
   if (!manager) {
     const committed = getRoutingTargets()
-    const rows: M365RoutingRow[] = committed.map(view => ({
+    const rows: DashboardM365['routing'] = committed.map(view => ({
       target: view.name,
       hostname: view.hostname,
       kind: view.runtime.auth.upstream === 'm365' ? 'm365' : 'github',
@@ -94,6 +62,7 @@ export function getM365DashboardState(
     const running = committed.find(view => view.name === RESERVED_M365_TARGET)
     if (!running) {
       return {
+        platformSupported,
         registered: false,
         modelCount: 0,
         models: [],
@@ -103,6 +72,7 @@ export function getM365DashboardState(
     }
     const modelIds = running.runtime.models.getModelIds()
     return {
+      platformSupported,
       registered: true,
       hostname: running.hostname,
       account: running.runtime.auth.mscAuthAccount ?? getCachedConfig().m365?.account,
@@ -131,6 +101,7 @@ export function getM365DashboardState(
 
   if (!target) {
     return {
+      platformSupported,
       registered: false,
       modelCount: 0,
       models: [],
@@ -141,6 +112,7 @@ export function getM365DashboardState(
   }
 
   return {
+    platformSupported,
     registered: true,
     hostname: target.hostname,
     account: target.runtime.auth.mscAuthAccount ?? getCachedConfig().m365?.account,
@@ -161,7 +133,7 @@ export function getM365DashboardState(
   }
 }
 
-export async function probeM365Readiness(exe?: string): Promise<M365Readiness> {
+export async function probeM365Readiness(exe?: string): Promise<DashboardM365Readiness> {
   if (process.platform !== 'win32') {
     return { platformSupported: false, helperAvailable: false, failedStep: 'platform' }
   }

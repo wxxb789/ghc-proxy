@@ -3,6 +3,7 @@ import type { DashboardMetadataRefreshService } from '~/routes/dashboard/metadat
 
 import type { DashboardAccountManagement } from '~/routes/dashboard/types'
 import type { CopilotUsageResponse } from '~/types'
+import type { DashboardResponse, DashboardTargets } from '~/types/dashboard'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -22,7 +23,6 @@ import {
 } from '~/routes/dashboard/metadata-refresh'
 import { DashboardQuotaCache, dashboardQuotaCache } from '~/routes/dashboard/quota'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
-import { DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY } from '~/routes/dashboard/targets-projection'
 import { createServer } from '~/server'
 import {
   authStore,
@@ -56,47 +56,6 @@ afterEach(() => {
 })
 
 describe('dashboard static routes', () => {
-  test('serves a self-contained dashboard surface with strict security headers', async () => {
-    const server = createServer()
-    const htmlResponse = await server.handle(new Request('http://localhost/dashboard'))
-    const cssResponse = await server.handle(new Request('http://localhost/dashboard/styles.css'))
-    const jsResponse = await server.handle(new Request('http://localhost/dashboard/app.js'))
-
-    expect(htmlResponse.status).toBe(200)
-    expect(htmlResponse.headers.get('content-type')).toContain('text/html')
-    expect(htmlResponse.headers.get('cache-control')).toBe('no-store')
-    expect(htmlResponse.headers.get('content-security-policy')).toContain('script-src \'self\'')
-    expect(htmlResponse.headers.get('content-security-policy')).not.toContain('unsafe-inline')
-    const html = await htmlResponse.text()
-    expect(html).toContain('/dashboard/styles.css')
-    expect(html).toContain('/dashboard/app.js')
-    expect(html).toContain('Overview')
-    expect(html).toContain('Accounts')
-    expect(html).toContain('Models')
-    expect(html).toContain('Behavior')
-    expect(html).toContain('Requests')
-    expect(html).toContain('id="theme-toggle"')
-    expect(html).toContain('role="switch"')
-    expect(html).toContain('id="model-group-vendor"')
-    expect(html).toContain('id="model-sort"')
-    expect(html).toContain('id="copy-models"')
-    expect(html).toContain('id="account-add-form"')
-
-    expect(cssResponse.headers.get('content-type')).toContain('text/css')
-    expect(jsResponse.headers.get('content-type')).toContain('text/javascript')
-    const js = await jsResponse.text()
-    expect(js).toContain('ghc-proxy-dashboard-theme')
-    expect(js).toContain('prefers-color-scheme: dark')
-    expect(js).toContain('window.location.origin + \'/v1\'')
-    expect(js).toContain('\'Model ID\', \'Model Name\', \'Vendor\', \'Version\'')
-    expect(js).toContain('[\'Endpoint: \' + localEndpoint, headers.join(\'\\t\')]')
-    expect(js).toContain('navigator.clipboard?.writeText')
-    expect(js).toContain('/dashboard/api/accounts/default')
-    expect(js).toContain('/dashboard/api/account-auth/')
-    expect(js).not.toContain('innerHTML')
-    expect(await cssResponse.text()).toContain('.account-auth[hidden] { display: none; }')
-  })
-
   test('does not record dashboard polling in the request ring', async () => {
     const response = await createServer().handle(
       new Request('http://localhost/dashboard/api/requests'),
@@ -179,7 +138,7 @@ describe('dashboard API security projection', () => {
 })
 
 describe('dashboard account management API', () => {
-  test('loads quota during initial Dashboard projections and refreshes it manually', async () => {
+  test('loads quota only in its own region and refreshes it manually', async () => {
     const manager = accountManagerFixture()
     authStore.githubToken = 'github-default'
     manager.getAccountSnapshot().accounts[0]!.runtime.auth.githubToken = 'github-default'
@@ -202,15 +161,16 @@ describe('dashboard account management API', () => {
       quotaCache,
     })
 
-    const [overview, accounts] = await Promise.all([
+    const [overview, targets] = await Promise.all([
       app.handle(new Request('http://localhost/dashboard/api/overview')),
-      app.handle(new Request('http://localhost/dashboard/api/accounts')),
+      app.handle(new Request('http://localhost/dashboard/api/targets')),
     ])
+    expect(overview.status).toBe(200)
+    expect(targets.status).toBe(200)
+    expect(quotaLoads).toBe(0)
+    const quota = await app.handle(new Request('http://localhost/dashboard/api/targets/default/quota'))
+    expect(await quota.json()).toMatchObject({ quota: { status: 'ok' } })
     expect(quotaLoads).toBe(1)
-    expect(await overview.json()).toMatchObject({ quota: { status: 'ok' } })
-    expect(await accounts.json()).toMatchObject({
-      accounts: [{ quota: { status: 'ok' } }],
-    })
 
     const refresh = await app.handle(new Request(
       'http://localhost/dashboard/api/refresh',
@@ -220,11 +180,11 @@ describe('dashboard account management API', () => {
     expect(quotaLoads).toBe(2)
 
     await app.handle(new Request('http://localhost/dashboard/api/overview'))
-    await app.handle(new Request('http://localhost/dashboard/api/accounts'))
+    await app.handle(new Request('http://localhost/dashboard/api/targets/default/quota'))
     expect(quotaLoads).toBe(2)
   })
 
-  test('reports current, default, and active account count in Overview', async () => {
+  test('reports the host target and default routing without remote metadata', async () => {
     const defaultRuntime = createAccountRuntime('default')
     const workRuntime = createAccountRuntime('work')
     const routing = compileAccountRouting({
@@ -240,17 +200,16 @@ describe('dashboard account management API', () => {
       accountManager: new AccountManager({ routing, runtimes: [defaultRuntime, workRuntime] }),
     })
 
-    const response = await app.handle(new Request('http://work.localhost/dashboard/api/overview'))
+    const response = await app.handle(new Request('http://work.localhost/dashboard/api/targets'))
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
-      auth: {
-        accounts: {
-          currentAccount: 'work',
-          defaultAccount: 'default',
-          totalAccounts: 2,
-        },
-      },
+      hostTarget: 'work',
+      routing: { defaultAccount: 'default' },
+      targets: [
+        { name: 'default', isDefault: true },
+        { name: 'work', isDefault: false },
+      ],
     })
   })
 
@@ -280,7 +239,7 @@ describe('dashboard account management API', () => {
     expect(denied.status).toBe(403)
   })
 
-  test('loads and projects real routed accounts from a cold quota cache', async () => {
+  test('projects routed identities and loads quota in each selected runtime', async () => {
     const defaultRuntime = createAccountRuntime('default', {
       githubLogin: 'alice',
       githubToken: 'github-default',
@@ -311,84 +270,50 @@ describe('dashboard account management API', () => {
       quotaCache,
     })
 
-    const response = await app.handle(new Request('http://localhost/dashboard/api/accounts'))
-
+    const response = await app.handle(new Request('http://localhost/dashboard/api/targets'))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
-      defaultAccount: 'default',
-      accounts: [
-        { name: 'default', isDefault: true, quota: { plan: 'github-default', status: 'ok' } },
-        { name: 'work', isDefault: false, quota: { plan: 'github-work', status: 'ok' } },
+      routing: { defaultAccount: 'default' },
+      targets: [
+        { name: 'default', isDefault: true, identity: 'alice' },
+        { name: 'work', isDefault: false, identity: 'bob' },
       ],
     })
+    const quotas = await Promise.all(['default', 'work'].map(async (name) => {
+      const quota = await app.handle(new Request(`http://localhost/dashboard/api/targets/${name}/quota`))
+      return quota.json()
+    }))
+    expect(quotas).toMatchObject([
+      { target: 'default', quota: { plan: 'github-default', status: 'ok' } },
+      { target: 'work', quota: { plan: 'github-work', status: 'ok' } },
+    ])
   })
 
-  test('bounds cold quota loads while preserving account order and runtime isolation', async () => {
-    const accountCount = DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY * 2 + 1
-    const runtimes = Array.from({ length: accountCount }, (_, index) => {
-      const name = `account-${index}`
-      const runtime = createAccountRuntime(name, {
-        githubToken: `github-${index}`,
-        copilotToken: `copilot-${index}`,
-      })
-      runtime.models.cacheModels({ object: 'list', data: [] })
-      return runtime
-    })
-    const routing = compileAccountRouting({
-      baseHostname: 'localhost',
-      defaultAccount: runtimes[0]!.name,
-      hostnames: Object.fromEntries(
-        runtimes.map(runtime => [`${runtime.name}.localhost`, runtime.name]),
-      ),
-    }, runtimes.map(runtime => runtime.name))
-    configureAccountRuntimes(routing, runtimes)
-
+  test('keeps in-flight quota attached to its runtime when a target name is reused', async () => {
+    const old = createAccountRuntime('default', { githubToken: 'old-private-token', githubLogin: 'alice' })
+    const replacement = createAccountRuntime('default', { githubToken: 'new-private-token', githubLogin: 'bob' })
+    const routing = compileAccountRouting({ baseHostname: 'localhost', defaultAccount: 'default', hostnames: { 'default.localhost': 'default' } }, ['default'])
+    configureAccountRuntimes(routing, [old])
     const started = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
-    let activeLoads = 0
-    let maxActiveLoads = 0
     const quotaCache = new DashboardQuotaCache(async () => {
-      activeLoads++
-      maxActiveLoads = Math.max(maxActiveLoads, activeLoads)
-      if (activeLoads === DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY)
+      if (authStore.githubLogin === 'alice') {
         started.resolve()
-      try {
         await release.promise
-        return {
-          ...usageFixture(),
-          copilot_plan: authStore.githubToken ?? 'missing-token',
-        }
       }
-      finally {
-        activeLoads--
-      }
+      return { ...usageFixture(), copilot_plan: authStore.githubLogin === 'alice' ? 'old-plan' : 'replacement-plan' }
     })
-    const app = createDashboardRoutes({
-      accountManager: new AccountManager({ routing, runtimes }),
-      quotaCache,
-    })
-
-    const pendingResponse = app.handle(new Request('http://localhost/dashboard/api/accounts'))
+    const app = createDashboardRoutes({ quotaCache })
+    const first = await (await app.handle(new Request('http://localhost/dashboard/api/targets'))).json() as DashboardResponse<DashboardTargets>
+    const oldQuota = app.handle(new Request('http://localhost/dashboard/api/targets/default/quota'))
     await started.promise
-    expect(maxActiveLoads).toBe(DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY)
+    configureAccountRuntimes(routing, [replacement])
+    const second = await (await app.handle(new Request('http://localhost/dashboard/api/targets'))).json() as DashboardResponse<DashboardTargets>
+    expect(second.targets[0]?.runtimeId).not.toBe(first.targets[0]?.runtimeId)
     release.resolve()
-
-    const response = await pendingResponse
-    const body = await response.json() as {
-      accounts: Array<{ name: string, quota: { plan?: string, status: string } }>
-    }
-    expect(response.status).toBe(200)
-    expect(maxActiveLoads).toBe(DASHBOARD_ACCOUNT_QUOTA_CONCURRENCY)
-    expect(body.accounts.map(account => account.name)).toEqual(runtimes.map(runtime => runtime.name))
-    expect(body.accounts.map(account => ({
-      plan: account.quota.plan,
-      status: account.quota.status,
-    }))).toEqual(
-      Array.from({ length: accountCount }, (_, index) => ({
-        plan: `github-${index}`,
-        status: 'ok',
-      })),
-    )
+    expect(await (await oldQuota).json()).toMatchObject({ runtimeId: first.targets[0]?.runtimeId, quota: { plan: 'old-plan' } })
+    const currentQuota = await app.handle(new Request('http://localhost/dashboard/api/targets/default/quota'))
+    expect(await currentQuota.json()).toMatchObject({ runtimeId: second.targets[0]?.runtimeId, quota: { plan: 'replacement-plan' } })
   })
 
   test('bootstraps legacy routing with an editable dedicated hostname', async () => {
@@ -396,7 +321,7 @@ describe('dashboard account management API', () => {
     const app = createDashboardRoutes({ accountManager: manager })
 
     const accountsResponse = await app.handle(new Request(
-      'http://localhost/dashboard/api/accounts',
+      'http://localhost/dashboard/api/targets',
     ))
     const bootstrapResponse = await app.handle(new Request(
       'http://localhost/dashboard/api/accounts/bootstrap',
@@ -412,8 +337,9 @@ describe('dashboard account management API', () => {
 
     expect(accountsResponse.status).toBe(200)
     expect(await accountsResponse.json()).toMatchObject({
-      routingEnabled: false,
-      accounts: [{
+      routing: { routingEnabled: false },
+      capabilities: { canBootstrap: true, canAddAccount: false, canRefreshMetadata: false },
+      targets: [{
         name: 'default',
         hostname: 'default-account.localhost',
         isDefault: true,
@@ -445,7 +371,7 @@ describe('dashboard account management API', () => {
     const app = createDashboardRoutes({ accountManager: manager })
 
     const accountsResponse = await app.handle(new Request(
-      'http://localhost/dashboard/api/accounts',
+      'http://localhost/dashboard/api/targets',
     ))
     const startResponse = await app.handle(new Request(
       'http://localhost/dashboard/api/accounts',
@@ -475,8 +401,7 @@ describe('dashboard account management API', () => {
       gheDomain: 'company.ghe.com',
     })
     expect(await accountsResponse.clone().json()).toMatchObject({
-      baseHostname: 'localhost',
-      defaultAccount: 'default',
+      routing: { baseHostname: 'localhost', defaultAccount: 'default' },
     })
     const body = [accountsResponse, startResponse, statusResponse]
       .map(response => response.clone())
@@ -579,6 +504,7 @@ describe('dashboard account management API', () => {
   test('reports account management as unavailable without a configured manager', async () => {
     const response = await createDashboardRoutes().handle(new Request(
       'http://localhost/dashboard/api/accounts',
+      { method: 'POST' },
     ))
 
     expect(response.status).toBe(409)
@@ -811,18 +737,42 @@ describe('M365 target projection', () => {
       ...accountManagerFixture(),
       getAccountSnapshot: manager.getAccountSnapshot,
     } })
-    const response = await app.handle(new Request('http://localhost/dashboard/api/accounts'))
-    const body = await response.json() as { accounts: Array<{ name: string, upstream: string, tenant: string }> }
+    const response = await app.handle(new Request('http://localhost/dashboard/api/targets'))
+    const body = await response.json() as DashboardResponse<DashboardTargets>
 
-    expect(body.accounts.find(account => account.name === 'm365')).toMatchObject({
-      upstream: 'm365',
+    expect(body.targets.find(account => account.name === 'm365')).toMatchObject({
+      kind: 'm365',
       tenant: 'tenant-id',
       identity: 'operator@example.com',
     })
-    expect(body.accounts.find(account => account.name === 'default')).toMatchObject({
-      upstream: 'github',
+    expect(body.targets.find(account => account.name === 'default')).toMatchObject({
+      kind: 'github',
       tenant: 'github.com',
     })
+  })
+
+  test('projects a committed M365-only process without inventing management actions', async () => {
+    const m365 = targetManager(true).getAccountSnapshot().accounts.find(account => account.name === 'm365')!.runtime
+    configureAccountRuntimes(compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'm365',
+      hostnames: { 'm365.localhost': 'm365' },
+    }, []), [m365])
+    const app = createDashboardRoutes({ serverPort: 4141 })
+    const response = await app.handle(new Request('http://m365.localhost:4141/dashboard/api/targets'))
+    const body = await response.json() as DashboardResponse<DashboardTargets>
+    expect(body.routing).toEqual({ baseHostname: 'localhost', defaultAccount: 'm365', routingEnabled: true })
+    expect(body.capabilities).toMatchObject({ canAddAccount: false, canBootstrap: false, canManageM365: false, canRefreshMetadata: false })
+    expect(body.targets).toMatchObject([{
+      name: 'm365',
+      kind: 'm365',
+      identity: 'operator@example.com',
+      health: { github: { status: 'not_applicable' } },
+      actions: { canSetDefault: false, canRemove: false },
+      client: { openAIBaseUrl: 'http://m365.localhost:4141/v1', anthropicBaseUrl: 'http://m365.localhost:4141' },
+    }])
+    const quota = await app.handle(new Request('http://m365.localhost:4141/dashboard/api/targets/m365/quota'))
+    expect(await quota.json()).toMatchObject({ quota: { status: 'not_applicable' } })
   })
 
   test('reports onboarding unavailable without account management', () => {

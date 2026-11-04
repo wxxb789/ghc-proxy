@@ -1,29 +1,12 @@
 import type { AccountRuntime } from '~/state/account-runtime'
 import type { CopilotUsageResponse, QuotaDetail } from '~/types'
+import type { DashboardQuota, DashboardQuotaDetail } from '~/types/dashboard'
 
 import { handleUsageCore } from '~/routes/usage/handler'
 import { getCurrentAccountRuntime } from '~/state/account-runtime'
 
 const DEFAULT_QUOTA_TTL_MS = 60_000
 const DEFAULT_QUOTA_TIMEOUT_MS = 5_000
-
-export interface DashboardQuota {
-  status: 'ok' | 'stale' | 'unavailable' | 'not_applicable'
-  fetchedAt?: string
-  plan?: string
-  resetDate?: string
-  chat?: DashboardQuotaDetail
-  completions?: DashboardQuotaDetail
-  premiumInteractions?: DashboardQuotaDetail
-}
-
-interface DashboardQuotaDetail {
-  entitlement: number
-  remaining: number
-  percentRemaining: number
-  unlimited: boolean
-  overagePermitted: boolean
-}
 
 export class DashboardQuotaCache {
   private cached = new WeakMap<AccountRuntime, { expiresAt: number, value: DashboardQuota }>()

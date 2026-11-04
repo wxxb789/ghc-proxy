@@ -186,7 +186,7 @@ test('a forbidden catalog refresh keeps a cached M365 target unavailable', async
 
   await expect(runWithAccountRuntime(runtime, () => client.getModels())).rejects.toMatchObject({ status: 403 })
   expect(getTargetAvailability(runtime)).toMatchObject({ status: 'unavailable' })
-  expect(await runWithAccountRuntime(runtime, () => getDashboardOverview())).toMatchObject({ status: 'degraded' })
+  expect(runWithAccountRuntime(runtime, () => getDashboardOverview({}, new Request('http://localhost/dashboard/api/overview')))).toMatchObject({ status: 'degraded' })
 })
 
 describe('listMscAccounts', () => {

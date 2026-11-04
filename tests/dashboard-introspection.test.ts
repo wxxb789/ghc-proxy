@@ -5,14 +5,17 @@ import type { CopilotUsageResponse, Model } from '~/types'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { UpstreamRequestQueue } from '~/clients/upstream-queue'
+import { compileAccountRouting } from '~/lib/account-routing'
 import { getCachedConfig } from '~/lib/config'
 import { getDashboardBehavior, getDashboardModels } from '~/routes/dashboard/config-projection'
 import { DashboardQuotaCache } from '~/routes/dashboard/quota'
-import { getDashboardAccount } from '~/routes/dashboard/targets-projection'
+import { getDashboardTargetQuota, getDashboardTargets } from '~/routes/dashboard/targets-projection'
 import {
   authStore,
+  configureAccountRuntimes,
   createAccountRuntime,
   modelCache,
+  resetAccountRuntimes,
   runtimeStore,
   runWithAccountRuntime,
 } from '~/state'
@@ -36,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   runtimeStore.requests.reset()
+  resetAccountRuntimes()
   clearConfig()
   restoreStateSnapshot(snapshot)
 })
@@ -191,7 +195,7 @@ describe('dashboard behavior introspection', () => {
       models: ['gpt-5.6-sol'],
     })
     expect(behavior.effects.find(effect => effect.id === 'responses.parameter_filter'))
-      .toMatchObject({ count: 3 })
+      .toMatchObject({ count: 3, windowCount: 3 })
   })
 })
 
@@ -205,45 +209,35 @@ describe('dashboard account projection', () => {
         ? 'personal-plan'
         : 'work-plan',
     }))
-    await Promise.all([
-      runWithAccountRuntime(personal, () => cache.refresh()),
-      runWithAccountRuntime(work, () => cache.refresh()),
+    configureAccountRuntimes(compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'personal',
+      hostnames: { 'personal.localhost': 'personal', 'work.localhost': 'work' },
+    }, ['personal', 'work']), [personal, work])
+    const request = new Request('http://localhost/dashboard/api/targets')
+    const [personalQuota, workQuota] = await Promise.all([
+      getDashboardTargetQuota('personal', {}, request, cache),
+      getDashboardTargetQuota('work', {}, request, cache),
     ])
-
-    const [personalView, workView] = await Promise.all([
-      getDashboardAccount({
-        name: 'personal',
-        hostname: 'personal.localhost',
-        isDefault: true,
-        runtime: personal,
-      }, cache),
-      getDashboardAccount({
-        name: 'work',
-        hostname: 'work.localhost',
-        isDefault: false,
-        runtime: work,
-      }, cache),
-    ])
+    const [personalView, workView] = getDashboardTargets({}, request).targets
 
     expect(personalView).toMatchObject({
       name: 'personal',
       hostname: 'personal.localhost',
       isDefault: true,
       tenant: 'github.com',
-      github: { status: 'ok', login: 'alice' },
-      copilot: { status: 'ok', modelsLoaded: true },
-      quota: { plan: 'personal-plan' },
+      health: { github: { status: 'ok', login: 'alice' }, copilot: { status: 'ok', modelsLoaded: true } },
     })
     expect(workView).toMatchObject({
       name: 'work',
       hostname: 'work.localhost',
       isDefault: false,
       tenant: 'company.ghe.com',
-      github: { status: 'ok', login: 'bob' },
-      copilot: { status: 'ok', modelsLoaded: true },
-      quota: { plan: 'work-plan' },
+      health: { github: { status: 'ok', login: 'bob' }, copilot: { status: 'ok', modelsLoaded: true } },
     })
-    const json = JSON.stringify([personalView, workView])
+    expect(personalQuota?.quota).toMatchObject({ plan: 'personal-plan' })
+    expect(workQuota?.quota).toMatchObject({ plan: 'work-plan' })
+    const json = JSON.stringify([personalView, workView, personalQuota, workQuota])
     expect(json).not.toContain('github-personal')
     expect(json).not.toContain('github-work')
     expect(json).not.toContain('copilot-personal')

@@ -241,10 +241,10 @@ describe('request account routing', () => {
 
     const app = createServer()
     const account1Response = await app.handle(
-      new Request('http://account1.localhost/dashboard/api/overview'),
+      new Request('http://account1.localhost/dashboard/api/targets/account1/quota'),
     )
     const defaultResponse = await app.handle(
-      new Request('http://localhost/dashboard/api/overview'),
+      new Request('http://localhost/dashboard/api/targets/default/quota'),
     )
 
     const account1Body = await account1Response.json() as { quota: { plan: string } }

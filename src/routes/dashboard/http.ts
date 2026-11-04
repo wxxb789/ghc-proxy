@@ -1,4 +1,8 @@
+import type { DashboardWindowId } from '~/types/dashboard'
+
 import { AccountManagementError } from '~/accounts/manager'
+import { runtimeStore } from '~/state'
+import { DASHBOARD_SCHEMA_VERSION, DASHBOARD_WINDOWS } from '~/types/dashboard'
 
 export const BASE_HEADERS = {
   'cache-control': 'no-store',
@@ -39,13 +43,19 @@ export function apiError(message: string, status: number): Response {
   )
 }
 
-export function apiResponse(data: unknown, status = 200): Response {
+export function apiResponse<T>(data: T, status = 200): Response {
   return Response.json(
     {
-      schemaVersion: 1,
+      schemaVersion: DASHBOARD_SCHEMA_VERSION,
       generatedAt: new Date().toISOString(),
+      startedAt: runtimeStore.startedAt,
       ...(typeof data === 'object' && data !== null ? data : { data }),
     },
     { status, headers: BASE_HEADERS },
   )
+}
+
+export function parseDashboardWindow(request: Request): DashboardWindowId | undefined {
+  const value = new URL(request.url).searchParams.get('window') ?? '1h'
+  return Object.hasOwn(DASHBOARD_WINDOWS, value) ? value as DashboardWindowId : undefined
 }

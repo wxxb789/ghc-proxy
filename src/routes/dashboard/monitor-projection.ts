@@ -1,38 +1,22 @@
-import type { DashboardQuotaCache } from './quota'
-import type { AccountManagementSnapshot } from '~/accounts/manager'
+import type { DashboardRouteOptions } from './types'
+import type { DashboardOverview, DashboardRequests } from '~/types/dashboard'
 
 import { getUpstreamRequestQueueSnapshot } from '~/clients/factory'
-import { authStore, getCurrentAccountName, runtimeStore } from '~/state'
+import { RECENT_REQUEST_LIMIT } from '~/observability/request-store'
+import { runtimeStore } from '~/state'
 import { VERSION } from '~/util/version'
-import { dashboardQuotaCache } from './quota'
-import { getDashboardAccountHealth } from './targets-projection'
+import { getDashboardTargets } from './targets-projection'
 
-export async function getDashboardOverview(
-  quotaCache: DashboardQuotaCache = dashboardQuotaCache,
-  accountSnapshot?: AccountManagementSnapshot,
-) {
+export function getDashboardOverview(options: DashboardRouteOptions, request: Request): DashboardOverview {
   const requests = runtimeStore.requests.summary()
-  const account = await getDashboardAccountHealth(quotaCache)
-
+  const targets = getDashboardTargets(options, request)
   return {
-    status: account.status,
+    status: targets.targets.length > 0 && targets.targets.every(target => target.health.status === 'ok') ? 'ok' : 'degraded',
     version: VERSION,
     startedAt: runtimeStore.startedAt,
     uptimeMs: Math.max(0, Date.now() - Date.parse(runtimeStore.startedAt)),
-    auth: {
-      upstream: authStore.upstream,
-      identity: authStore.upstream === 'm365'
-        ? authStore.mscAuthUsername ?? authStore.mscAuthUpn
-        : authStore.githubLogin,
-      github: account.github,
-      copilot: account.copilot,
-      accounts: {
-        currentAccount: getCurrentAccountName(),
-        defaultAccount: accountSnapshot?.routing.defaultAccount ?? getCurrentAccountName(),
-        totalAccounts: accountSnapshot?.accounts.length ?? 1,
-      },
-    },
-    quota: account.quota,
+    hostTarget: targets.hostTarget,
+    capabilities: targets.capabilities,
     activity: {
       activeRequests: requests.active,
       recentRequests: requests.recent,
@@ -42,6 +26,6 @@ export async function getDashboardOverview(
   }
 }
 
-export function getDashboardRequests() {
-  return runtimeStore.requests.snapshot()
+export function getDashboardRequests(): DashboardRequests {
+  return { capacity: RECENT_REQUEST_LIMIT, ...runtimeStore.requests.snapshot() }
 }

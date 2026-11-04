@@ -1,25 +1,12 @@
-import type { DashboardQuota, DashboardQuotaCache } from './quota'
+import type { DashboardQuotaCache } from './quota'
 import type { RoutedAccountDescriptor } from '~/accounts/descriptor'
+import type { DashboardAccountMetadataRefresh, DashboardMetadataRefresh, DashboardMetadataStatus } from '~/types/dashboard'
 
 import { cacheModels } from '~/clients/factory'
 import { refreshGitHubIdentity } from '~/lib/token'
 import { authStore, modelCache, runWithAccountRuntime } from '~/state'
 
 const DEFAULT_METADATA_TIMEOUT_MS = 5_000
-
-export type DashboardMetadataStatus = 'ok' | 'stale' | 'unavailable' | 'not_applicable'
-
-export interface DashboardAccountMetadataRefresh {
-  github: { status: DashboardMetadataStatus }
-  models: { status: DashboardMetadataStatus }
-  name: string
-  quota: { status: DashboardQuota['status'] }
-}
-
-export interface DashboardMetadataRefresh {
-  accounts: DashboardAccountMetadataRefresh[]
-  status: 'ok' | 'partial' | 'unavailable'
-}
 
 export interface DashboardMetadataRefreshDependencies {
   refreshGitHubIdentity: (signal?: AbortSignal) => Promise<void>

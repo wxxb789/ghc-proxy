@@ -1,22 +1,20 @@
 import type { Elysia } from 'elysia'
-import type { DashboardQuotaCache } from './quota'
-import type { DashboardAccountManagement } from './types'
+import type { DashboardRouteOptions } from './types'
 
-import { RECENT_REQUEST_LIMIT } from '~/observability/request-store'
-import { apiResponse } from './http'
+import { runtimeStore } from '~/state'
+import { apiError, apiResponse, parseDashboardWindow } from './http'
 import { getDashboardOverview, getDashboardRequests } from './monitor-projection'
 
-export function registerMonitorRoutes(
-  app: Elysia,
-  quotaCache: DashboardQuotaCache,
-  accountManager?: DashboardAccountManagement,
-) {
+export function registerMonitorRoutes(app: Elysia, options: DashboardRouteOptions) {
   return app
-    .get('/dashboard/api/overview', async () =>
-      apiResponse(await getDashboardOverview(
-        quotaCache,
-        accountManager?.getAccountSnapshot(),
-      )))
-    .get('/dashboard/api/requests', () =>
-      apiResponse({ capacity: RECENT_REQUEST_LIMIT, ...getDashboardRequests() }))
+    .get('/dashboard/api/overview', ({ request }) =>
+      apiResponse(getDashboardOverview(options, request)))
+    .get('/dashboard/api/requests', () => apiResponse(getDashboardRequests()))
+    .get('/dashboard/api/metrics', ({ request }) => {
+      const window = parseDashboardWindow(request)
+      if (window === undefined)
+        return apiError('Unknown metric window.', 400)
+      const target = new URL(request.url).searchParams.get('target') ?? undefined
+      return apiResponse(runtimeStore.requests.queryMetrics(window, target))
+    })
 }
