@@ -1,0 +1,10 @@
+.target-values { display: flex; flex-wrap: wrap; gap: 1.25rem 2rem; margin: 0 0 1rem; }
+.target-values > div { min-width: 8rem; }
+.target-values dt { color: var(--ink-muted); font-size: 0.8rem; margin-bottom: 0.35rem; }
+.target-values dd { margin: 0; overflow-wrap: anywhere; }
+.target-table table { min-width: 56rem; }
+.target-client { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+.target-client summary { color: var(--completed); font-size: 0.875rem; font-weight: 600; cursor: pointer; }
+.target-client .grid-cards { margin: 1rem 0; }
+.target-client pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.device-user-code { display: inline-block; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 1.3rem; letter-spacing: 0.08em; }

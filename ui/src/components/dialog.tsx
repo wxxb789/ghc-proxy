@@ -60,6 +60,7 @@ export function ConfirmDialog({ open, targetName, pending = false, error, onCanc
     <NativeDialog open={open} title={`Remove ${targetName}?`} onClose={onCancel}>
       <p>
         Remove route target
+        {' '}
         <strong>{targetName}</strong>
         {' '}
         from this proxy? Clients using its hostname will no longer be able to route through it.

@@ -1,0 +1,9 @@
+.models-table { min-width: 76rem; }
+.models-table tr[tabindex] { cursor: pointer; }
+.models-table .model-selected { background: var(--surface-soft); }
+.models-table details { margin-top: 0.6rem; }
+.models-table summary { cursor: pointer; color: var(--completed); font-size: 0.8rem; }
+.model-lines { white-space: pre-line; font-variant-numeric: tabular-nums; }
+.model-details { display: grid; gap: 0.5rem; font-size: 0.8rem; }
+.model-details dt { color: var(--ink-muted); }
+.model-details dd { margin: 0.15rem 0 0; }

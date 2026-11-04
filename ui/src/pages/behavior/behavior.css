@@ -1,0 +1,5 @@
+.behavior-values { display: grid; gap: 1rem; margin: 0 0 1.5rem; }
+.behavior-values > div { display: grid; gap: 0.3rem; }
+.behavior-values dt { color: var(--ink-muted); font-size: 0.8rem; }
+.behavior-values dd { margin: 0; overflow-wrap: anywhere; font-size: 0.9rem; }
+.behavior-values + .table-scroll { margin-top: 1rem; }

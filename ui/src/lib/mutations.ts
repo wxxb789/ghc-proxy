@@ -19,7 +19,10 @@ export function useMetadataRefresh(): UseMutationResult<RefreshResult, Error, vo
     onSuccess: async (data) => {
       const active = client.getQueryCache().findAll({ type: 'active', predicate: query => Boolean(queryMeta(query)) && queryMeta(query)?.domain !== 'authentication' })
       await Promise.allSettled(active.map(query => query.fetch(undefined, { cancelRefetch: false })))
-      announce(data.status === 'ok' ? 'Metadata refreshed.' : 'Metadata refresh was partial. Check each region for its current status.')
+      const failures = data.accounts.flatMap(account => (['github', 'models', 'quota'] as const)
+        .filter(source => account[source].status === 'stale' || account[source].status === 'unavailable')
+        .map(source => `${account.name}: ${source} (${account[source].status})`))
+      announce(data.status === 'ok' ? 'Metadata refreshed.' : `Metadata refresh was ${data.status}.${failures.length ? ` ${failures.join('; ')}` : ''}`)
     },
     onError: (error) => { announce(error.message) },
   })

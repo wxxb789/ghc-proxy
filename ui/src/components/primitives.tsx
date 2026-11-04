@@ -124,6 +124,7 @@ export function ChartFrame<T>({ title, summary, children, collectionStartedAt, .
         {collectionStartedAt && (
           <p className="muted">
             Collection began
+            {' '}
             <time dateTime={collectionStartedAt}>{new Date(collectionStartedAt).toLocaleTimeString()}</time>
           </p>
         )}
