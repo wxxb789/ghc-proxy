@@ -262,21 +262,21 @@ async function getDashboardAccountHealth(
       : { status: 'unavailable' }
 
   return {
-    status: copilotHealthy ? 'ok' : 'degraded',
+    status: copilotHealthy ? 'ok' as const : 'degraded' as const,
     github: {
       status: isM365
-        ? 'not_applicable'
+        ? 'not_applicable' as const
         : githubConfigured
-          ? authStore.githubValidatedAt ? 'ok' : 'unknown'
-          : 'missing',
+          ? authStore.githubValidatedAt ? 'ok' as const : 'unknown' as const
+          : 'missing' as const,
       login: authStore.githubLogin,
       lastValidatedAt: toIso(authStore.githubValidatedAt),
       accountType: authStore.accountType,
     },
     copilot: {
       status: copilotConfigured
-        ? copilotHealthy ? 'ok' : 'degraded'
-        : 'missing',
+        ? copilotHealthy ? 'ok' as const : 'degraded' as const
+        : 'missing' as const,
       modelsLoaded,
       expiresAt: toIso(authStore.copilotTokenExpiresAt),
       lastRefreshAt: toIso(authStore.copilotTokenLastRefreshAt),

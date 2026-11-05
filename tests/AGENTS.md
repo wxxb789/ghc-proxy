@@ -10,7 +10,8 @@ For project-wide rules see the root `AGENTS.md`.
 ## Runner
 
 Bun's built-in test runner (`bun:test`). Place new tests in this directory
-as `*.test.ts` and use the `describe` / `test` / `expect` pattern.
+as `*.test.ts` and use the `describe` / `test` / `expect` pattern. Dashboard
+UI tests are the exception; see [Dashboard UI tests](#dashboard-ui-tests-ui).
 
 ```bash
 bun test                          # All tests
@@ -20,6 +21,33 @@ bun test tests/contract-smoke.test.ts # Publish gate for public schema compatibi
 
 `tests/contract-smoke.test.ts` is the **publish gate** for public schema
 compatibility — if it fails, the package must not ship.
+
+## Dashboard UI tests (`ui/`)
+
+Dashboard UI tests live beside their sources as `ui/src/**/*.test.ts` and run
+with Vitest + jsdom (`@testing-library/svelte`), not `bun:test`:
+
+```bash
+bun run test:ui                   # vitest run --root ui
+```
+
+`bunfig.toml` sets `[test] root = "tests"`, so `bun test` collects only this
+directory and never picks up the Vitest files. Server-side Dashboard behavior
+(route serving, CSP, the wire contract in
+`tests/dashboard-contract.test.ts`) stays here under `bun test`.
+
+UI helpers live in `ui/src/test/`:
+
+| File | Exports |
+|------|---------|
+| `setup.ts` | Vitest setup: `jest-dom` matchers plus jsdom shims for `Element.animate` and modal `<dialog>` |
+| `fake-fetch.ts` | `createFakeFetch(routes)` — injected `fetch` with a request log (`log`, `calls()`, `count()`, `clear()`), routes keyed `'METHOD /path'` or bare GET path, unrouted requests answer 404, and `hold(key)` defers a response until released; `jsonError(status, message)` |
+| `fixtures.ts` | Contract-typed payload factories (`overview()`, `accountsRouting()`, `accountsLegacy()`, `m365Ready()`, `m365Absent()`, `model()`, `models()`, `behavior()`, `request()`, `requests()`, `refreshResult()`, …) and `dashboardRoutes(overrides)`, a complete default route table |
+| `fixtures-accounts.ts` | Accounts view harness: `renderAccounts(routes)`, `resetAccountsState()`, `spyLocation(href)` (records whether Live and the auth timer stopped before `replace`), `routingSummary()`, `authSession()` |
+
+Fixtures type their payloads with `import type` from `@contract`
+(`src/routes/dashboard/contract.ts`), so a contract change fails the UI type
+check instead of drifting silently.
 
 ## Helper inventory (`tests/helpers.ts`)
 

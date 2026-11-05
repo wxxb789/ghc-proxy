@@ -14,7 +14,9 @@ ghc-proxy is an API translation proxy that converts GitHub Copilot's API into Op
 
 - **Runtime:** Bun >= 1.4 or Node.js >= 26; CI tracks the latest Node.js LTS and Current releases
 - **Language:** TypeScript (ESNext, strict mode)
-- **Framework:** Elysia (HTTP server), citty (CLI), Zod (validation)
+- **Framework:** Elysia (HTTP server), citty (CLI), Zod (validation); the
+  Dashboard UI in `ui/` is Svelte 5 (runes) + Vite, build-time only (embedded
+  into `dist/`, no frontend runtime dependency)
 - **Published as:** `ghc-proxy` npm package (`dist/main.mjs` entry plus generated
   `.mjs` dynamic chunks; `package.json#files` ships the complete import graph)
 
@@ -23,15 +25,19 @@ ghc-proxy is an API translation proxy that converts GitHub Copilot's API into Op
 ```bash
 bun install                          # Install dependencies (frozen lockfile in CI)
 bun run dev                          # Start with --watch (hot reload)
-bun run build                        # Build dist/main.mjs plus dynamic chunks
+bun run build                        # build:ui, then dist/main.mjs plus dynamic chunks, then build:msc-auth
+bun run build:ui                     # Build ui/ with Vite and embed it in src/routes/dashboard/embedded-ui.generated.ts
+                                     # (CSP scan + gzip budgets; without it /dashboard answers 503 in a source checkout)
+bun run dev:ui                       # Vite dev server for ui/; proxies /dashboard/api to 127.0.0.1:4141
 bun run build:msc-auth               # Windows-only: publish msc-auth into dist/msc-auth
                                      # (skipped elsewhere; MSC_AUTH_DIR copies a prebuilt one)
 bun run lint                         # ESLint with cache
 bun run lint:all                     # ESLint full scan (used in CI)
-bun run typecheck                    # tsc --noEmit
-bun test                             # Run all tests (Bun native test runner)
+bun run typecheck                    # tsc --noEmit, then svelte-check for ui/ (--fail-on-warnings)
+bun test                             # Run all tests under tests/ (Bun native test runner)
 bun test tests/validation.test.ts    # Run a single test file
 bun test tests/contract-smoke.test.ts # Publish gate for public schema compatibility
+bun run test:ui                      # Dashboard UI tests: Vitest + jsdom over ui/src/**/*.test.ts
 bun run start                        # Production server (NODE_ENV=production)
 bun run matrix:live                  # End-to-end Copilot upstream check (uses real quota — do not use as a sanity check)
 bun run smoke:packaged               # Smoke test the packaged CLI (selfcheck under bun + node)
@@ -40,11 +46,13 @@ bun run release:patch                # Bump patch, commit, tag, and push (bumpp 
 
 **CI topology:** `.github/workflows/ci.yml` runs `lint`, `typecheck`, `test`,
 `build`, Node Current compatibility, Windows/Bun-floor compatibility, and a
-Docker image smoke as independent jobs. The runtime jobs build and run
+Docker image smoke as independent jobs. The `test` job runs `bun test` and
+then the Dashboard UI tests (`bun run test:ui`); both release workflows run
+`test:ui` in their gates too. The runtime jobs build and run
 `smoke:packaged`; the Docker job builds the image and exercises its non-root CLI
 entrypoint. There is no cross-job execution order.
 
-**Local full gate:** `bun run lint:all && bun run typecheck && bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts && bun run build && bun run smoke:packaged`.
+**Local full gate:** `bun run lint:all && bun run typecheck && bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts && bun run test:ui && bun run build && bun run smoke:packaged`.
 The `/verify` skill carries the same command in a readable multi-line form.
 
 ## Compatibility Contract
@@ -153,7 +161,14 @@ See `tests/AGENTS.md` for the test-runner conventions, helper inventory, and fix
 ## Don't / Gotchas
 
 - **`dist/` is build output.** Never hand-edit; `bun run build` regenerates the
-  entry module, dynamic `.mjs` chunks, and source maps from `src/`.
+  entry module, dynamic `.mjs` chunks, and source maps from `src/`. The same
+  applies to `ui/dist/` and `src/routes/dashboard/embedded-ui.generated.ts`
+  (both gitignored), which `bun run build:ui` regenerates from `ui/`. Edit the
+  Svelte sources instead.
+- **Keep `bun.lock` registry-neutral.** Tarball URL fields in `bun.lock` are
+  `""`, so `grep -c https:// bun.lock` must print `0`. If your network
+  requires a mirror registry, rewrite any mirror tarball URLs that
+  `bun install` writes back to `""` before committing the lock.
 - **`msc-auth/` is a Windows-only .NET helper.** It ships as an optional binary
   in `dist/msc-auth` (Windows WAM credential source for the M365 provider).
   Never import or reference it from `src/` build inputs; `tsdown` cleans

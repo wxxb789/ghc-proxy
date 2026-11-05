@@ -1,4 +1,5 @@
 import type { Mock } from 'bun:test'
+import type { EmbeddedUi } from '~/routes/dashboard/embedded-ui'
 import type { DashboardMetadataRefreshService } from '~/routes/dashboard/metadata-refresh'
 
 import type { DashboardAccountManagement } from '~/routes/dashboard/route'
@@ -57,46 +58,66 @@ afterEach(() => {
   restoreStateSnapshot(snapshot)
 })
 
+const DASHBOARD_CSP = 'default-src \'none\'; script-src \'self\'; style-src \'self\'; connect-src \'self\'; img-src \'self\' data:; base-uri \'none\'; frame-ancestors \'none\'; form-action \'none\'; object-src \'none\''
+
+const FIXTURE_UI: EmbeddedUi = {
+  '/dashboard/index.html': {
+    content: '<!doctype html><html><head><script src="/dashboard/theme-init.js"></script><script type="module" crossorigin src="/dashboard/assets/app.js"></script><link rel="stylesheet" crossorigin href="/dashboard/assets/app.css"></head><body><div id="app"></div></body></html>',
+    contentType: 'text/html; charset=utf-8',
+  },
+  '/dashboard/assets/app.js': { content: 'console.log("app")', contentType: 'text/javascript; charset=utf-8' },
+  '/dashboard/assets/app.css': { content: ':root{}', contentType: 'text/css; charset=utf-8' },
+  '/dashboard/theme-init.js': { content: '(() => {})()', contentType: 'text/javascript; charset=utf-8' },
+}
+
 describe('dashboard static routes', () => {
-  test('serves a self-contained dashboard surface with strict security headers', async () => {
+  test('serves the embedded shell with a strict CSP and every referenced asset without one', async () => {
+    const app = createDashboardRoutes({ ui: FIXTURE_UI })
+    const shell = await app.handle(new Request('http://localhost/dashboard'))
+
+    expect(shell.status).toBe(200)
+    expect(shell.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    expect(shell.headers.get('cache-control')).toBe('no-store')
+    expect(shell.headers.get('content-security-policy')).toBe(DASHBOARD_CSP)
+
+    const references = Array.from((await shell.text()).matchAll(/\s(?:src|href)="(\/dashboard\/[^"]+)"/g), match => match[1]!)
+    expect(references.sort()).toEqual(['/dashboard/assets/app.css', '/dashboard/assets/app.js', '/dashboard/theme-init.js'])
+    for (const reference of references) {
+      const response = await app.handle(new Request(`http://localhost${reference}`))
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toBe(FIXTURE_UI[reference as keyof EmbeddedUi].contentType)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+      expect(response.headers.get('content-security-policy')).toBeNull()
+    }
+  })
+
+  test('reports an unbuilt UI with a script-free 503 shell and JSON asset errors', async () => {
+    const app = createDashboardRoutes({ ui: null })
+    const shell = await app.handle(new Request('http://localhost/dashboard'))
+    expect(shell.status).toBe(503)
+    expect(shell.headers.get('content-security-policy')).toBe(DASHBOARD_CSP)
+    const html = await shell.text()
+    expect(html).toContain('bun run build:ui')
+    expect(html).not.toContain('<script')
+
+    const asset = await app.handle(new Request('http://localhost/dashboard/assets/app.js'))
+    expect(asset.status).toBe(503)
+    expect(await asset.json()).toEqual({ error: { message: 'Dashboard UI is not built.', type: 'invalid_request_error' } })
+  })
+
+  test('keeps unknown Dashboard paths as 404s and applies the access guard to assets', async () => {
     const server = createServer()
-    const htmlResponse = await server.handle(new Request('http://localhost/dashboard'))
-    const cssResponse = await server.handle(new Request('http://localhost/dashboard/styles.css'))
-    const jsResponse = await server.handle(new Request('http://localhost/dashboard/app.js'))
+    const unknown = await server.handle(new Request('http://localhost/dashboard/assets/missing.js'))
+    expect(unknown.status).toBe(404)
 
-    expect(htmlResponse.status).toBe(200)
-    expect(htmlResponse.headers.get('content-type')).toContain('text/html')
-    expect(htmlResponse.headers.get('cache-control')).toBe('no-store')
-    expect(htmlResponse.headers.get('content-security-policy')).toContain('script-src \'self\'')
-    expect(htmlResponse.headers.get('content-security-policy')).not.toContain('unsafe-inline')
-    const html = await htmlResponse.text()
-    expect(html).toContain('/dashboard/styles.css')
-    expect(html).toContain('/dashboard/app.js')
-    expect(html).toContain('Overview')
-    expect(html).toContain('Accounts')
-    expect(html).toContain('Models')
-    expect(html).toContain('Behavior')
-    expect(html).toContain('Requests')
-    expect(html).toContain('id="theme-toggle"')
-    expect(html).toContain('role="switch"')
-    expect(html).toContain('id="model-group-vendor"')
-    expect(html).toContain('id="model-sort"')
-    expect(html).toContain('id="copy-models"')
-    expect(html).toContain('id="account-add-form"')
-
-    expect(cssResponse.headers.get('content-type')).toContain('text/css')
-    expect(jsResponse.headers.get('content-type')).toContain('text/javascript')
-    const js = await jsResponse.text()
-    expect(js).toContain('ghc-proxy-dashboard-theme')
-    expect(js).toContain('prefers-color-scheme: dark')
-    expect(js).toContain('window.location.origin + \'/v1\'')
-    expect(js).toContain('\'Model ID\', \'Model Name\', \'Vendor\', \'Version\'')
-    expect(js).toContain('[\'Endpoint: \' + localEndpoint, headers.join(\'\\t\')]')
-    expect(js).toContain('navigator.clipboard?.writeText')
-    expect(js).toContain('/dashboard/api/accounts/default')
-    expect(js).toContain('/dashboard/api/account-auth/')
-    expect(js).not.toContain('innerHTML')
-    expect(await cssResponse.text()).toContain('.account-auth[hidden] { display: none; }')
+    const app = createDashboardRoutes({ ui: FIXTURE_UI })
+    const crossOrigin = await app.handle(new Request('http://localhost/dashboard/assets/app.js', {
+      headers: { origin: 'https://attacker.example' },
+    }))
+    expect(crossOrigin.status).toBe(403)
+    const foreignHost = await app.handle(new Request('http://example.com/dashboard'))
+    expect(foreignHost.status).toBe(403)
   })
 
   test('does not record dashboard polling in the request ring', async () => {

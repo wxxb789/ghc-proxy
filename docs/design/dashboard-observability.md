@@ -7,30 +7,98 @@ history or analytics system.
 
 ## Scope
 
-The dashboard exposes five views under `/dashboard`:
+The dashboard is one page at `/dashboard` with five views in two groups.
 
-- Overview: process health, version, authentication state, quota, active
-  requests, and upstream queue activity. Authentication identifies the current
-  request account, the configured default account, and the count of active
-  routed accounts.
+Monitor:
+
+- Overview: a one-line health summary, the Issues list, process health,
+  version, authentication state, quota, active requests, and upstream queue
+  activity. Authentication identifies the current request account, the
+  configured default account, and the count of active routed accounts.
+- Requests: active requests plus the most recent 256 terminal requests, with
+  a state filter, a text filter, and a detail pane for the selected request.
+
+Configure:
+
 - Accounts: each routed account's stable hostname, upstream identity and tenant,
   authentication/Copilot state, quota, and default marker. GitHub device auth
   and M365 broker sign-in are separate actions. M365 shows its email and
   Microsoft tenant, with GitHub-only fields marked `not_applicable`. Broker
-  discovery runs once on the first Accounts visit or on an explicit probe,
-  never on every Live poll. Accounts can select the default and remove a
-  non-default target. The M365 projection reads committed routing and target
-  availability, independent of the hostname used to open the Dashboard.
+  discovery (`POST /dashboard/api/m365/probe`) runs automatically at most once
+  per page load, on the first Accounts visit, including a page opened directly
+  at `#/accounts`, and only when the M365 projection reports onboarding as
+  available. It also runs on an explicit probe, but never on a Live poll.
+  Accounts can select the default and remove a non-default target. The M365
+  projection reads committed routing and target availability, independent of
+  the hostname used to open the Dashboard.
 - Models: cached upstream model metadata plus ghc-proxy's effective routing
   and compatibility decisions.
 - Behavior: current configuration, strategy order, and process-local effect
   counters.
-- Requests: active requests plus the most recent 256 terminal requests.
+
+Views are addressed by the URL hash, `#/<view>?<params>` (for example
+`#/requests?state=failed` or `#/accounts?section=m365`). The hash never reaches
+the server, so every view is served by the single `/dashboard` route. An empty
+hash opens Overview, an unknown view is replaced with `#/overview`, and invalid
+or default parameter values are dropped. Switching views adds a browser history
+entry; filter, sort, selection, and section changes replace the current entry.
 
 It does not use a database, retain token statistics, rename accounts, or expose
 request/response content. Account management writes the existing credential
 and routing files through the transaction described below. Removal affects
 proxy configuration and credentials, not GitHub or Windows account registration.
+
+## Browser State
+
+The page loads every projection once (overview, accounts with M365, models,
+behavior, and requests). Live is on by default and kept in memory only. Each
+2-second tick fetches the overview plus the active view's projection for
+Requests, Behavior, or Accounts. A tick is dropped, not queued, while another
+load is running or the tab is hidden.
+
+Connection state is tracked separately from upstream health:
+
+- `connecting` before the first overview success
+- `connected` after a successful overview poll
+- `reconnecting` after one failed overview poll
+- `lost` after two consecutive failures or any network error
+- `blocked` when the overview answers `403` or `421`
+
+The rail shows `paused` while Live is off.
+
+Load failures are recorded per scope (overview, accounts, models, behavior,
+requests, metadata). A fault clears only when the same scope next succeeds,
+and the last-known data stays visible and is marked stale. M365 load and action
+errors stay in the M365 panel's own status lines.
+
+One pure `deriveIssues()` function turns faults, connection state, the latest
+overview, the sample buffer, and last-known account and M365 data into an
+ordered Issues list. Each issue has a `bad`, `warn`, or `info` tone, a
+plain-language title, and at most one next action. It exists only while its
+condition holds. The same list feeds the Issues button on every view, the
+Overview summary sentence, and the Overview Issues panel. `info` issues never
+tint the button.
+
+Client-side insights are ephemeral, in-browser derivations, not a history
+system. Overview keeps up to 180 overview samples (6 minutes at the Live
+interval) for sparklines, throughput, failure rate, and premium use, labelled
+`since page open`. Requests insights are computed from the rows currently
+shown, and Behavior's `Since open` column subtracts the counters seen at first
+load. Nothing is persisted or sent back to the server. A reload or proxy
+restart starts them over.
+
+The theme is a three-state `System | Light | Dark` choice. The external classic
+script `/dashboard/theme-init.js` runs in `<head>` before the stylesheet and
+resolves `data-theme` and `data-theme-pref` before first paint. Light and Dark
+store `light` or `dark` under `ghc-proxy-dashboard-theme`. System removes the
+key and follows `prefers-color-scheme`. Single-key keyboard shortcuts can be
+turned off from the Keyboard shortcuts dialog (stored as
+`ghc-proxy-dashboard-shortcuts` = `off`). No shortcut sends a mutation, probe,
+or metadata refresh.
+
+Remove and Remove M365 target ask for confirmation in a native modal
+`<dialog>`. Cancel has initial focus, Esc cancels, and cancelling sends no
+request.
 
 ## Request Lifecycle Storage
 
@@ -152,7 +220,12 @@ models and broker credentials without requesting GitHub identity or quota.
 retain prior safe values and expose `stale` or `unavailable`; the UI identifies
 the affected account and metadata source without raw upstream error bodies.
 An authorization-denied M365 catalog remains unavailable until access recovers.
-Initial GET projections and Live polls do not force this metadata POST.
+Only the explicit **Refresh metadata** action sends this POST. The initial load,
+view changes, Live polls, tab visibility changes, and keyboard shortcuts never
+force it. The one POST the Dashboard sends without a click is the
+once-per-page M365 broker probe described under Scope. The refresh action is
+shown as unavailable, with a visible reason, once accounts are known to be in
+legacy mode or unavailable.
 
 The explicit M365 sign-in action opens WAM and returns only account identity.
 It does not select or register the target automatically, and it never returns
@@ -188,8 +261,13 @@ Removal uses the same journal boundary for credential and hostname changes.
 The current default and the sole remaining target are protected; the operator
 must choose another default first. Refresh cleanup runs only after a committed
 removal, and in-flight requests keep their captured runtime. Deleting the
-account that owns the current Dashboard hostname redirects the browser to the
-surviving base hostname with the same listener port.
+account that owns the current Dashboard hostname redirects the browser to
+`/dashboard#/accounts` on the surviving base hostname, keeping the protocol and
+listener port. A successful legacy bootstrap redirects the same way. The page
+stops Live polling and any device-auth poll before leaving. It redirects only
+to `localhost`, a `*.localhost` name, a `127.x.x.x` address, or `::1`. Any
+other base hostname leaves the page in place with an Accounts fault asking the
+operator to open that hostname manually.
 
 Legacy startup atomically migrates to a one-account routing table only when the
 credential store contains exactly one account. A credential created from the
@@ -205,9 +283,38 @@ the same journal before installing routing.
 
 ## Serving and Security
 
-HTML, CSS, and browser JavaScript are TypeScript string constants bundled into
-the existing `dist/main.mjs` graph. The package performs no runtime asset file
-reads and adds no frontend dependency or build step.
+The browser UI is a Svelte 5 (runes) single-page app in `ui/`, built with Vite
+at package build time. `bun run build:ui` (`scripts/build-ui.ts`, the first
+step of `bun run build`) builds it into `ui/dist/` and embeds the four outputs
+as string constants in the generated module
+`src/routes/dashboard/embedded-ui.generated.ts`:
+
+- the `index.html` shell, served at `/dashboard`
+- `/dashboard/assets/app.js`
+- `/dashboard/assets/app.css`
+- `/dashboard/theme-init.js`
+
+`embedded-ui.ts` imports that module lazily on the first Dashboard page or
+asset request, so tsdown emits it as its own `dist/` chunk and the proxy start
+path never parses it. The package still performs no runtime asset file reads.
+Svelte, Vite, and the UI test tooling are build-only devDependencies; the
+published package has no frontend runtime dependency. The UI imports the API
+response types from `src/routes/dashboard/contract.ts` with `import type`
+only, and `tests/dashboard-contract.test.ts` checks those types against the
+server's own types.
+
+In a source checkout where the UI has not been built, the generated module is
+missing. `GET /dashboard` then returns a `503` "Dashboard not built" page that
+names `bun run build:ui`, and the asset routes return a `503` JSON error. Any
+other load failure is a real error. The `/dashboard/api/` routes do not depend
+on the bundle.
+
+`scripts/build-ui.ts` fails the build rather than emit output the CSP would
+block. It rejects inline scripts, `<style>` elements, and inline style
+attributes in the HTML shell. In the compiled JavaScript it rejects `eval`,
+`new Function`, template style attributes, and runtime `<style>` elements. It
+also enforces gzip size budgets for JavaScript and CSS: exceeding a hard budget
+fails the build, and exceeding a soft budget prints a warning.
 
 Dashboard responses use `Cache-Control: no-store`, a strict self-only Content
 Security Policy, `nosniff`, `no-referrer`, same-origin resource policy, and
@@ -216,8 +323,16 @@ address to be loopback. The URL hostname must be `localhost`, any
 `*.localhost` name, `0.0.0.0`, or an explicit loopback IPv4/IPv6 address;
 browser requests with a cross-origin `Origin` header receive 403. The peer
 check means a remote client cannot cross the boundary by claiming one of those
-Host values. Runtime values are inserted with DOM `textContent`, not HTML
-parsing.
+Host values.
+
+The CSP is the same strict policy with no `unsafe-inline`, which is why the
+theme bootstrap is the external `theme-init.js` script. The UI inserts runtime
+values only through Svelte text and attribute interpolation, which never parses
+HTML. ESLint enforces this: `svelte/no-at-html-tags` bans `{@html}`,
+`svelte/no-inline-styles` bans `style` attributes and `style:` directives, and
+`no-restricted-imports` bans `svelte/transition`, `svelte/animate`, and
+`svelte/motion` under `ui/`. Meters and sparklines draw their dynamic geometry
+as SVG attributes.
 
 The same guard covers all account-management methods. Ordinary legacy startup
 completes its one-account routing migration before the Dashboard is available.
@@ -235,5 +350,6 @@ that request. It does not clone or serialize request bodies for observability.
 
 Dashboard snapshots sort the active set in O(a log a), where `a` is the number
 of active observed requests, and copy at most 256 terminal entries. Model
-projection, quota fetches, snapshot sorting, and DOM rendering occur only on
-dashboard requests.
+projection, quota fetches, and snapshot sorting occur only on dashboard
+requests. Rendering and insight derivation run in the browser, only while a
+Dashboard page is open.

@@ -151,7 +151,10 @@ planned for minting gateway tokens for an MSA.
   an ambiguous selector requires a home account ID.
 - The Dashboard displays the selected email and Microsoft tenant ID instead of
   a GitHub tenant. It discovers broker accounts on the first Accounts visit and
-  on explicit probes, not on every Live poll. Empty broker usernames retain
+  on explicit probes, not on every Live poll. The first visit includes a page
+  opened directly at `/dashboard#/accounts`: the initial load's M365 projection
+  starts the probe when onboarding is available, at most once per page load.
+  Other views never start it. Empty broker usernames retain
   their stable IDs and display as unavailable rather than shifting TSV columns.
 - `GET /dashboard/api/m365` reads the committed routing table, availability,
   and selected/available gateway endpoints. `/register`, `/remove`, `/account`,

@@ -5,8 +5,9 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
 COPY tsconfig.json tsdown.config.ts ./
-COPY scripts/build-msc-auth.mjs ./scripts/build-msc-auth.mjs
+COPY scripts/build-msc-auth.mjs scripts/build-ui.ts ./scripts/
 COPY src ./src
+COPY ui ./ui
 RUN bun run build
 
 FROM oven/bun:1.4.0-alpine@sha256:07235578f79ef8c6f97d94aee7938e76f5cdba5f21ae5dbfdd3d3d38058437eb AS runner
