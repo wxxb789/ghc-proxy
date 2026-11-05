@@ -17,6 +17,7 @@ import process from 'node:process'
 import { listMscAccounts, resolveMscAuthExe } from '~/clients/msc-auth'
 import { M365_DEFAULT_HOSTNAME, RESERVED_M365_TARGET } from '~/lib/account-routing'
 import { getCachedConfig } from '~/lib/config'
+import { M365_BUILTIN_ENDPOINTS, M365_DEFAULT_ENDPOINT } from '~/lib/m365-endpoints'
 import { getRoutingTargets, getTargetAvailability } from '~/state/account-runtime'
 
 export interface M365Readiness {
@@ -37,6 +38,8 @@ export interface M365RoutingRow {
 
 export interface M365DashboardState {
   registered: boolean
+  endpoint: string
+  endpoints: string[]
   hostname?: string
   account?: string
   username?: string
@@ -72,6 +75,17 @@ function baseUrlFor(hostname: string, port: number | undefined): string {
   return port === undefined ? `http://${hostname}` : `http://${hostname}:${port}`
 }
 
+function endpointSettings(endpoint = getCachedConfig().m365?.endpoint ?? M365_DEFAULT_ENDPOINT) {
+  return {
+    endpoint,
+    endpoints: [...new Set([
+      ...M365_BUILTIN_ENDPOINTS,
+      ...getCachedConfig().m365?.endpoints ?? [],
+      endpoint,
+    ])],
+  }
+}
+
 export function getM365DashboardState(
   options: M365DashboardOptions = {},
 ): M365DashboardState {
@@ -95,6 +109,7 @@ export function getM365DashboardState(
     if (!running) {
       return {
         registered: false,
+        ...endpointSettings(),
         modelCount: 0,
         models: [],
         routing: rows,
@@ -104,6 +119,7 @@ export function getM365DashboardState(
     const modelIds = running.runtime.models.getModelIds()
     return {
       registered: true,
+      ...endpointSettings(running.runtime.auth.m365Endpoint),
       hostname: running.hostname,
       account: running.runtime.auth.mscAuthAccount ?? getCachedConfig().m365?.account,
       username: running.runtime.auth.mscAuthUsername ?? running.runtime.auth.mscAuthUpn,
@@ -132,6 +148,7 @@ export function getM365DashboardState(
   if (!target) {
     return {
       registered: false,
+      ...endpointSettings(),
       modelCount: 0,
       models: [],
       availability,
@@ -142,6 +159,7 @@ export function getM365DashboardState(
 
   return {
     registered: true,
+    ...endpointSettings(target.runtime.auth.m365Endpoint),
     hostname: target.hostname,
     account: target.runtime.auth.mscAuthAccount ?? getCachedConfig().m365?.account,
     username: target.runtime.auth.mscAuthUsername ?? target.runtime.auth.mscAuthUpn,

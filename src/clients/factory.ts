@@ -45,6 +45,7 @@ export function getClientConfig(): ClientConfig {
   return {
     accountType: runtime.auth.accountType,
     upstream: runtime.auth.upstream,
+    m365Endpoint: runtime.auth.m365Endpoint,
     mscAuthExe: runtime.auth.mscAuthExe,
     mscAuthAccount: runtime.auth.mscAuthAccount,
     mscAuthUpn: runtime.auth.mscAuthUpn,

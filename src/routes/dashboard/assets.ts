@@ -71,6 +71,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <section id="m365-panel" class="panel full-width account-add-panel" hidden>
         <div class="section-heading"><h2>M365 Copilot target</h2><span id="m365-status" class="muted" role="status" aria-live="polite"></span></div>
         <div id="m365-readiness" class="muted account-help" role="status" aria-live="polite"></div>
+        <form id="m365-endpoint-form" class="account-form bootstrap-form m365-endpoint-form">
+          <label><span>Upstream endpoint</span><select id="m365-endpoint" required disabled aria-describedby="m365-endpoint-warning"></select></label>
+          <button id="m365-endpoint-save" type="submit" class="command" disabled>Use endpoint</button>
+        </form>
+        <div id="m365-endpoint-warning" class="muted account-help">Your Microsoft access token is sent to the selected upstream endpoint. Only use endpoints you trust. This is separate from the target Hostname and Client base URL.</div>
+        <form id="m365-custom-endpoint-form" class="account-form bootstrap-form m365-endpoint-form">
+          <label><span>Custom HTTPS endpoint</span><input id="m365-custom-endpoint" type="url" required autocomplete="off" placeholder="https://your-endpoint.example/api/v1/llmapi" disabled aria-describedby="m365-endpoint-warning"></label>
+          <button id="m365-custom-endpoint-save" type="submit" class="command" disabled>Add and use endpoint</button>
+        </form>
+        <div id="m365-endpoint-status" class="muted account-help mono" role="status" aria-live="polite"></div>
         <form id="m365-sign-in-form" class="account-form">
           <label><span>Account email (optional)</span><input id="m365-sign-in-upn" type="email" autocomplete="username" placeholder="you@company.com"></label>
           <button id="m365-sign-in" type="submit" class="command">Sign in another M365 account</button>
@@ -99,7 +109,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           </form>
           <div class="account-help"><span class="muted">Routing</span><div id="m365-routing" class="muted"></div></div>
           <div class="account-form"><button id="m365-probe-active" type="button" class="command">Refresh broker accounts</button></div>
-          <div class="account-help"><span class="muted">Client</span><pre id="m365-client" class="mono"></pre></div>
+          <div class="account-help"><span class="muted">Client base URL</span><pre id="m365-client" class="mono"></pre></div>
           <div class="account-form"><button id="m365-remove" type="button" class="command">Remove M365 target</button></div>
         </div>
       </section>
@@ -365,6 +375,7 @@ tbody tr:hover td { background: var(--surface-hover); }
 .account-form label { min-width: 0; display: grid; gap: 5px; color: var(--text-secondary); font-size: 12px; }
 .account-form input { width: 100%; height: 36px; min-width: 0; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: var(--text); }
 .account-form input:focus { outline: 2px solid var(--focus-ring); border-color: var(--accent); }
+.m365-endpoint-form select { width: 100%; min-width: 0; height: 36px; }
 .account-help { margin-top: 9px; }
 .account-auth { display: grid; grid-template-columns: auto minmax(100px, auto) auto minmax(0, 1fr); align-items: center; gap: 10px 14px; margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border); background: var(--surface-subtle); }
 .account-auth[hidden] { display: none; }
@@ -724,6 +735,19 @@ let m365Snapshot;
 let m365ProbeAccounts;
 let m365ProbeStarted = false;
 let m365HostnameDirty = false;
+let m365EndpointDirty = false;
+let m365EndpointSaving = false;
+let m365TargetRegistering = false;
+let m365OnboardingAvailable = false;
+let m365Endpoints = [];
+
+function updateM365EndpointControls() {
+  const disabled = !m365OnboardingAvailable || m365EndpointSaving || m365TargetRegistering;
+  for (const id of ['m365-endpoint', 'm365-endpoint-save', 'm365-custom-endpoint', 'm365-custom-endpoint-save']) {
+    byId(id).disabled = disabled;
+  }
+  byId('m365-register').disabled = disabled;
+}
 
 function fillM365Accounts(select, accounts) {
   const current = select.value;
@@ -743,6 +767,22 @@ function renderM365(state) {
   const panel = byId('m365-panel');
   panel.hidden = false;
   byId('m365-sign-in-form').hidden = onboarding.status !== 'available';
+  m365OnboardingAvailable = onboarding.status === 'available';
+  updateM365EndpointControls();
+  const endpointSelect = byId('m365-endpoint');
+  const pendingEndpoint = m365EndpointDirty ? endpointSelect.value : '';
+  m365Endpoints = [...new Set([...(state.endpoints || []), state.endpoint].filter(Boolean))];
+  const displayedEndpoints = [...new Set([...m365Endpoints, pendingEndpoint].filter(Boolean))];
+  clearNode(endpointSelect);
+  for (const endpoint of displayedEndpoints) {
+    const option = document.createElement('option');
+    option.value = endpoint;
+    option.textContent = endpoint;
+    option.title = endpoint;
+    endpointSelect.append(option);
+  }
+  endpointSelect.value = pendingEndpoint || state.endpoint || '';
+  endpointSelect.title = endpointSelect.value;
   const absent = byId('m365-absent');
   const active = byId('m365-active');
   absent.hidden = state.registered;
@@ -809,6 +849,8 @@ async function loadM365() {
     const snapshot = JSON.stringify([
       state.registered,
       state.hostname,
+      state.endpoint,
+      state.endpoints,
       state.account,
       state.username,
       state.tenant,
@@ -890,14 +932,16 @@ async function signInM365(event) {
   }
 }
 
-async function postM365(path, body) {
+async function postM365(path, body, onSaved) {
   byId('m365-status').textContent = 'Working\u2026';
+  let state;
   try {
-    const state = await fetchJson(path, {
+    state = await fetchJson(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body || {}),
     });
+    if (onSaved) onSaved(state);
     m365Snapshot = undefined;
     renderM365(state);
     await loadAccounts();
@@ -907,19 +951,51 @@ async function postM365(path, body) {
   } catch (error) {
     byId('m365-status').textContent = error.message;
   }
+  return state;
+}
+
+async function saveM365Endpoint(event) {
+  event.preventDefault();
+  if (!m365OnboardingAvailable || m365EndpointSaving || m365TargetRegistering) return;
+  const addingCustom = event.currentTarget.id === 'm365-custom-endpoint-form';
+  const endpoint = addingCustom
+    ? byId('m365-custom-endpoint').value.trim()
+    : byId('m365-endpoint').value;
+  const body = { endpoint };
+  if (addingCustom) {
+    body.endpoints = [...new Set([...m365Endpoints, ...Array.from(byId('m365-endpoint').options, option => option.value), endpoint])];
+  }
+  m365EndpointSaving = true;
+  updateM365EndpointControls();
+  byId('m365-endpoint-status').textContent = 'Saving upstream endpoint\u2026';
+  try {
+    const state = await postM365('/dashboard/api/m365/endpoint', body, function () {
+      m365EndpointDirty = false;
+      if (addingCustom) byId('m365-custom-endpoint').value = '';
+    });
+    byId('m365-endpoint-status').textContent = state
+      ? 'Saved upstream endpoint: ' + state.endpoint
+      : byId('m365-status').textContent;
+  } finally {
+    m365EndpointSaving = false;
+    updateM365EndpointControls();
+  }
 }
 
 async function registerM365(event) {
   event.preventDefault();
-  const button = byId('m365-register');
-  button.disabled = true;
+  if (!m365OnboardingAvailable || m365EndpointSaving || m365TargetRegistering) return;
+  m365TargetRegistering = true;
+  updateM365EndpointControls();
   try {
     await postM365('/dashboard/api/m365/register', {
       account: byId('m365-register-account').value || null,
       hostname: byId('m365-register-hostname').value || 'm365.localhost',
-    });
+      endpoint: byId('m365-endpoint').value,
+    }, function () { m365EndpointDirty = false; });
   } finally {
-    button.disabled = false;
+    m365TargetRegistering = false;
+    updateM365EndpointControls();
   }
 }
 
@@ -1497,6 +1573,9 @@ byId('m365-sign-in-form').addEventListener('submit', signInM365);
 byId('m365-probe').addEventListener('click', probeM365);
 byId('m365-probe-active').addEventListener('click', probeM365);
 byId('m365-hostname').addEventListener('input', function () { m365HostnameDirty = true; });
+byId('m365-endpoint').addEventListener('change', function () { m365EndpointDirty = true; });
+byId('m365-endpoint-form').addEventListener('submit', saveM365Endpoint);
+byId('m365-custom-endpoint-form').addEventListener('submit', saveM365Endpoint);
 byId('m365-register-form').addEventListener('submit', registerM365);
 byId('m365-hostname-form').addEventListener('submit', saveM365Hostname);
 byId('m365-remove').addEventListener('click', removeM365);

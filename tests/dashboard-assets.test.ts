@@ -17,6 +17,8 @@ class FakeElement {
   type = ''
   value = ''
 
+  get options() { return this.children }
+
   addEventListener() {}
 
   append(...children: FakeElement[]) {
@@ -47,6 +49,9 @@ interface DashboardRuntime {
   settleLoads: (loads: Array<{ scope: string, load: () => Promise<void> }>) => Promise<void>
   startAccountBootstrap: (event: { preventDefault: () => void }) => Promise<void>
   removeAccount: (accountName: string, button: FakeElement) => Promise<void>
+  renderM365: (state: unknown) => void
+  saveM365Endpoint: (event: { preventDefault: () => void, currentTarget: { id: string } }) => Promise<void>
+  registerM365: (event: { preventDefault: () => void }) => Promise<void>
 }
 
 interface RequestFixture {
@@ -95,7 +100,7 @@ function createRuntime(options: {
     },
   })
 
-  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, loadAllViews, refreshDashboardMetadata, refreshLiveViews, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads, startAccountBootstrap, removeAccount };`).runInContext(context)
+  new Script(`${script}\n;globalThis.dashboardRuntime = { dashboardState, loadAllViews, refreshDashboardMetadata, refreshLiveViews, renderAccountAuthentication, renderAccounts, renderOverview, renderRequests, settleLoads, startAccountBootstrap, removeAccount, renderM365, saveM365Endpoint, registerM365 };`).runInContext(context)
 
   return {
     elements,
@@ -489,5 +494,43 @@ describe('dashboard embedded state', () => {
     expect(elements.get('m365-client')?.textContent).toContain('http://m365.localhost:4141')
     expect(elements.get('m365-client')?.textContent).toContain('claude-opus-5.5')
     expect(elements.get('m365-routing')?.textContent).toContain('m365 \u2192 m365.localhost')
+  })
+
+  test.each(['endpoint', 'register'] as const)('prevents competing M365 mutations while %s is pending', async (first) => {
+    const initialEndpoint = 'https://df.loki.delve.office.com/api/v1/llmapi'
+    const customEndpoint = 'https://custom.example.test/api'
+    const state = { registered: false, endpoint: initialEndpoint, endpoints: [initialEndpoint], models: [], modelCount: 0, routing: [], onboarding: { status: 'available' } }
+    const { promise, resolve } = Promise.withResolvers<Response>()
+    const posts: string[] = []
+    const { elements, runtime } = createRuntime({
+      fetch: async (input, init) => {
+        const pathname = String(input)
+        if (init?.method === 'POST') {
+          posts.push(pathname)
+          if (posts.length === 1)
+            return promise
+          return Response.json(state)
+        }
+        if (pathname === '/dashboard/api/accounts')
+          return Response.json({ baseHostname: 'localhost', defaultAccount: 'default', routingEnabled: true, accounts: [] })
+        return Response.json(state)
+      },
+    })
+    runtime.renderM365(state)
+    elements.get('m365-endpoint')!.value = initialEndpoint
+    elements.get('m365-custom-endpoint')!.value = customEndpoint
+    const endpointEvent = { preventDefault: () => {}, currentTarget: { id: 'm365-custom-endpoint-form' } }
+    const registerEvent = { preventDefault: () => {} }
+    const pending = first === 'endpoint' ? runtime.saveM365Endpoint(endpointEvent) : runtime.registerM365(registerEvent)
+    const competing = first === 'endpoint' ? runtime.registerM365(registerEvent) : runtime.saveM365Endpoint(endpointEvent)
+    const blockedPosts = [...posts]
+    const registerDisabled = elements.get('m365-register')?.disabled
+    const endpointDisabled = elements.get('m365-endpoint')?.disabled
+    resolve(Response.json({ ...state, endpoint: first === 'endpoint' ? customEndpoint : initialEndpoint }))
+    await Promise.all([pending, competing])
+    expect(blockedPosts).toEqual([`/dashboard/api/m365/${first}`])
+    expect(registerDisabled).toBe(true)
+    expect(endpointDisabled).toBe(true)
+    expect(elements.get('m365-endpoint')?.disabled).toBe(false)
   })
 })

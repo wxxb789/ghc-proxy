@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 
-import { copilotBaseUrl, copilotHeaders } from '~/clients/api-config'
+import { copilotHeaders } from '~/clients/api-config'
 import { fetchM365Models, M365_FALLBACKS, M365_MODELS, m365FallbackFor, m365Headers } from '~/clients/m365-upstream'
 import { modelCache } from '~/state'
 
@@ -9,15 +9,6 @@ afterEach(() => {
 })
 
 describe('m365 upstream transport', () => {
-  test('routes the base URL to the gateway only for the m365 upstream', () => {
-    expect(copilotBaseUrl({ accountType: 'individual', upstream: 'm365' }))
-      .toBe('https://msit.loki.delve.office.com/api/v1/llmapi')
-    expect(copilotBaseUrl({ accountType: 'individual' })).toBe('https://api.githubcopilot.com')
-    expect(
-      copilotBaseUrl({ accountType: 'business', copilotApiBase: 'https://example.test/' }),
-    ).toBe('https://example.test')
-  })
-
   test('sends the gateway header contract instead of the GitHub one', () => {
     const headers = copilotHeaders(
       { copilotToken: 'token-value' },
@@ -124,7 +115,13 @@ describe('m365 model catalog', () => {
         { id: 'gpt-6-sol', supported_endpoints: ['/responses'] },
       ],
     }
-    const models = await fetchM365Models('token', async () => Response.json(gateway))
+    let catalogUrl = ''
+    const models = await fetchM365Models('token', 'https://catalog.example.test/api', async (input) => {
+      catalogUrl = input
+      return Response.json(gateway)
+    })
+
+    expect(catalogUrl).toBe('https://catalog.example.test/api/models')
 
     expect(models.data.map(model => model.id)).toEqual(['claude-opus-5.5'])
     const [model] = models.data
@@ -135,7 +132,7 @@ describe('m365 model catalog', () => {
 
   test('rejects a catalog without usable models', async () => {
     await expect(
-      fetchM365Models('token', async () => Response.json({ data: [{ id: 'gpt-6-sol', supported_endpoints: ['/responses'] }] })),
+      fetchM365Models('token', undefined, async () => Response.json({ data: [{ id: 'gpt-6-sol', supported_endpoints: ['/responses'] }] })),
     ).rejects.toThrow('no /v1/messages models')
   })
 })

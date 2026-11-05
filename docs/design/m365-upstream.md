@@ -1,15 +1,59 @@
 # M365 Upstream
 
-Second upstream provider: the Microsoft 365 Copilot coding-agent gateway at
-`https://msit.loki.delve.office.com/api/v1/llmapi`. It speaks the Anthropic
-Messages protocol directly, so the request path reuses `native-messages` without
-translation.
+Second upstream provider: the Microsoft 365 Copilot coding-agent gateway. The
+default endpoint is `https://df.loki.delve.office.com/api/v1/llmapi`;
+`https://msit.loki.delve.office.com/api/v1/llmapi` remains a built-in option.
+It speaks the Anthropic Messages protocol directly, so the request path reuses
+`native-messages` without translation.
+
+The dated live catalog, model, and limit observations below were measured on
+`msit.loki`; they do not establish connectivity or access on `df.loki` or a
+custom gateway.
 
 M365 is a **route target** beside the GitHub accounts, not a process-wide mode.
 A hostname mapping registers it (`accountRouting.hostnames`), a request's
 hostname selects it, and one process can serve both upstreams on one listener.
 `--upstream m365` remains as a shorthand for a routing table that holds only
 this target; in that mode the listener still binds `127.0.0.1`.
+
+## Gateway endpoint selection
+
+In Dashboard **Accounts → M365 Copilot target**, select an **Upstream endpoint**
+and click **Use endpoint**, or enter a **Custom HTTPS endpoint** and click
+**Add and use endpoint**. Endpoint settings can be saved before adding the
+M365 target. They are distinct from the local routing hostname and client base
+URL.
+
+`config.json#m365.endpoint` stores the selected gateway;
+`config.json#m365.endpoints` stores additional saved choices. Omission of
+`endpoint` selects `df.loki`, including for existing configurations that only
+select a broker account. Example:
+
+```json
+{
+  "m365": {
+    "account": "uid.utid",
+    "endpoint": "https://gateway.example.com/api/v1/llmapi",
+    "endpoints": ["https://gateway.example.com/api/v1/llmapi"]
+  }
+}
+```
+
+Endpoints must be HTTPS base URLs without embedded credentials, query strings,
+or fragments. Whitespace and trailing slashes are normalized; saved choices
+are deduplicated. Invalid saved M365 settings fail startup rather than silently
+selecting another gateway. Only select trusted endpoints: the Microsoft access
+token is sent to the selected address.
+
+Startup catalog discovery, Dashboard model refresh, and Messages requests use
+the same target endpoint. Changing it persists settings, replaces the target
+runtime, and loads its catalog; in-flight requests retain their previous
+runtime. Endpoint choices survive broker-account/hostname changes and removal
+of the proxy target. There is no automatic endpoint failover.
+
+Dashboard endpoint saves and target registration are mutually exclusive.
+Journal rollback restores the previously committed in-memory configuration as
+well as the disk state; a failed update does not discard saved choices.
 
 ## Credential path
 
@@ -108,12 +152,16 @@ planned for minting gateway tokens for an MSA.
   a GitHub tenant. It discovers broker accounts on the first Accounts visit and
   on explicit probes, not on every Live poll. Empty broker usernames retain
   their stable IDs and display as unavailable rather than shifting TSV columns.
-- `GET /dashboard/api/m365` reads the committed routing table and availability.
-  `/register`, `/remove`, `/account`, and `/hostname` mutations use the account
-  manager. `POST /dashboard/api/m365/sign-in` opens WAM only on an explicit user
-  action, returns identity fields without tokens, and leaves target selection
-  unchanged until applied. Copilot app profiles absent from WAM need this
-  sign-in; listing accounts is not proof of subscription access.
+- `GET /dashboard/api/m365` reads the committed routing table, availability,
+  and selected/available gateway endpoints. `/register`, `/remove`, `/account`,
+  `/hostname`, and `/endpoint` mutations use the account manager.
+  `POST /dashboard/api/m365/endpoint` accepts `{ "endpoint": "https://…",
+  "endpoints": ["https://…"] }`; `endpoints` is optional. Endpoint settings
+  are persisted through the account-management journal, preserving omitted
+  broker settings. `POST /dashboard/api/m365/sign-in` opens WAM only on an
+  explicit user action, returns identity fields without tokens, and leaves
+  target selection unchanged until applied. Copilot app profiles absent from
+  WAM need this sign-in; listing accounts is not proof of subscription access.
 - `DELETE /dashboard/api/accounts/:accountName` removes a non-default proxy
   account or target; the sole remaining target cannot be removed. Removing M365
   does not remove a Windows/WAM account.
