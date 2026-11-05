@@ -1,4 +1,5 @@
 import type { ProxyEffectId } from './effects'
+import type { WindowEffectsSnapshot } from './windowed-metrics'
 import type { ModelMappingInfo, ModelTransformStep } from '~/lib/request-logger'
 import type { DashboardMetrics, DashboardWindowId } from '~/types/dashboard'
 
@@ -367,6 +368,10 @@ export class RequestActivityStore {
 
   queryMetrics(windowId: DashboardWindowId, target?: string): DashboardMetrics {
     return this.metrics.query(windowId, target)
+  }
+
+  queryWindowEffects(windowId: DashboardWindowId): WindowEffectsSnapshot {
+    return this.metrics.queryEffects(windowId)
   }
 
   snapshot(): RequestActivitySnapshot {

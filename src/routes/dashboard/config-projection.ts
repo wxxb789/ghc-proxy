@@ -18,7 +18,7 @@ export function getDashboardModels(): DashboardModel[] {
 
 export function getDashboardBehavior(window: DashboardWindowId = '1h'): DashboardBehavior {
   const requestSummary = runtimeStore.requests.summary()
-  const metrics = runtimeStore.requests.queryMetrics(window)
+  const windowEffects = runtimeStore.requests.queryWindowEffects(window)
   const rewrites = configStore.getModelRewrites().map(rule => ({ ...rule }))
   const cachedModels = modelCache.getModels()
   const knownModelIds = cachedModels
@@ -28,13 +28,13 @@ export function getDashboardBehavior(window: DashboardWindowId = '1h'): Dashboar
     id,
     ...definition,
     count: requestSummary.effectCounts[id as keyof typeof requestSummary.effectCounts] ?? 0,
-    windowCount: metrics.effects[id] ?? 0,
+    windowCount: windowEffects.effects[id] ?? 0,
   }))
 
   return {
     hostTarget: getCurrentAccountName(),
     window,
-    collectionStartedAt: metrics.collectionStartedAt,
+    collectionStartedAt: windowEffects.collectionStartedAt,
     modelRouting: {
       rewrites,
       autoCorrect: { enabled: modelCache.getModelIds().length > 0 },

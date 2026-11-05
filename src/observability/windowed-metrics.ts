@@ -1,3 +1,4 @@
+import type { ProxyEffectId } from './effects'
 import type {
   DashboardBreakdown,
   DashboardLatencySummary,
@@ -26,6 +27,11 @@ interface TerminalRequest {
   durationMs: number
 }
 
+export interface WindowEffectsSnapshot {
+  collectionStartedAt: string
+  effects: Record<string, number>
+}
+
 interface BreakdownCounts {
   requests: number
   failures: number
@@ -44,7 +50,7 @@ interface MetricCell {
   latencySumMs: number
   models: DimensionCounts
   endpoints: DimensionCounts
-  effects: Map<string, number>
+  effects: Map<ProxyEffectId, number>
 }
 
 interface MetricSlot {
@@ -146,7 +152,7 @@ export class WindowedMetrics {
     }
   }
 
-  recordEffect(accountName: string | undefined, endpoint: string, effectId: string, count: number): void {
+  recordEffect(accountName: string | undefined, endpoint: string, effectId: ProxyEffectId, count: number): void {
     if (isExcludedEndpoint(endpoint) || count <= 0)
       return
 
@@ -172,7 +178,7 @@ export class WindowedMetrics {
     const models = emptyDimensionCounts()
     const targets = emptyDimensionCounts()
     const endpoints = emptyDimensionCounts()
-    const effects = new Map<string, number>()
+    const effects = new Map<ProxyEffectId, number>()
     const series: DashboardMetricBucket[] = []
     let latencyCount = 0
     let latencySumMs = 0
@@ -183,7 +189,7 @@ export class WindowedMetrics {
       accountName: string,
       cell: MetricCell,
       bucketCounts: DashboardStateCounts,
-      bucketEffects: Map<string, number>,
+      bucketEffects: Map<ProxyEffectId, number>,
     ): void {
       mergeStateCounts(bucketCounts, cell.counts)
       bucketLatencyCount += cell.latencyCount
@@ -212,7 +218,7 @@ export class WindowedMetrics {
         ? 'not-collected'
         : bucketCoverage(startMs, endMs, collectionStartedAtMs, bucketId === currentBucketId)
       const bucketCounts = emptyStateCounts()
-      const bucketEffects = new Map<string, number>()
+      const bucketEffects = new Map<ProxyEffectId, number>()
       bucketHistogram.fill(0)
       bucketLatencyCount = 0
       bucketLatencySumMs = 0
@@ -268,6 +274,46 @@ export class WindowedMetrics {
     }
   }
 
+  queryEffects(windowId: DashboardWindowId, target?: string): WindowEffectsSnapshot {
+    const at = this.now()
+    const tier = this.tiers[windowId]
+    const currentBucketId = Math.floor(at / tier.bucketMs)
+    const firstBucketId = currentBucketId - tier.slots.length + 1
+    const clockReset = tier.lastObservedAtMs - at > tier.durationMs
+    const effects = new Map<ProxyEffectId, number>()
+
+    for (let bucketId = firstBucketId; bucketId <= currentBucketId; bucketId++) {
+      if (clockReset || bucketId < tier.oldestRetainedBucketId)
+        continue
+      const startMs = bucketId * tier.bucketMs
+      const coverage = bucketCoverage(
+        startMs,
+        startMs + tier.bucketMs,
+        tier.collectionStartedAtMs,
+        bucketId === currentBucketId,
+      )
+      if (coverage === 'not-collected' || target === NO_TARGET)
+        continue
+      const slot = tier.slots[slotIndex(tier, bucketId)]
+      if (slot?.bucketId !== bucketId)
+        continue
+      if (target === undefined) {
+        for (const cell of slot.cells.values())
+          mergeEffects(effects, cell.effects)
+      }
+      else {
+        const cell = slot.cells.get(target)
+        if (cell)
+          mergeEffects(effects, cell.effects)
+      }
+    }
+
+    return {
+      collectionStartedAt: new Date(tier.collectionStartedAtMs).toISOString(),
+      effects: Object.fromEntries(effects),
+    }
+  }
+
   reset(): void {
     const at = this.now()
     for (const tier of this.tierList)
@@ -304,10 +350,17 @@ function observeWrite(tier: MetricTier, at: number): void {
   }
   tier.lastObservedAtMs = at
   tier.collectionStartedAtMs = Math.min(tier.collectionStartedAtMs, at)
-  tier.oldestRetainedBucketId = Math.max(
+  const oldestRetainedBucketId = Math.max(
     tier.oldestRetainedBucketId,
     Math.floor(at / tier.bucketMs) - tier.slots.length + 1,
   )
+  if (oldestRetainedBucketId === tier.oldestRetainedBucketId)
+    return
+  tier.oldestRetainedBucketId = oldestRetainedBucketId
+  for (const [name, lastBucketId] of tier.models) {
+    if (lastBucketId < oldestRetainedBucketId)
+      tier.models.delete(name)
+  }
 }
 
 function isRetainedBucket(tier: MetricTier, bucketId: number, at: number): boolean {
@@ -352,10 +405,6 @@ function writableCell(tier: MetricTier, bucketId: number, at: number, accountNam
 }
 
 function admitModel(tier: MetricTier, model: string, bucketId: number): boolean {
-  for (const [name, lastBucketId] of tier.models) {
-    if (lastBucketId < tier.oldestRetainedBucketId)
-      tier.models.delete(name)
-  }
   const lastBucketId = tier.models.get(model)
   if (lastBucketId !== undefined) {
     tier.models.set(model, Math.max(lastBucketId, bucketId))
@@ -437,7 +486,7 @@ function breakdownRows(counts: DimensionCounts, limit = Number.POSITIVE_INFINITY
   return rows
 }
 
-function mergeEffects(into: Map<string, number>, from: Map<string, number>): void {
+function mergeEffects(into: Map<ProxyEffectId, number>, from: Map<ProxyEffectId, number>): void {
   for (const [effectId, count] of from)
     into.set(effectId, (into.get(effectId) ?? 0) + count)
 }
