@@ -76,6 +76,15 @@ describe('M365 endpoint configuration boundary', () => {
   test('saves before registration, restores selection, and retains it through account and target changes', async () => {
     const { directory, paths, manager, app, post } = await fixture()
     try {
+      const initialState = await (await app.handle(new Request('http://localhost/dashboard/api/m365'))).json()
+      expect(initialState).toMatchObject({
+        endpoint: 'https://loki.delve.office.com/api/v1/llmapi',
+        endpoints: expect.arrayContaining([
+          'https://loki.delve.office.com/api/v1/llmapi',
+          'https://df.loki.delve.office.com/api/v1/llmapi',
+          MSIT_ENDPOINT,
+        ]),
+      })
       const response = await post({ endpoint: `${CUSTOM_ENDPOINT}/`, endpoints: [CUSTOM_ENDPOINT, `${CUSTOM_ENDPOINT}/`] })
       expect(response.status).toBe(200)
       expect(await response.json()).toMatchObject({ registered: false, endpoint: CUSTOM_ENDPOINT, endpoints: expect.arrayContaining([CUSTOM_ENDPOINT, MSIT_ENDPOINT]) })
@@ -168,7 +177,7 @@ describe('M365 endpoint configuration boundary', () => {
 
 describe('M365 endpoint transport', () => {
   test.each([
-    { name: 'default', endpoint: undefined, expected: 'https://df.loki.delve.office.com/api/v1/llmapi' },
+    { name: 'default', endpoint: undefined, expected: 'https://loki.delve.office.com/api/v1/llmapi' },
     { name: 'MSIT', endpoint: MSIT_ENDPOINT, expected: MSIT_ENDPOINT },
     { name: 'custom', endpoint: CUSTOM_ENDPOINT, expected: CUSTOM_ENDPOINT },
   ])('uses $name for both model refresh and Messages', async ({ endpoint, expected }) => {
