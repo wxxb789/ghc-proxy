@@ -31,7 +31,7 @@ export function m365SnapshotKey(state: M365DashboardState): string {
 export function m365StatusText(state: M365DashboardState): string {
   if (!state.registered) {
     return state.onboarding.status === 'available'
-      ? 'Not added. Check prerequisites, then add the target.'
+      ? 'Not added.'
       : state.onboarding.reason || 'Onboarding is unavailable for this process.'
   }
   return state.availability?.status === 'unavailable' ? state.availability.cause || 'The target is unavailable.' : 'Ready.'

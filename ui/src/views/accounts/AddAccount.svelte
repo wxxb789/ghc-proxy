@@ -30,26 +30,27 @@
           Name
           <input id='account-name' class='mono' required maxlength='64' autocomplete='off' value={addForm.name} oninput={onNameInput} />
         </label>
-        <label class='field'>
-          Hostname
-          <input class='mono' required maxlength='253' placeholder='account.localhost' autocomplete='off' value={addForm.hostname} oninput={(event) => {
-            addForm.hostname = event.currentTarget.value
-            addForm.hostnameDirty = true
-          }} />
-        </label>
+        <!-- The help sits outside the label so it describes the input without joining its name. -->
+        <div class='field'>
+          <label class='field'>
+            Hostname
+            <input class='mono' required maxlength='253' placeholder='account.localhost' autocomplete='off' aria-describedby={addForm.hostname ? 'account-hostname-help' : undefined}
+                   value={addForm.hostname} oninput={(event) => {
+                     addForm.hostname = event.currentTarget.value
+                     addForm.hostnameDirty = true
+                   }} />
+          </label>
+          {#if addForm.hostname}<p id='account-hostname-help' class='help'>Client base URL: <span class='mono'>{clientBaseUrl(addForm.hostname)}</span></p>{/if}
+        </div>
         <label class='field full'>
           <span>GHE tenant <span class='optional'>(optional)</span></span>
           <input class='mono' placeholder='company.ghe.com' autocomplete='off' value={addForm.gheDomain} oninput={event => addForm.gheDomain = event.currentTarget.value} />
         </label>
-        {#if addForm.hostname}<p class='full meta'>Clients will reach this account at <span class='mono'>{clientBaseUrl(addForm.hostname)}</span></p>{/if}
-        <div class='full row'>
+        <div class='full row submit-row'>
           <button type='submit' class='btn primary' aria-busy={locked || undefined}>Authenticate with GitHub</button>
+          <StatusText id='account-add-status' line={addForm.status} />
         </div>
       </fieldset>
-      <div>
-        <StatusText id='account-add-status' line={addForm.status} />
-        {#if addForm.retryHint}<p class='hint'>Check the details and select Authenticate with GitHub again.</p>{/if}
-      </div>
     </form>
     {#if app.deviceAuth.session}<DeviceCode session={app.deviceAuth.session} live={locked} />{/if}
   </div>
@@ -57,4 +58,6 @@
 
 <style>
   fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+  /* The status reads beside the button and wraps under it for long errors. */
+  .submit-row > :global(.status-line) { flex: 1 1 12rem; min-width: 0; }
 </style>

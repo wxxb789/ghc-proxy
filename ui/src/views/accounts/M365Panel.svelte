@@ -8,6 +8,7 @@
   import Tag from '../../components/Tag.svelte'
   import { removeTarget } from '../../lib/account-actions.svelte.ts'
   import { selectValue } from '../../lib/actions/selectValue.ts'
+  import { formatClock } from '../../lib/format.ts'
   import {
     m365AccountCandidates,
     m365EndpointOptions,
@@ -22,7 +23,7 @@
     selectM365Account,
     signInM365,
   } from '../../lib/m365-actions.svelte.ts'
-  import { probeM365 } from '../../lib/m365-load.svelte.ts'
+  import { m365StatusText, probeM365 } from '../../lib/m365-load.svelte.ts'
   import { app } from '../../lib/store.svelte.ts'
 
   const m365 = app.m365
@@ -42,16 +43,21 @@
   const removeReason = $derived(routing.length <= 1
     ? 'The M365 target is the only target and cannot be removed.'
     : routing.some(row => row.kind === 'm365' && row.isDefault) ? 'Choose another default target before removing the M365 target.' : null)
+  /**
+   * Resting text ("Ready.", "Not added.", the cause the callout shows) repeats the header tag:
+   * it stays in the live region but takes no row. Progress, outcomes, errors and the onboarding reason stay visible.
+   */
+  const statusResting = $derived(!!view && !m365.statusIsError && (view.registered || onboarding) && m365.status === m365StatusText(view))
 
   function summaryParts(state: M365DashboardState): string[] {
-    const parts = [state.hostname ?? '']
+    const parts: string[] = []
     if (state.username)
       parts.push(state.username)
     else if (state.account)
       parts.push(state.account.includes('@') ? state.account : `account ${state.account.slice(0, 12)}…`)
     parts.push(`${state.modelCount} models`)
     if (state.tokenExpiresAt)
-      parts.push(`token until ${new Date(state.tokenExpiresAt).toLocaleTimeString()}`)
+      parts.push(`token until ${formatClock(state.tokenExpiresAt, false)}`)
     return parts
   }
 
@@ -80,7 +86,7 @@
   {/snippet}
 
   <div class='m365'>
-    <p id='m365-status' class={['status-line', m365.statusIsError && 'is-error', m365.status === 'Working…' && 'is-busy', m365.status === 'Saved.' && 'is-ok']}
+    <p id='m365-status' class={['status-line', m365.statusIsError && 'is-error', m365.status === 'Working…' && 'is-busy', m365.status === 'Saved.' && 'is-ok', statusResting && 'sr-only']}
        role='status' aria-live='polite'>{m365.status}</p>
 
     {#if view}
@@ -88,9 +94,7 @@
         <div class='stack'>
           {#if view.registered}
             <div id='m365-active' class='stack'>
-              <p id='m365-summary' class='mono'>
-                {summaryParts(view).join(' · ')} {#if unavailable}· <span class='fg-bad'>unavailable: {view.availability?.cause || 'unknown cause'}</span>{/if}
-              </p>
+              <p id='m365-summary' class='mono'>{summaryParts(view).join(' · ')}</p>
               {#if unavailable}
                 <div class='callout tone-bad'><Icon name='x' /><p class='callout-text'>{view.availability?.cause || 'The target is unavailable.'}</p></div>
               {/if}
@@ -104,6 +108,7 @@
                   </span>
                 </label>
                 <button type='submit' class='btn secondary' aria-busy={busy.m365Account || undefined} disabled={!candidates.length || busy.m365Account}>Use this account</button>
+                <button type='button' class='btn secondary' aria-busy={busy.m365Probe || undefined} disabled={busy.m365Probe} onclick={probeM365}>Refresh broker accounts</button>
               </form>
 
               <form id='m365-hostname-form' class='m365-form' onsubmit={submit(saveM365Hostname)}>
@@ -117,32 +122,27 @@
                 <button type='submit' class='btn secondary' aria-busy={busy.m365Hostname || undefined} disabled={busy.m365Hostname}>Save hostname</button>
               </form>
 
-              <div>
-                <h3 class='label'>Routing</h3>
-                {#if routing.length}
-                  <ul id='m365-routing' class='routing'>
-                    {#each routing as row (row.target)}
-                      <li><span class='mono'>{row.target} → {row.hostname}</span> <Tag kind='outline' value={row.kind === 'm365' ? 'M365' : 'GitHub'} /> {#if row.isDefault}<Tag kind='outline' value='default' />{/if}</li>
-                    {/each}
-                  </ul>
-                {:else}
-                  <p id='m365-routing' class='muted'>No targets registered yet.</p>
-                {/if}
-              </div>
+              <!-- Only when Targets can't list them (409): otherwise these rows copy the Targets table. -->
+              {#if app.accountsMode === 'unavailable'}
+                <div>
+                  <h3 class='label'>Routing</h3>
+                  {#if routing.length}
+                    <ul id='m365-routing' class='routing'>
+                      {#each routing as row (row.target)}
+                        <li><span class='mono'>{row.target} → {row.hostname}</span> <Tag kind='outline' value={row.kind === 'm365' ? 'M365' : 'GitHub'} /> {#if row.isDefault}<Tag kind='outline' value='default' />{/if}</li>
+                      {/each}
+                    </ul>
+                  {:else}
+                    <p id='m365-routing' class='muted'>No targets registered yet.</p>
+                  {/if}
+                </div>
+              {/if}
 
               <div>
-                <h3 class='label'>Client base URL</h3>
-                <CodeBlock id='m365-client' label='Client base URL'
+                <h3 class='label'>Client environment</h3>
+                <CodeBlock id='m365-client' label='Client environment'
                            text={`ANTHROPIC_BASE_URL=${view.client?.baseUrl ?? ''}\nANTHROPIC_AUTH_TOKEN=dummy-token\nANTHROPIC_MODEL=${view.client?.model ?? ''}`} />
                 <p class='hint'>M365 serves Anthropic Messages only.</p>
-              </div>
-
-              <div class='row'>
-                <button type='button' class='btn secondary' aria-busy={busy.m365Probe || undefined} disabled={busy.m365Probe} onclick={probeM365}>Refresh broker accounts</button>
-              </div>
-              <div>
-                <ReasonButton class='danger' reason={removeReason} busy={app.accountBusy.m365 === 'remove'}
-                              onclick={() => void removeTarget({ name: 'm365', hostname: view.hostname ?? '' })}>Remove M365 target</ReasonButton>
               </div>
             </div>
           {:else}
@@ -153,7 +153,7 @@
                   <ReasonButton reason={onboarding ? null : 'Onboarding is unavailable for this process.'} busy={busy.m365Probe} onclick={probeM365}>Check prerequisites</ReasonButton>
                 </div>
               </li>
-              <li>If your work account isn't listed, sign in with Microsoft (right).</li>
+              <li>If your work account isn't listed, sign in with Microsoft.</li>
               {#if brokerAccounts.length}
                 <li>
                   <form id='m365-register-form' class='m365-form' onsubmit={submit(registerM365)}>
@@ -180,7 +180,7 @@
           <section class='stack' aria-labelledby='m365-endpoint-h'>
             <h3 id='m365-endpoint-h'>Upstream endpoint</h3>
             <form id='m365-endpoint-form' class='m365-form' onsubmit={submit(() => saveM365Endpoint(false))}>
-              <label class='field'>Upstream endpoint
+              <label class='field'><span class='sr-only'>Upstream endpoint</span>
                 <span class='select'>
                   <select id='m365-endpoint' class='mono' required disabled={locked} aria-describedby='m365-endpoint-warning' title={m365.drafts.endpoint}
                           {@attach selectValue(m365.drafts.endpoint, endpoints)} onchange={(event) => {
@@ -195,7 +195,7 @@
             </form>
             <div class='callout tone-warn'>
               <Icon name='triangle' />
-              <p id='m365-endpoint-warning' class='callout-text'>Your Microsoft access token is sent to the selected upstream endpoint. Only use endpoints you trust. This is separate from the target Hostname and Client base URL.</p>
+              <p id='m365-endpoint-warning' class='callout-text'>Your Microsoft access token is sent to the selected upstream endpoint. Only use endpoints you trust.</p>
             </div>
             <form id='m365-custom-endpoint-form' class='m365-form' onsubmit={submit(() => saveM365Endpoint(true))}>
               <label class='field'>Custom HTTPS endpoint
@@ -213,24 +213,30 @@
               <h3 id='m365-sign-in-h'>Microsoft sign-in</h3>
               <form id='m365-sign-in-form' class='m365-form' onsubmit={submit(signInM365)}>
                 <label class='field'><span>Account email <span class='optional'>(optional)</span></span>
-                  <input id='m365-sign-in-upn' type='email' autocomplete='username' placeholder='you@company.com' value={m365.drafts.signInUpn} oninput={event => m365.drafts.signInUpn = event.currentTarget.value}>
+                  <input id='m365-sign-in-upn' type='email' autocomplete='username' placeholder='you@company.com' aria-describedby='m365-sign-in-help' value={m365.drafts.signInUpn} oninput={event => m365.drafts.signInUpn = event.currentTarget.value}>
                 </label>
-                <button id='m365-sign-in' type='submit' class='btn secondary' aria-busy={busy.m365SignIn || undefined} disabled={signInBlocked || busy.m365SignIn}>Sign in another M365 account</button>
+                <button id='m365-sign-in' type='submit' class='btn secondary' aria-busy={busy.m365SignIn || undefined} disabled={signInBlocked || busy.m365SignIn} aria-describedby='m365-sign-in-help'>Sign in another M365 account</button>
               </form>
-              <p class='hint'>Only Windows broker accounts can be discovered. If an account is missing, sign in above, then select the work account with a Copilot subscription. This is separate from GitHub authentication.</p>
+              <p id='m365-sign-in-help' class='hint'>Only Windows broker accounts are listed. Choose a work account with an M365 Copilot subscription.</p>
             </section>
           {/if}
           <div id='m365-readiness' class='readiness' role='status' aria-live='polite'>
             {#if m365.readiness.length}
               <ul>
                 {#each m365.readiness as line, index (index)}
-                  <li class={{ 'fg-bad': line.tone === 'bad' }}><Lamp tone={line.tone ?? null} />{line.text}</li>
+                  <li class={{ 'fg-bad': line.tone === 'bad' }}>{#if line.tone}<Lamp tone={line.tone} />{:else}<span class='lamp-slot'></span>{/if}{line.text}</li>
                 {/each}
               </ul>
             {/if}
           </div>
         </div>
       </div>
+      {#if view.registered}
+        <div class='danger-zone'>
+          <ReasonButton class='danger' reason={removeReason} busy={app.accountBusy.m365 === 'remove'}
+                        onclick={() => void removeTarget({ name: 'm365', hostname: view.hostname ?? '' })}>Remove M365 target</ReasonButton>
+        </div>
+      {/if}
     {/if}
   </div>
 </Panel>
@@ -248,10 +254,16 @@
   .m365-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-2) var(--s-3); }
   .m365-form .field { flex: 1 1 14rem; min-width: 0; }
   .m365-form .field :is(input, select) { width: 100%; }
+  /* The full gateway host stays readable beside the trust warning; Use endpoint wraps below. */
+  #m365-endpoint-form .field { flex-basis: 100%; }
   .label { margin-bottom: var(--s-1); font-size: 12px; line-height: 16px; font-weight: 500; color: var(--text-2); }
   .routing { display: grid; gap: var(--s-1); }
   .routing li, .readiness li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
   .readiness { display: grid; gap: var(--s-1); font-size: 12px; line-height: 16px; color: var(--text-2); }
+  /* A toneless line keeps the lamp's 8 px slot, so every line's text starts at the same x. */
+  .lamp-slot { flex: none; width: 8px; }
+  /* Separated from the setup flow, spanning both columns. */
+  .danger-zone { padding-top: var(--s-4); border-top: 1px solid var(--line); }
   #m365-summary { overflow-wrap: anywhere; color: var(--text-2); }
   @media (max-width: 560px) {
     .m365-form > .btn { width: 100%; }

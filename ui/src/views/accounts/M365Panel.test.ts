@@ -45,6 +45,7 @@ beforeEach(() => {
   history.replaceState(null, '', '/dashboard#/overview')
   clearFaults()
   Object.assign(app.busy, { m365Target: false, m365Probe: false, m365SignIn: false, m365Account: false, m365Hostname: false })
+  app.accountsMode = 'routing'
   app.accountBusy = {}
   Object.assign(app.m365, {
     snapshotKey: '',
@@ -62,28 +63,46 @@ beforeEach(() => {
 })
 
 describe('registered target (T:452-497)', () => {
-  it('shows Ready., the client env lines and the routing rows', () => {
+  it('shows Ready., the client environment and the summary without the hostname', () => {
     renderWith()
-    expect(byId('m365-status')).toHaveTextContent('Ready.')
+    // Resting "Ready." repeats the header tag: still announced, but visually hidden.
     expect(byId('m365-status').textContent).toBe('Ready.')
+    expect(byId('m365-status')).toHaveClass('sr-only')
     expect(byId('m365-client').textContent).toBe('ANTHROPIC_BASE_URL=http://m365.localhost:4141\nANTHROPIC_AUTH_TOKEN=dummy-token\nANTHROPIC_MODEL=claude-opus-5.5')
-    const items = Array.from(byId('m365-routing').querySelectorAll('li'), item => item.textContent)
-    expect(items.some(text => text?.includes('m365 → m365.localhost'))).toBe(true)
-    expect(byId('m365-summary').textContent).toContain('m365.localhost · user@corp.com · 2 models · token until')
+    expect(byId('m365-client')).toHaveAccessibleName('Client environment')
+    expect(screen.getByRole('button', { name: 'Copy Client environment' })).toBeInTheDocument()
+    // Targets lists the same rows outside 409 mode.
+    expect(document.getElementById('m365-routing')).toBeNull()
+    expect(byId('m365-summary').textContent).toMatch(/^user@corp\.com · 2 models · token until \d\d:\d\d$/)
     expect(screen.getByRole('heading', { level: 2, name: 'M365 Copilot target' })).toHaveAttribute('id', 'm365-h')
     expect(byId('m365-panel')).toHaveTextContent('ready')
+    expect(screen.getByRole('combobox', { name: 'Upstream endpoint' })).toHaveAttribute('id', 'm365-endpoint')
   })
 
-  it('shows the cause when the target is unavailable', () => {
+  it('lists the routing rows only when Targets cannot (409)', () => {
+    app.accountsMode = 'unavailable'
+    renderWith()
+    const items = Array.from(byId('m365-routing').querySelectorAll('li'), item => item.textContent)
+    expect(items.some(text => text?.includes('m365 → m365.localhost'))).toBe(true)
+  })
+
+  it('shows the cause once, in the callout, when the target is unavailable', () => {
     renderWith(m365Ready({ availability: { status: 'unavailable', cause: 'Token expired', updatedAt: 1 } }))
     expect(byId('m365-status').textContent).toBe('Token expired')
-    expect(byId('m365-summary').textContent).toContain('unavailable: Token expired')
+    expect(byId('m365-status')).toHaveClass('sr-only')
+    expect(byId('m365-summary')).not.toHaveTextContent('Token expired')
+    expect(byId('m365-active').querySelector('.callout')).toHaveTextContent('Token expired')
   })
 
   it('removes through the shared flow, and explains when it cannot', async () => {
     const user = userEvent.setup()
     renderWith()
-    await user.click(screen.getByRole('button', { name: 'Remove M365 target' }))
+    // Refresh sits with the broker select; Remove sits in its own footer after the setup flow.
+    expect(byId('m365-form')).toContainElement(screen.getByRole('button', { name: 'Refresh broker accounts' }))
+    const remove = screen.getByRole('button', { name: 'Remove M365 target' })
+    expect(byId('m365-active')).not.toContainElement(remove)
+    expect(remove.closest('.danger-zone')).not.toBeNull()
+    await user.click(remove)
     expect(removeTarget).toHaveBeenCalledWith({ name: 'm365', hostname: 'm365.localhost' })
   })
 
@@ -112,6 +131,7 @@ describe('registered target (T:452-497)', () => {
     await user.click(screen.getByRole('button', { name: 'Save hostname' }))
     await waitFor(() => expect(byId('m365-status').textContent).toBe('Invalid hostname'))
     expect(byId('m365-status')).toHaveClass('is-error')
+    expect(byId('m365-status')).not.toHaveClass('sr-only')
     expect(app.m365.dirty.hostname).toBe(true)
     applyM365State(m365Ready({ modelCount: 3 }))
     await waitFor(() => expect(byId('m365-summary').textContent).toContain('3 models'))
@@ -120,6 +140,7 @@ describe('registered target (T:452-497)', () => {
     fail = false
     await user.click(screen.getByRole('button', { name: 'Save hostname' }))
     await waitFor(() => expect(byId('m365-status').textContent).toBe('Saved.'))
+    expect(byId('m365-status')).not.toHaveClass('sr-only')
     expect(fake.log.find(request => request.path === '/dashboard/api/m365/hostname')?.body).toEqual({ hostname: 'Copilot.localhost' })
     expect(app.m365.dirty.hostname).toBe(false)
     expect(input.value).toBe('copilot.localhost')
@@ -219,7 +240,12 @@ describe('not added', () => {
     const user = userEvent.setup()
     setup({ 'POST /dashboard/api/m365/register': () => m365Ready() })
     renderWith(m365Absent(), probeResult([other, broker]))
-    expect(byId('m365-status').textContent).toBe('Not added. Check prerequisites, then add the target.')
+    expect(byId('m365-status').textContent).toBe('Not added.')
+    expect(byId('m365-status')).toHaveClass('sr-only')
+    expect(byId('m365-absent')).toHaveTextContent('If your work account isn\'t listed, sign in with Microsoft.')
+    const help = 'Only Windows broker accounts are listed. Choose a work account with an M365 Copilot subscription.'
+    expect(screen.getByRole('textbox', { name: 'Account email (optional)' })).toHaveAccessibleDescription(help)
+    expect(screen.getByRole('button', { name: 'Sign in another M365 account' })).toHaveAccessibleDescription(help)
     expect(byId('m365-register-hostname')).toHaveValue('m365.localhost')
     const select = byId('m365-register-account') as HTMLSelectElement
     expect(select.options[1]!.textContent).toBe('new@corp.com — new-home-acc… (login.windows.net)')
@@ -263,6 +289,9 @@ describe('not added', () => {
     await waitFor(() => expect(byId('m365-readiness').querySelectorAll('li')).toHaveLength(4))
     const lines = Array.from(byId('m365-readiness').querySelectorAll('li'), item => item.textContent)
     expect(lines).toEqual(['Windows platform: required', 'msc-auth helper: not found', 'Broker accounts: 0', 'Windows is required.'])
+    // Every line starts with an 8 px mark: a lamp, or an empty slot for a toneless line.
+    for (const item of byId('m365-readiness').querySelectorAll('li'))
+      expect(item.firstElementChild).toHaveClass(item.textContent === 'Broker accounts: 0' ? 'lamp-slot' : 'lamp')
     expect(screen.getByRole('button', { name: 'Sign in another M365 account' })).toBeDisabled()
   })
 
@@ -270,6 +299,7 @@ describe('not added', () => {
     const user = userEvent.setup()
     renderWith(m365Absent({ onboarding: { status: 'unavailable' } }))
     expect(byId('m365-status').textContent).toBe('Onboarding is unavailable for this process.')
+    expect(byId('m365-status')).not.toHaveClass('sr-only')
     expect(screen.queryByRole('button', { name: 'Sign in another M365 account' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Microsoft sign-in' })).toBeNull()
     const check = screen.getByRole('button', { name: 'Check prerequisites' })

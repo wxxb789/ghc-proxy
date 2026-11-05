@@ -164,7 +164,7 @@ main > * { min-width: 0; }
 .nav-item[aria-current='page'] { background: var(--bg-2); color: var(--text-1); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
 .nav-label { flex: 1; min-width: 0; }
 .nav-lamp { display: inline-flex; }
-.nav-item kbd { margin-left: var(--s-1); }
+.nav-item kbd { height: auto; margin-left: var(--s-1); padding: 0; border: 0; font-size: 10px; }
 
 .status { padding: var(--s-4) var(--s-4) var(--s-2); }
 .status dl { display: grid; }
@@ -172,7 +172,8 @@ main > * { min-width: 0; }
 .status-row dt { display: flex; align-items: center; gap: var(--s-2); color: var(--text-2); white-space: nowrap; }
 .status-row dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 
-.rail-foot { margin-top: auto; display: grid; gap: var(--s-2); padding: var(--s-3); border-top: 1px solid var(--line); }
+.rail-foot { margin-top: auto; display: grid; gap: var(--s-4); padding: var(--s-3); border-top: 1px solid var(--line); }
+.rail-group { display: grid; gap: var(--s-2); }
 .rail-foot .btn kbd { margin-left: auto; }
 
 .context {
@@ -182,12 +183,15 @@ main > * { min-width: 0; }
 .context p { display: flex; align-items: center; gap: var(--s-2); min-width: 0; white-space: nowrap; }
 .context-left { flex: 1; overflow: hidden; }
 .context-right { color: var(--text-2); }
+.context-note { font-size: 12px; line-height: 16px; color: var(--text-3); }
 .issues-anchor { position: relative; }
+.issues-count { display: none; }
 
 .connection-strip {
   display: flex; align-items: center; gap: var(--s-3); min-height: 32px; padding: 6px var(--main-pad);
   background: var(--bad-bg); color: var(--text-1); border-bottom: 1px solid var(--bad-line);
 }
+.connection-strip p { flex: 1; }
 
 .view-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2) var(--s-4); }
 .view-meta { color: var(--text-2); display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2); }
@@ -241,7 +245,6 @@ main > * { min-width: 0; }
 .reason { margin-top: var(--s-1); font-size: 12px; line-height: 16px; color: var(--text-3); }
 
 .live { width: 100%; justify-content: flex-start; }
-.live-meta { margin-left: auto; color: var(--text-3); font-weight: 400; }
 
 /* ---------- inputs (§4.2) ---------- */
 input:not([type='checkbox'], [type='radio']), select, textarea {
@@ -461,8 +464,13 @@ a.tile:hover { background: var(--bg-2); color: inherit; }
 .dialog h2 { margin-bottom: var(--s-2); }
 .dialog-body { color: var(--text-2); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-5); }
-.dialog .kv { margin-top: var(--s-3); }
-.dialog .kv-row { grid-template-columns: 9rem minmax(0, 1fr); }
+/* Shortcuts dialog: both key groups share one max-content key column through subgrid. */
+.shortcut-groups { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: var(--s-3); margin-top: var(--s-3); }
+.shortcut-groups > * { grid-column: 1 / -1; }
+.shortcut-groups .kv { grid-template-columns: subgrid; }
+.shortcut-groups .kv-row { grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: var(--s-3); }
+.shortcut-groups .placard { margin-top: var(--s-4); }
+.shortcut-groups .is-off dd { color: var(--text-2); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1279px) {
@@ -479,13 +487,14 @@ a.tile:hover { background: var(--bg-2); color: inherit; }
   .shell { height: auto; overflow: visible; z-index: 50; border-right: 0; border-bottom: 1px solid var(--line); }
   .topbar { display: flex; align-items: center; gap: var(--s-2); height: 48px; padding: 0 var(--s-2); }
   .topbar .brand { height: auto; padding: 0; }
-  .topbar-view { flex: 1; color: var(--text-2); font-weight: 500; }
+  .topbar-view { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-weight: 500; }
   .topbar .live { width: auto; justify-content: center; }
   .rail {
     display: none; position: fixed; top: 48px; bottom: 0; left: 0; width: 288px; min-height: 0; overflow-y: auto;
     background: var(--bg-3); border-radius: 0 var(--r-4) var(--r-4) 0; box-shadow: var(--shadow-pop); animation: pop-in var(--dur-3) var(--ease-out);
   }
-  .rail.open { display: flex; }
+  /* The spread shadow is the scrim; a shadow takes no pointer events, so the document pointerdown still closes the drawer. */
+  .rail.open { display: flex; box-shadow: var(--shadow-pop), 0 0 0 100vmax var(--scrim); }
   .rail > .brand, .rail-live { display: none; }
   .rail nav { padding-top: var(--s-2); }
   .context { top: 48px; height: 32px; }
@@ -493,13 +502,16 @@ a.tile:hover { background: var(--bg-2); color: inherit; }
 
 @media (max-width: 560px) {
   :root { --main-pad: var(--s-3); }
-  .topbar .brand-name, .context-host, .context-rtt { display: none; }
+  .topbar .brand-name { display: none; }
+  /* Icon + count Issues button and lamp-only Live toggle; the words stay in the accessible names. */
+  .issues-label, .topbar .live-label { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+  .issues-count { display: inline; }
   .cluster { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cluster .tile { border-left: 1px solid var(--line-strong); border-top: 1px solid var(--line-strong); }
   .cluster .tile:nth-child(odd) { border-left: 0; }
   .cluster .tile:nth-child(-n + 2) { border-top: 0; }
   .readout { font-size: 24px; line-height: 28px; }
-  .popover { position: fixed; top: 84px; right: 12px; left: 12px; width: auto; }
+  .popover { position: fixed; top: 52px; right: 12px; left: 12px; width: auto; }
   .form-grid { grid-template-columns: minmax(0, 1fr); }
   .kv-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .callout-actions { margin-left: 0; width: 100%; }
@@ -530,6 +542,7 @@ a.tile:hover { background: var(--bg-2); color: inherit; }
   :focus-visible { outline-color: Highlight; }
   /* Box shadows are dropped here, so the current and selected bars become borders (palette stays the user's). */
   .nav-item[aria-current='page'] { border-left: 2px solid Highlight; padding-left: calc(var(--s-2) - 2px); }
+  .rail.open { box-shadow: none; }
   .table tr[aria-selected='true'] > :first-child { border-left: 2px solid Highlight; padding-left: 14px; }
   .segmented [aria-checked='true'] { forced-color-adjust: none; background: Highlight; border-color: Highlight; }
   .segmented [aria-checked='true'], .segmented [aria-checked='true'] * { color: HighlightText; }

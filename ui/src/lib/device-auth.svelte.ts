@@ -19,8 +19,6 @@ export const addForm = $state({
   hostnameDirty: false,
   /** `#account-add-status`. */
   status: { text: '', tone: '' } as StatusLine,
-  /** Shown after a failed authentication. */
-  retryHint: false,
 })
 
 /** The session whose card already received focus; a remount must not steal focus again. */
@@ -99,7 +97,6 @@ async function poll(id: string, handle: typeof timers.deviceAuth): Promise<void>
   }
   else {
     addForm.status = { text: 'Authentication failed', tone: 'error' }
-    addForm.retryHint = true
   }
 }
 
@@ -109,7 +106,6 @@ export async function startDeviceAuth(body: Required<AddAccountBody>): Promise<v
     return
   clearTimeout(timers.deviceAuth)
   Object.assign(app.deviceAuth, { busy: true, session: null })
-  addForm.retryHint = false
   addForm.status = { text: 'Starting authentication', tone: 'busy' }
   const stops = stopCount()
   try {

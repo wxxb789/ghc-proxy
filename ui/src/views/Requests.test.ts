@@ -5,10 +5,12 @@ import { flushSync } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startRouter } from '../lib/router.svelte.ts'
 import { app } from '../lib/store.svelte.ts'
-import { behavior, clearFaults, request, requests } from '../test/fixtures.ts'
+import { behavior, clearFaults, overview, request, requests } from '../test/fixtures.ts'
 import Requests from './Requests.svelte'
 
 let stopRouter: () => void
+// jsdom has no ResizeObserver; the list's height fit (fitViewport) registers one. The last callback is kept.
+let resized: (() => void) | undefined
 
 function open(hash = '#/requests') {
   history.replaceState(null, '', `/dashboard${hash}`)
@@ -27,9 +29,18 @@ const selectedId = () => document.querySelector<HTMLElement>('[data-row][aria-se
 const rawJson = () => document.getElementById('request-detail')?.textContent ?? ''
 
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback: () => void) {
+      resized = callback
+    }
+
+    observe() {}
+    disconnect() {}
+  })
   clearFaults()
   app.data.requests = null
   app.data.behavior = null
+  app.data.overview = null
   app.loadedAt.requests = null
   app.selection.requestId = null
   app.live = true
@@ -37,7 +48,11 @@ beforeEach(() => {
   app.ui.insightsOpen = true
 })
 
-afterEach(() => stopRouter())
+afterEach(() => {
+  stopRouter()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 describe('requests selection (legacy pins)', () => {
   it('falls back to the first visible row when the selected request disappears (T:133-143)', async () => {
@@ -70,6 +85,8 @@ describe('requests selection (legacy pins)', () => {
     expect(screen.getByText('No requests yet.')).toBeInTheDocument()
     expect(screen.getByText(/^Point a client at /)).toHaveTextContent(/Requests appear here while Live is on\.$/)
     expect(location.hash).toBe('#/requests')
+    // The list's empty state is the one message; Insights waits for the first request.
+    expect(screen.queryByText('Insights')).not.toBeInTheDocument()
   })
 })
 
@@ -81,6 +98,23 @@ describe('requests view', () => {
     expect(screen.getByText(/256 finished max/)).toBeInTheDocument()
     load({ capacity: 100 })
     expect(screen.getByText(/· 100 finished max/)).toBeInTheDocument()
+  })
+
+  it('says the ring covers all accounts when there are several', () => {
+    open()
+    render(Requests)
+    load({ recent: [request('r1')] })
+    expect(screen.queryByText('· all accounts')).not.toBeInTheDocument()
+
+    app.data.overview = overview()
+    flushSync()
+    const note = screen.getByText('· all accounts')
+    expect(document.getElementById('request-count')).not.toContainElement(note)
+    expect(document.getElementById('request-count')).toHaveTextContent(/^0 active \/ 1 finished$/)
+
+    app.data.overview = overview({ auth: { accounts: { currentAccount: 'work', defaultAccount: 'work', totalAccounts: 1 } } })
+    flushSync()
+    expect(screen.queryByText('· all accounts')).not.toBeInTheDocument()
   })
 
   it('honours a deep-link id and corrects a missing one', () => {
@@ -270,12 +304,86 @@ describe('requests view', () => {
       flushSync()
       vi.advanceTimersByTime(3000)
       flushSync()
-      expect(duration()).toBe('4.0 s · paused')
-      expect(screen.getByText(/finished max · paused/)).toBeInTheDocument()
+      // The frozen figure is muted; "paused" is spoken only, and the header copy shows ≤900 px.
+      expect(duration()).toBe('4.0 s (paused)')
+      expect(rows()[0]!.lastElementChild).toHaveClass('muted')
+      expect(rows()[0]!.lastElementChild!.querySelector('.sr-only')).toHaveTextContent('(paused)')
+      expect(rows()[1]!.lastElementChild).not.toHaveClass('muted')
+      expect(screen.getByText('· paused')).toHaveClass('paused-meta')
     }
     finally {
       vi.useRealTimers()
     }
+  })
+
+  it('keeps Insights for active-only rings and words a filtered empty sample', async () => {
+    open()
+    render(Requests)
+    load({ active: [request('a1', { state: 'streaming', status: undefined })] })
+    const insights = () => screen.getByText('Insights').closest('details')!
+    expect(insights()).toHaveTextContent('No finished requests yet.')
+
+    await userEvent.setup().click(screen.getByRole('radio', { name: /^Failed/ }))
+    expect(insights()).toHaveTextContent('No finished requests.')
+    expect(insights()).not.toHaveTextContent('yet')
+  })
+
+  it('renders each share as its own wrap unit with the same text', () => {
+    open()
+    render(Requests)
+    load({ recent: [
+      request('r1', { effectiveModel: 'claude-sonnet-5', selectedStrategy: 'native-messages' }),
+      request('r2', { effectiveModel: 'claude-sonnet-5', selectedStrategy: 'native-messages' }),
+      request('r3', { effectiveModel: 'claude-sonnet-5', selectedStrategy: 'native-messages' }),
+      request('r4', { effectiveModel: 'gpt-5.4', selectedStrategy: 'chat-completions' }),
+    ] })
+    const models = screen.getByText('Top models').nextElementSibling!
+    expect(models).toHaveTextContent(/^claude-sonnet-5 75 % \(3\) · gpt-5\.4 25 % \(1\)$/)
+    expect(Array.from(models.querySelectorAll('.share'), share => share.textContent)).toEqual(['claude-sonnet-5 75 % (3)', 'gpt-5.4 25 % (1)'])
+    expect(screen.getByText('Strategies').nextElementSibling).toHaveTextContent(/^native-messages 75 % · chat-completions 25 %$/)
+  })
+
+  it('shows the duration once, in the detail header, and the start as a clock time today', () => {
+    open()
+    render(Requests)
+    const startedAt = new Date(Date.now() - 120_000)
+    load({ recent: [request('r1', { startedAt: startedAt.toISOString(), durationMs: 1100 })] })
+    const detail = screen.getByRole('complementary', { name: 'Request detail' })
+    expect(within(detail).queryByText('Duration', { selector: 'dt' })).not.toBeInTheDocument()
+    expect(within(detail).getByText('1.1 s', { exact: false })).toHaveTextContent(/^Duration 1\.1 s$/)
+    const started = within(detail).getByText('Started').nextElementSibling!
+    const clock = [startedAt.getHours(), startedAt.getMinutes(), startedAt.getSeconds()].map(part => String(part).padStart(2, '0')).join(':')
+    expect(started).toHaveTextContent(`${clock} (2 minutes ago)`)
+
+    const old = new Date('2020-01-02T03:04:05Z')
+    load({ recent: [request('r1', { startedAt: old.toISOString() })] })
+    expect(within(detail).getByText('Started').nextElementSibling).toHaveTextContent(old.toLocaleString())
+  })
+
+  it('fits the list scroller to the viewport below whatever sits above it', () => {
+    const main = document.body.appendChild(document.createElement('main'))
+    main.style.paddingBottom = '24px'
+    let top = 370
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      // Scroller 100 px tall; its panel adds a 1 px bottom border.
+      const bottom = top + 100 + (this.classList.contains('req-list') ? 1 : 0)
+      return { top, bottom } as DOMRect
+    })
+    vi.stubGlobal('innerHeight', 900)
+    open()
+    render(Requests, { target: main })
+    const scroller = document.querySelector<HTMLElement>('.req-scroll')!
+    expect(scroller.style.maxHeight).toBe(`${900 - 370 - 24 - 1}px`)
+
+    // Content above grew (Insights opened): the cap shrinks, down to its floor.
+    top = 700
+    resized!()
+    expect(scroller.style.maxHeight).toBe('320px')
+
+    vi.stubGlobal('innerHeight', 1200)
+    window.dispatchEvent(new Event('resize'))
+    expect(scroller.style.maxHeight).toBe(`${1200 - 700 - 24 - 1}px`)
+    main.remove()
   })
 
   it('shows loading skeletons and insights over the shown rows', () => {

@@ -30,6 +30,8 @@
   })))
   const showAccount = $derived(new Set(data ? [...data.active, ...data.recent].flatMap(row => row.accountName ? [row.accountName] : []) : []).size >= 2)
   const p50 = $derived(data ? latencyStats(data.recent)?.p50 : undefined)
+  // The context bar names one account, but the ring spans all of them.
+  const allAccounts = $derived((app.data.overview?.auth.accounts.totalAccounts ?? 0) > 1)
 
   // Selection (legacy semantics over the visible rows): keep it while visible,
   // else the first visible row (active first), else null; mirrored to `?id=`.
@@ -93,7 +95,9 @@
 
 {#snippet meta()}
   <span id='request-count'>{#if data}{data.active.length} active / {data.recent.length} finished{/if}</span>
-  {#if data}<span>· {data.capacity} finished max{app.live ? '' : ' · paused'}</span>{/if}
+  {#if data}<span>· {data.capacity} finished max</span>{/if}
+  {#if allAccounts}<span>· all accounts</span>{/if}
+  {#if data && !app.live}<span class='paused-meta'>· paused</span>{/if}
 {/snippet}
 
 <ViewHeader title='Requests' {meta} />
@@ -105,7 +109,7 @@
   </div>
 </div>
 <FaultStrip scope='requests' />
-{#if data}
+{#if data && data.active.length + data.recent.length}
   <RequestInsights recent={shownRecent} active={shownActive} {now} filtered={stateFilter !== 'all' || !!query} />
 {/if}
 <div class='req-layout'>
@@ -135,6 +139,11 @@
   .req-tools > :global(.segmented) { flex: none; }
   .req-tools .search { width: min(320px, 100%); }
   .req-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: var(--s-4); align-items: start; }
+
+  /* Above 900 px the rail's Live toggle already reads "Paused". */
+  @media (min-width: 901px) {
+    .paused-meta { display: none; }
+  }
 
   @media (max-width: 900px) {
     .req-layout { grid-template-columns: minmax(0, 1fr); }

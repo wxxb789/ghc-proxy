@@ -9,10 +9,12 @@
   const loud = $derived(health.issues.filter(issue => issue.tone !== 'info'))
   const connectionLabel = $derived(app.connection.state === 'lost' ? 'Connection lost' : app.connection.state === 'blocked' ? 'Access denied' : '')
   const count = (n: number) => `${n} ${n === 1 ? 'issue' : 'issues'}`
+  // Issues besides the connection one; the only figure the ≤560 px icon + count variant shows.
+  const others = $derived(connectionLabel ? loud.length - 1 : loud.length)
   const label = $derived.by(() => {
     if (connectionLabel)
-      return loud.length > 1 ? `${connectionLabel} · ${count(loud.length - 1)}` : connectionLabel
-    return loud.length ? count(loud.length) : 'No issues'
+      return others > 0 ? `${connectionLabel} · ${count(others)}` : connectionLabel
+    return others ? count(others) : 'No issues'
   })
 
   /**
@@ -34,7 +36,7 @@
 <div class='issues-anchor'>
   <button bind:this={button} type='button' class={['btn', 'issues-btn', health.worst ? `tone-${health.worst}` : 'ghost']}
           aria-expanded={app.ui.issuesOpen} aria-controls='issues-popover' onclick={() => app.ui.issuesOpen = !app.ui.issuesOpen}>
-    <Icon name={!health.worst ? 'check' : health.worst === 'bad' ? 'x' : 'triangle'} />{label}
+    <Icon name={!health.worst ? 'check' : health.worst === 'bad' ? 'x' : 'triangle'} /><span class='issues-label'>{label}</span>{#if others > 0}<span class='issues-count' aria-hidden='true'>{others}</span>{/if}
   </button>
   {#if app.ui.issuesOpen && button}<IssuesPopover {button} onclose={close} />{/if}
 </div>

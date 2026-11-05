@@ -48,8 +48,11 @@ describe('bootstrap named accounts (T:406-429)', () => {
     })
     const input = document.getElementById('account-bootstrap-hostname') as HTMLInputElement
     await fireEvent.input(input, { target: { value: 'taken.localhost' } })
+    const hold = fake.hold('POST /dashboard/api/accounts/bootstrap')
     await fireEvent.submit(input.form!)
-    await vi.waitFor(() => expect(document.getElementById('account-bootstrap-status')).toHaveTextContent('Named-account routing could not be enabled: Hostname is taken.'))
+    await vi.waitFor(() => expect(document.getElementById('account-bootstrap-status')).toHaveTextContent('Enabling named accounts'))
+    hold.release()
+    await vi.waitFor(() => expect(document.getElementById('account-bootstrap-status')).toHaveTextContent('Named accounts could not be enabled: Hostname is taken.'))
     expect(faults.accounts?.message).toBe('Hostname is taken.')
     expect(input.value).toBe('taken.localhost')
     expect(input).not.toBeDisabled()

@@ -53,8 +53,10 @@ describe('overview legacy pins (T:145-176)', () => {
     await waitFor(() => expect(readout('Aborted')).toBe('7'))
     expect(readout('Completed')).toBe('1,284')
     const accounts = row('Authentication', 'Accounts')
-    expect(within(accounts).getByRole('cell', { name: '2 total / default personal / current work' })).toHaveClass('mono')
-    expect(within(accounts).getByText('ok')).toBeInTheDocument()
+    expect(within(accounts).getByText('2 total / default personal / current work')).toHaveClass('mono')
+    // The row has no health of its own: its Status cell is empty, not a constant "ok".
+    expect(accounts.querySelector('[data-label="Status"]')).toHaveTextContent(/^—none$/)
+    expect(within(accounts).queryByText('ok')).not.toBeInTheDocument()
   })
 })
 
@@ -67,36 +69,43 @@ describe('overview header and summary', () => {
     expect(screen.queryByRole('heading', { name: 'Issues' })).not.toBeInTheDocument()
   })
 
-  it('reads all normal with the premium percent, plus the header meta and the multi-account note', () => {
+  it('reads all normal with the premium percent, and the header meta without uptime or a scope note', () => {
     show(overview())
     expect(screen.getByText('All normal. 81.2 % of premium requests left.')).toBeInTheDocument()
-    expect(screen.getByText(/GitHub upstream · up 3h 12m/)).toBeInTheDocument()
-    expect(screen.getByText('Overview, quota and models reflect "work". Requests and Behavior cover every account.')).toBeInTheDocument()
+    const meta = document.querySelector<HTMLElement>('.view-meta')!
+    expect(within(meta).getByText('ok')).toBeInTheDocument()
+    expect(within(meta).getByText('· GitHub upstream')).toBeInTheDocument()
+    expect(meta).not.toHaveTextContent(/\bup \d/)
+    expect(screen.queryByText(/Requests and Behavior cover every account/)).not.toBeInTheDocument()
   })
 
-  it('reads unlimited premium and hides the note for one account', () => {
+  it('reads unlimited premium', () => {
     show(overview({
       auth: { github: { status: 'ok', accountType: 'business' }, accounts: { currentAccount: 'work', defaultAccount: 'work', totalAccounts: 1 } },
       quota: quota({ premiumInteractions: { entitlement: 0, remaining: 0, percentRemaining: 100, unlimited: true, overagePermitted: false } }),
     }))
     expect(screen.getByText('All normal. Premium requests are unlimited.')).toBeInTheDocument()
-    expect(screen.queryByText(/Requests and Behavior cover every account/)).not.toBeInTheDocument()
   })
 
-  it('reads the worst issue title with the count of the others', () => {
+  it('leaves the headline to the Issues panel while a warn/bad issue exists', () => {
     show(overview({ auth: { copilot: { status: 'missing', modelsLoaded: false } }, queue: { accountCooldown: true } }))
-    expect(screen.getByText('Copilot isn\'t connected for work · 1 more')).toBeInTheDocument()
+    expect(document.querySelector('.summary')).not.toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Issues' })).getByText('Copilot isn\'t connected for work')).toBeInTheDocument()
   })
 
-  it('reads the lost-connection sentence with the last data time', () => {
+  it('drops the summary and the stale status tag while the connection is lost', async () => {
     show(overview())
     app.connection.state = 'lost'
-    return waitFor(() => expect(screen.getByText(/^Can't reach ghc-proxy\. Showing data from \d\d:\d\d:\d\d\.$/)).toBeInTheDocument())
+    await waitFor(() => expect(within(screen.getByRole('region', { name: 'Issues' })).getByText('Can\'t reach ghc-proxy')).toBeInTheDocument())
+    expect(document.querySelector('.summary')).not.toBeInTheDocument()
+    const meta = document.querySelector<HTMLElement>('.view-meta')!
+    expect(meta.querySelector('.tag')).not.toBeInTheDocument()
+    expect(within(meta).getByText('GitHub upstream')).toBeInTheDocument()
   })
 })
 
 describe('overview issues panel', () => {
-  it('is absent when healthy and when only info issues exist', () => {
+  it('is absent when healthy and when only info issues exist, which keep the summary', () => {
     const view = show(overview())
     expect(health.issues).toEqual([])
     expect(screen.queryByRole('region', { name: 'Issues' })).not.toBeInTheDocument()
@@ -104,22 +113,26 @@ describe('overview issues panel', () => {
     show(overview({ quota: quota({ status: 'stale' }) }))
     expect(health.issues.map(issue => [issue.title, issue.tone])).toEqual([['Quota may be out of date', 'info']])
     expect(screen.queryByRole('region', { name: 'Issues' })).not.toBeInTheDocument()
+    expect(document.querySelector('.summary')).toHaveTextContent(/^All normal\./)
   })
 
-  it('lists every issue with the count when a warn issue exists', () => {
+  it('lists every issue, without a count in the meta, when a warn issue exists', () => {
     show(overview({ auth: { copilot: { status: 'degraded', modelsLoaded: false } }, quota: quota({ status: 'stale' }) }))
     const panel = screen.getByRole('region', { name: 'Issues' })
     expect(within(panel).getByText('Copilot is degraded')).toBeInTheDocument()
     expect(within(panel).getByText('Quota may be out of date')).toBeInTheDocument()
     expect(within(panel).getAllByRole('listitem')).toHaveLength(2)
-    expect(panel.querySelector('.panel-meta')).toHaveTextContent('2')
+    expect(panel.querySelector('.panel-meta')!.textContent!.trim()).toBe('')
   })
 })
 
 describe('overview cluster', () => {
   it('links the Active and Failed tiles to the filtered Requests view', () => {
     show(overview({ activity: { activeRequests: 2, failed: 12 } }))
-    expect(screen.getByRole('link', { name: 'Active requests: 2. Show active requests' })).toHaveAttribute('href', '#/requests?state=active')
+    const active = screen.getByRole('link', { name: 'Active requests: 2. Show active requests' })
+    expect(active).toHaveAttribute('href', '#/requests?state=active')
+    // No samples yet: no trend sentence to point at.
+    expect(active).not.toHaveAttribute('aria-describedby')
     expect(screen.getByRole('link', { name: 'Failed requests: 12. Show failed requests' })).toHaveAttribute('href', '#/requests?state=failed')
     expect(screen.getByRole('group', { name: 'Runtime summary' })).toBeInTheDocument()
   })
@@ -134,11 +147,16 @@ describe('overview cluster', () => {
     expect(tile('Failed')).toHaveTextContent('+3 since open')
     expect(tile('Failed').querySelector('.readout')).toHaveClass('fg-bad')
     expect(tile('Aborted').querySelector('.readout')).not.toHaveClass('fg-warn')
-    expect(readout('Queue')).toBe('1 / 0')
-    expect(tile('Queue')).toHaveTextContent('4 slots · max 64')
+    // Nothing new since open, and the start time lives in Runtime: blank sub-lines that keep their row.
+    expect(tile('Aborted').querySelector('.tile-sub')).toHaveTextContent(/^$/)
+    expect(tile('Uptime').querySelector('.tile-sub')).toHaveTextContent(/^$/)
+    expect(readout('Queue')).toBe('1 / 4')
+    expect(tile('Queue').querySelector('.tile-sub')).toHaveTextContent('0 pending · max 64')
     expect(screen.getByText('Throughput').parentElement).toHaveTextContent('Throughput 30 /min')
     expect(screen.getByText('Failure rate').parentElement).toHaveTextContent('10.0 %')
-    expect(screen.getByText('since page open · 1 min')).toBeInTheDocument()
+    // The window caption leads the derived strip, next to the figures it scopes.
+    expect(document.querySelector('.derived')!.firstElementChild).toHaveTextContent('since page open · 1 min')
+    expect(screen.getByRole('link', { name: /^Active requests/ })).toHaveAccessibleDescription('Active, last 1 min: low 0, high 2, now 0.')
   })
 
   it('shows collecting… before enough samples and Live is paused while off', () => {
@@ -149,13 +167,16 @@ describe('overview cluster', () => {
     expect(screen.getByText('Live is paused')).toBeInTheDocument()
   })
 
-  it('keeps last-known values under an overview fault with a strip and stale tags on every overview region', async () => {
+  it('keeps last-known values under an overview fault with an Issues row (no strip) and stale tags on every overview region', async () => {
     show(overview({ activity: { aborted: 4 } }))
     expect(screen.queryByText('stale')).not.toBeInTheDocument()
     raiseFault('overview', new Error('Dashboard request failed: 500'))
-    await waitFor(() => expect(screen.getByText(/Couldn't load Overview: Dashboard request failed: 500/)).toBeInTheDocument())
+    const issues = await screen.findByRole('region', { name: 'Issues' })
+    expect(within(issues).getByText('Couldn\'t load Overview')).toBeInTheDocument()
+    expect(within(issues).getByText('Dashboard request failed: 500')).toBeInTheDocument()
+    expect(within(issues).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
     expect(readout('Aborted')).toBe('4')
-    expect(document.querySelectorAll('.fault-strip')).toHaveLength(1)
+    expect(document.querySelector('.fault-strip')).not.toBeInTheDocument()
     expect(within(screen.getByRole('group', { name: 'Runtime summary' }).parentElement!).getByText('stale')).toHaveClass('tag-loud')
     for (const name of ['Quota', 'Authentication', 'Runtime'])
       expect(within(screen.getByRole('region', { name }).querySelector<HTMLElement>('.panel-meta')!).getByText('stale')).toHaveClass('tag-loud')
@@ -182,7 +203,10 @@ describe('overview quota', () => {
   it('renders pools, unlimited pools and the meta line', () => {
     show(overview())
     const panel = screen.getByRole('region', { name: 'Quota' })
-    expect(panel.querySelector('.panel-meta')).toHaveTextContent(/ok · resets 2026-12-01 · individual · fetched \d\d:\d\d:\d\d/)
+    const meta = panel.querySelector<HTMLElement>('.panel-meta')!
+    expect(meta).toHaveTextContent(/^resets 2026-12-01 · individual plan · fetched \d\d:\d\d:\d\d$/)
+    expect(meta.querySelector('.tag')).not.toBeInTheDocument()
+    expect(within(panel).getByRole('table')).toHaveClass('reflow-blocks')
     const premium = row('Quota', 'Premium')
     expect(premium).toHaveTextContent('812')
     expect(premium).toHaveTextContent('1,000')
@@ -191,8 +215,9 @@ describe('overview quota', () => {
     expect(within(premium).getByRole('meter', { name: 'Premium remaining' })).toHaveAttribute('aria-valuenow', '81.2')
     const chat = row('Quota', 'Chat')
     expect(within(chat).getByText('Unlimited')).toBeInTheDocument()
-    expect(within(chat).getAllByText('none')).toHaveLength(2)
-    expect(within(chat).getByText('No')).toBeInTheDocument()
+    // Unlimited pools have no overage: Entitlement, Percent and Overage are all empty.
+    expect(within(chat).getAllByText('none')).toHaveLength(3)
+    expect(within(chat).queryByText('No')).not.toBeInTheDocument()
     expect(within(chat).queryByRole('meter')).not.toBeInTheDocument()
   })
 
@@ -204,8 +229,9 @@ describe('overview quota', () => {
     expect(within(row('Quota', 'Completions')).getAllByText('none')).toHaveLength(4)
   })
 
-  it('notes stale values, and shows an empty state without data', async () => {
+  it('tags and notes stale values, and shows an empty state without data', async () => {
     const view = show(overview({ quota: quota({ status: 'stale' }) }))
+    expect(screen.getByRole('region', { name: 'Quota' }).querySelector('.panel-meta')).toHaveTextContent(/^stale resets 2026-12-01 · individual plan/)
     expect(screen.getByText('Showing last known values.')).toBeInTheDocument()
     view.unmount()
     show(overview({ quota: { status: 'unavailable' } }))
@@ -227,10 +253,10 @@ describe('overview on the M365 upstream', () => {
     const auth = screen.getByRole('region', { name: 'Authentication' })
     const services = within(auth).getAllByRole('row').slice(1).map(tr => tr.querySelector('td')!.textContent)
     expect(services).toEqual(['Microsoft 365', 'Accounts'])
-    expect(within(row('Authentication', 'Microsoft 365')).getByText('user@corp.com')).toBeInTheDocument()
+    expect(within(row('Authentication', 'Microsoft 365')).getByText('user@corp.com')).toHaveClass('mono')
     const quotaPanel = screen.getByRole('region', { name: 'Quota' })
-    expect(quotaPanel.querySelector('.panel-meta')).toHaveTextContent(NOT_APPLICABLE)
-    expect(within(quotaPanel).getAllByText(NOT_APPLICABLE)).toHaveLength(2)
+    expect(quotaPanel.querySelector('.panel-meta')!.textContent!.trim()).toBe('')
+    expect(within(quotaPanel).getAllByText(NOT_APPLICABLE)).toHaveLength(1)
     expect(within(quotaPanel).queryByRole('table')).not.toBeInTheDocument()
     expect(screen.getByText('All normal.')).toBeInTheDocument()
     expect(screen.getByText(/Microsoft 365 upstream/)).toBeInTheDocument()
@@ -238,23 +264,44 @@ describe('overview on the M365 upstream', () => {
 
   it('falls back to Broker account without an identity', () => {
     show(overview({ auth: { upstream: 'm365', github: { status: 'not_applicable', accountType: 'individual' } }, quota: { status: 'not_applicable' } }))
-    expect(within(row('Authentication', 'Microsoft 365')).getByText('Broker account')).toBeInTheDocument()
+    expect(within(row('Authentication', 'Microsoft 365')).getByText('Broker account')).not.toHaveClass('mono')
   })
 })
 
 describe('overview authentication and runtime', () => {
+  afterEach(() => vi.useRealTimers())
+
   it('adds the Copilot token line and flags a failed refresh', () => {
     show(overview({ auth: { copilot: { status: 'ok', modelsLoaded: true, expiresAt: '2026-11-05T14:30:00.000Z', lastRefreshSucceeded: false } } }))
     const copilot = row('Authentication', 'Copilot')
-    expect(copilot).toHaveTextContent(/models loaded\s*token expires \d\d:\d\d:\d\d/)
+    expect(copilot).toHaveTextContent(/models loaded\s*token expires \d\d:\d\d(?!:)/)
+    expect(within(copilot).getByText('models loaded')).not.toHaveClass('mono')
     expect(within(copilot).getByText('· last refresh failed')).toHaveClass('fg-warn')
-    expect(row('Authentication', 'GitHub')).toHaveTextContent('octocat')
+    expect(within(row('Authentication', 'GitHub')).getByText('octocat')).toHaveClass('mono')
+    expect(within(screen.getByRole('region', { name: 'Authentication' })).getByRole('table')).toHaveClass('reflow-blocks')
   })
 
-  it('shows the runtime facts with formatted numbers', () => {
+  it('reads Last check and Started as a clock time today and a full date on another day', () => {
+    const { lastValidatedAt } = overview().auth.github
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(lastValidatedAt!))
+    const view = show(overview())
+    const lastCheck = () => row('Authentication', 'GitHub').querySelector('[data-label="Last check"]')!
+    const started = () => within(screen.getByRole('region', { name: 'Runtime' })).getByText('Started').nextElementSibling!
+    expect(lastCheck()).toHaveTextContent(/^\d\d:\d\d:\d\d$/)
+    expect(started()).toHaveTextContent(/^\d\d:\d\d:\d\d$/)
+    view.unmount()
+    vi.setSystemTime(new Date(Date.parse(lastValidatedAt!) + 3 * 86_400_000))
+    show(overview())
+    expect(lastCheck()).toHaveTextContent(new Date(lastValidatedAt!).toLocaleString())
+    expect(started()).toHaveTextContent(new Date(overview().startedAt).toLocaleString())
+  })
+
+  it('shows the runtime facts with formatted numbers, leaving slots and pending to the Queue tile', () => {
     show(overview({ activity: { started: 1299, recentRequests: 2120 }, queue: { active: 1, concurrency: 4, pending: 0, maxPending: 64, modelCooldowns: 2, accountCooldown: true } }))
     const runtime = screen.getByRole('region', { name: 'Runtime' })
-    for (const [label, value] of [['Requests started', '1,299'], ['Recent finished', '2,120'], ['Upstream slots', '1 / 4'], ['Pending queue', '0 / 64'], ['Cooldowns', 'account + 2 models'], ['Version', '0.11.4']])
+    expect(Array.from(runtime.querySelectorAll('dt'), dt => dt.textContent)).toEqual(['Started', 'Requests started', 'Recent finished', 'Cooldown', 'Version'])
+    for (const [label, value] of [['Requests started', '1,299'], ['Recent finished', '2,120'], ['Cooldown', 'account + 2 models'], ['Version', '0.11.4']])
       expect(within(runtime).getByText(label).nextElementSibling).toHaveTextContent(value!)
   })
 })

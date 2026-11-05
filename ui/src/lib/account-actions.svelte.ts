@@ -17,8 +17,8 @@ export const page = { location: globalThis.location as Pick<Location, 'href' | '
 export const accountsUi = $state({
   /** `#accounts-status`: Set default / Remove outcomes. */
   status: { text: '', tone: '' } as StatusLine,
-  /** `#account-bootstrap-status`. */
-  bootstrapStatus: { text: 'The current account remains the default.', tone: '' } as StatusLine,
+  /** `#account-bootstrap-status`: progress and errors only. */
+  bootstrapStatus: { text: '', tone: '' } as StatusLine,
   /** `#account-bootstrap-hostname` draft; survives re-renders and remounts. */
   bootstrapHostname: '',
 })
@@ -101,16 +101,16 @@ export async function bootstrapRouting(hostname: string): Promise<void> {
   if (app.busy.bootstrap)
     return
   app.busy.bootstrap = true
-  accountsUi.bootstrapStatus = { text: 'Enabling named-account routing', tone: 'busy' }
+  accountsUi.bootstrapStatus = { text: 'Enabling named accounts', tone: 'busy' }
   try {
     const summary = await api.bootstrap({ hostname })
     clearFault('accounts')
-    accountsUi.bootstrapStatus = { text: 'The current account remains the default.', tone: '' }
+    accountsUi.bootstrapStatus = { text: '', tone: '' }
     redirectToBase(summary.baseHostname, page.location)
   }
   catch (error) {
     raiseFault('accounts', error)
-    accountsUi.bootstrapStatus = { text: `Named-account routing could not be enabled: ${faultMessage(error)}`, tone: 'error' }
+    accountsUi.bootstrapStatus = { text: `Named accounts could not be enabled: ${faultMessage(error)}`, tone: 'error' }
   }
   finally {
     app.busy.bootstrap = false

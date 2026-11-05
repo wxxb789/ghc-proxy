@@ -9,6 +9,7 @@
   import { formatClockOrDate, formatDuration } from '../../lib/format.ts'
   import { app } from '../../lib/store.svelte.ts'
   import { httpTone } from '../../lib/tone.ts'
+  import { fitViewport } from './fitViewport.ts'
   import { elapsed, isTicking } from './helpers.ts'
 
   interface Props {
@@ -29,7 +30,7 @@
 
   const { rows, total, selectedId, showAccount, now, fetchedAt, onselect, onpick, onclear }: Props = $props()
   // A mustache keeps the leading space that Svelte trims at the start of an `{#if}` block.
-  const PAUSED = ' · paused'
+  const PAUSED = ' (paused)'
   const columns = $derived(showAccount ? 8 : 7)
   const rowId = (target: EventTarget | null) => (target as Element).closest<HTMLElement>('[data-row]')?.dataset.id
 
@@ -75,7 +76,7 @@
 
 <div class='panel panel-flush req-list'>
   {#if fresh}<button type='button' class='btn secondary sm req-new' onclick={toTop}>↑ {fresh} new {fresh === 1 ? 'request' : 'requests'}</button>{/if}
-  <div class='table-scroll req-scroll' bind:this={scroller} onscroll={() => scroller.scrollTop || (fresh = 0)}>
+  <div class='table-scroll req-scroll' bind:this={scroller} {@attach fitViewport} onscroll={() => scroller.scrollTop || (fresh = 0)}>
     <table class='table no-reflow' role='grid' aria-label='Requests' aria-busy={!rows}>
       <thead>
         <tr><th>State</th><th class='num'>Started</th><th>Endpoint</th><th>Model</th><th class='c-hide'>Strategy</th>{#if showAccount}<th class='c-hide'>Account</th>{/if}<th class='num'>Status</th><th class='num'>Duration</th></tr>
@@ -97,6 +98,7 @@
         {:else}
           {#each rows as row (row.requestId)}
             {@const tone = httpTone(row.status)}
+            {@const frozen = !app.live && isTicking(row)}
             <tr data-row data-id={row.requestId} tabindex='-1' aria-selected={row.requestId === selectedId}>
               <td class='c-state'><Tag value={row.state} domain='request' /></td>
               <td class='c-time num' title={new Date(row.startedAt).toLocaleString()}>{formatClockOrDate(row.startedAt, now)}</td>
@@ -108,7 +110,7 @@
               <td class='c-hide mono'>{@render orNil(row.selectedStrategy)}</td>
               {#if showAccount}<td class='c-hide'>{@render orNil(row.accountName)}</td>{/if}
               <td class={['c-status num mono', tone === 'warn' && 'fg-warn', tone === 'bad' && 'fg-bad']}>{@render orNil(row.status)}</td>
-              <td class='c-dur num nowrap'>{formatDuration(elapsed(row, now, fetchedAt))}{#if !app.live && isTicking(row)}<span class='muted'>{PAUSED}</span>{/if}</td>
+              <td class={['c-dur num nowrap', frozen && 'muted']}>{formatDuration(elapsed(row, now, fetchedAt))}{#if frozen}<span class='sr-only'>{PAUSED}</span>{/if}</td>
             </tr>
           {:else}
             <tr>
@@ -129,7 +131,8 @@
 
 <style>
   .req-list { position: relative; }
-  .req-scroll { max-height: calc(100dvh - 260px); overflow-anchor: auto; container-type: inline-size; }
+  /* max-height comes from fitViewport. */
+  .req-scroll { overflow-anchor: auto; container-type: inline-size; }
   .req-new { position: absolute; top: 40px; left: 50%; z-index: 2; transform: translateX(-50%); box-shadow: var(--shadow-pop); }
   tr[data-row] > td { white-space: nowrap; }
   /* Model ids wrap only after a hyphen while the list is a table. */
@@ -152,7 +155,7 @@
     .c-state { grid-area: state; }
     .c-model { grid-area: model; overflow-wrap: anywhere; }
     .c-dur { grid-area: dur; }
-    .c-time { grid-area: time; }
+    tr[data-row] > .c-time { grid-area: time; text-align: left; }
     .c-endpoint { grid-area: endpoint; overflow: hidden; text-overflow: ellipsis; }
     .c-status { grid-area: status; }
   }

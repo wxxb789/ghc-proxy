@@ -7,7 +7,7 @@
   import Nil from '../../components/Nil.svelte'
   import Skeleton from '../../components/Skeleton.svelte'
   import Tag from '../../components/Tag.svelte'
-  import { formatDate, formatDuration, relTime } from '../../lib/format.ts'
+  import { formatClockOrDate, formatDuration, relTime } from '../../lib/format.ts'
   import { app } from '../../lib/store.svelte.ts'
   import { httpTone } from '../../lib/tone.ts'
   import { elapsed, isTicking } from './helpers.ts'
@@ -29,6 +29,8 @@
   const tone = $derived(httpTone(request?.status))
   const ratio = $derived(request && p50 && !isTicking(request) ? (request.durationMs / p50).toFixed(1) : '')
   const ago = $derived(request ? relTime(request.startedAt, now) : '')
+  // A mustache keeps the trailing space that Svelte trims at the end of an element.
+  const DURATION = 'Duration '
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Esc returns focus to the selected row, spec §8.4) -->
@@ -44,7 +46,7 @@
         <p class='row'>
           <Tag value={request.state} domain='request' />
           <span class={['mono', tone === 'warn' && 'fg-warn', tone === 'bad' && 'fg-bad']}>{#if tone}{request.status}{:else}<Nil />{/if}</span>
-          <span class='num'>{formatDuration(duration)}</span>
+          <span class='num'><span class='sr-only'>{DURATION}</span>{formatDuration(duration)}</span>
           {#if ratio}<span class='muted'>{ratio}× median</span>{/if}
         </p>
         {#if request.errorSummary}
@@ -92,8 +94,7 @@
         <section>
           <h3 class='placard'>Timing</h3>
           <dl class='kv'>
-            <Kv label='Started' value='{formatDate(request.startedAt)}{ago && ` (${ago})`}' />
-            <Kv label='Duration' value={formatDuration(duration)} />
+            <Kv label='Started' value='{formatClockOrDate(request.startedAt, now)}{ago && ` (${ago})`}' />
           </dl>
         </section>
         <details bind:open={app.ui.rawJsonOpen}>
@@ -114,8 +115,9 @@
   .id { grid-column: 1 / -1; }
   summary { cursor: pointer; margin-bottom: var(--s-2); color: var(--text-2); font-weight: 600; }
 
-  /* An aside beside the list (up to ~1640) stacks label over value so values keep whole words and lines. */
-  @container (max-width: 499px) {
+  /* A narrow label column keeps values on the label's line; only a very narrow aside stacks label over value. */
+  .kv :global(.kv-row) { grid-template-columns: 6rem minmax(0, 1fr); gap: var(--s-3); }
+  @container (max-width: 299px) {
     .kv :global(.kv-row) { grid-template-columns: minmax(0, 1fr); gap: 0; }
   }
 

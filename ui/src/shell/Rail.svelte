@@ -47,25 +47,31 @@
     {#each GROUPS as [group, views] (group)}
       <p class='placard'>{group}</p>
       {#each views as view (view)}
-        <a href='#/{view}' class='nav-item' aria-current={router.view === view ? 'page' : undefined} onclick={() => closeDrawer(false)}>
+        <a href='#/{view}' class='nav-item' aria-current={router.view === view ? 'page' : undefined}
+           aria-keyshortcuts={app.prefs.shortcuts ? String(VIEWS.indexOf(view) + 1) : undefined} onclick={() => closeDrawer(false)}>
           <Icon name={view as IconName} />
           <span class='nav-label'>{VIEW_LABEL[view]}</span>
           {#if view === 'requests' && active > 0}<Tag value='{active} active' tone='info' />{/if}
           {#if view === 'accounts' && health.accountsLamp}
             <span class='nav-lamp' title='As of {formatClock(app.loadedAt.accounts)}'><Lamp tone={health.accountsLamp} /><span class='sr-only'>{health.accountsLamp === 'bad' ? 'needs attention' : 'has warnings'}</span></span>
           {/if}
-          {#if app.prefs.shortcuts}<kbd>{VIEWS.indexOf(view) + 1}</kbd>{/if}
+          {#if app.prefs.shortcuts}<kbd aria-hidden='true'>{VIEWS.indexOf(view) + 1}</kbd>{/if}
         </a>
       {/each}
     {/each}
   </nav>
   <StatusList />
+  <!-- Operations first, then preferences; the groups are separated by spacing only. -->
   <div class='rail-foot'>
-    <div class='rail-live'><LiveToggle /></div>
-    <ThemeSwitch />
-    <RefreshMetadata />
-    <button type='button' class='btn ghost full' onclick={() => app.ui.shortcutsOpen = true}>
-      <Icon name='keyboard' />Keyboard shortcuts{#if app.prefs.shortcuts}<kbd>?</kbd>{/if}
-    </button>
+    <div class='rail-group'>
+      <div class='rail-live'><LiveToggle /></div>
+      <RefreshMetadata />
+    </div>
+    <div class='rail-group'>
+      <ThemeSwitch />
+      <button type='button' class='btn ghost full' onclick={() => app.ui.shortcutsOpen = true}>
+        <Icon name='keyboard' />Keyboard shortcuts{#if app.prefs.shortcuts}<kbd>?</kbd>{/if}
+      </button>
+    </div>
   </div>
 </div>

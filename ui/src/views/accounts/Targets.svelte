@@ -11,10 +11,10 @@
   import StatusText from '../../components/StatusText.svelte'
   import Tag from '../../components/Tag.svelte'
   import { accountsUi, clientBaseUrl, removeTarget, setDefault } from '../../lib/account-actions.svelte.ts'
-  import { formatClock, formatDate, formatQuotaPool, plural } from '../../lib/format.ts'
+  import { formatClock, formatDate, formatQuotaPool } from '../../lib/format.ts'
   import { isLoopbackHost } from '../../lib/redirect.ts'
   import { app } from '../../lib/store.svelte.ts'
-  import { quotaTone, statusText } from '../../lib/tone.ts'
+  import { quotaTone } from '../../lib/tone.ts'
 
   const accounts = $derived(app.data.accounts?.accounts ?? [])
   const unavailable = $derived(app.accountsMode === 'unavailable')
@@ -42,16 +42,8 @@
   }
 
   const pools = [['Chat', 'chat'], ['Completions', 'completions']] as const
-  const join = (parts: Array<string | false | undefined>) => parts.filter(Boolean).join(' · ')
-
-  function githubLine({ github }: DashboardAccount): string {
-    return join([`GitHub ${statusText(github.status)}`, github.lastValidatedAt && `validated ${formatClock(github.lastValidatedAt)}`, github.accountType])
-  }
-
-  function copilotLine({ copilot }: DashboardAccount): string {
-    const refresh = copilot.lastRefreshAt && `last refresh ${formatClock(copilot.lastRefreshAt)}${copilot.lastRefreshSucceeded === false ? ' failed' : ''}`
-    return join([`Copilot ${statusText(copilot.status)}`, refresh, copilot.expiresAt && `expires ${formatClock(copilot.expiresAt)}`])
-  }
+  /** An expression keeps the leading space: Svelte trims it at the start of a tag. */
+  const FAILED_SUFFIX = ' failed'
 </script>
 
 {#snippet meter(detail: DashboardQuotaDetail | undefined)}
@@ -60,7 +52,6 @@
 
 <Panel title='Targets' id='targets' flush scope='accounts'>
   {#snippet meta()}
-    {#if !unavailable && !loading}<span>{plural(accounts.length, 'target')}</span>{/if}
     <StatusText id='accounts-status' line={accountsUi.status} />
   {/snippet}
   {#if unavailable}
@@ -92,26 +83,28 @@
                 <td data-label='Health'>
                   {#if !m365}<span class='line'>GitHub <Tag value={account.github.status} domain='health' /></span>{/if}
                   <span class='line'>Copilot <Tag value={account.copilot.status} domain='health' /></span>
-                  <span class='sub'>{account.copilot.modelsLoaded ? 'models loaded' : 'models unavailable'}</span>
+                  {#if !account.copilot.modelsLoaded}<span class='sub'><span class='fg-warn'>models unavailable</span></span>{/if}
                 </td>
                 <td data-label='Quota'>
                   {#if quota.status !== 'ok'}<span class='line'><Tag value={quota.status} domain='health' /></span>{/if}
                   {#if quota.status !== 'not_applicable'}
                     <span class='line'>Premium {formatQuotaPool(quota.premiumInteractions)} {@render meter(quota.premiumInteractions)}</span>
-                    {#each pools as [label, key] (key)}
-                      <span class='line'>{label} {formatQuotaPool(quota[key])}</span>
-                    {/each}
+                    {#if quota.chat?.unlimited && quota.completions?.unlimited}
+                      <span class='line'>Chat · Completions Unlimited</span>
+                    {:else}
+                      {#each pools as [label, key] (key)}
+                        <span class='line'>{label} {formatQuotaPool(quota[key])}</span>
+                      {/each}
+                    {/if}
                     {#if quota.resetDate}<span class='sub'>Resets {formatDate(quota.resetDate)}</span>{/if}
                   {/if}
                 </td>
                 <td data-label='Actions' class='num'>
                   <div class='target-actions'>
-                    {#if account.isDefault}
-                      <button type='button' class='btn secondary sm' disabled>Default</button>
-                    {:else}
-                      <button type='button' class='btn secondary sm' disabled={!!busy} aria-busy={busy === 'default' || undefined} onclick={() => setDefault(account.name)}>Set default</button>
+                    {#if !account.isDefault}
+                      <button type='button' class='btn secondary sm set-default' disabled={!!busy} aria-busy={busy === 'default' || undefined} onclick={() => setDefault(account.name)}>Set default</button>
                     {/if}
-                    <ReasonButton class='danger sm' reason={removeReason(account)} busy={busy === 'remove'} title='Remove this account from ghc-proxy' onclick={() => removeTarget(account)}>Remove</ReasonButton>
+                    <ReasonButton class='danger sm remove' reason={removeReason(account)} busy={busy === 'remove'} onclick={() => removeTarget(account)}>Remove</ReasonButton>
                   </div>
                 </td>
               </tr>
@@ -119,19 +112,27 @@
                 {@const base = clientBaseUrl(account.hostname)}
                 <tr class='details'>
                   <td id='details-{account.name}' colspan='5'><div class='stack'>
-                    {#if m365}
-                      <p class='muted'>Use the Client base URL in the M365 Copilot target panel. M365 serves Anthropic Messages only.</p>
-                    {:else}
-                      <dl class='kv'>
-                        <div class='kv-row'><dt>Client base URL</dt><dd><CodeBlock text={base} label='Client base URL' /></dd></div>
-                        <div class='kv-row'><dt>OpenAI base URL</dt><dd><CodeBlock text='{base}/v1' label='OpenAI base URL' /></dd></div>
-                      </dl>
-                      {#if isLoopbackHost(account.hostname)}
-                        <a class='btn secondary' href='{base}/dashboard' target='_blank' rel='noreferrer'><Icon name='external' />Open this account's Dashboard<span class='sr-only'> (opens in new tab)</span></a>
+                    <div class='urls'>
+                      {#if m365}
+                        <a class='btn secondary' href='#/accounts?section=m365'>Open M365 settings</a>
+                      {:else}
+                        {#each [['Client base URL', base], ['OpenAI base URL', `${base}/v1`]] as [label, text] (label)}
+                          <div class='url'><span class='meta'>{label}</span><CodeBlock {text} {label} /></div>
+                        {/each}
+                        {#if isLoopbackHost(account.hostname)}
+                          <a class='btn secondary' href='{base}/dashboard' target='_blank' rel='noreferrer'><Icon name='external' />Open this account's Dashboard<span class='sr-only'> (opens in new tab)</span></a>
+                        {/if}
                       {/if}
-                    {/if}
-                    {#if !m365}<p class='meta'>{githubLine(account)}</p>{/if}
-                    <p class='meta'>{copilotLine(account)}</p>
+                    </div>
+                    <dl class='kv'>
+                      {#if !m365}
+                        <div class='kv-row'><dt>Validated</dt><dd>{#if account.github.lastValidatedAt}{formatClock(account.github.lastValidatedAt, false)}{:else}<Nil />{/if} · {account.github.accountType}</dd></div>
+                      {/if}
+                      <div class='kv-row'>
+                        <dt>Copilot refresh</dt>
+                        <dd>{#if account.copilot.lastRefreshAt}{formatClock(account.copilot.lastRefreshAt, false)}{:else}<Nil />{/if}{#if account.copilot.lastRefreshSucceeded === false}<span class='fg-warn'>{FAILED_SUFFIX}</span>{/if}{#if account.copilot.expiresAt}{` · expires ${formatClock(account.copilot.expiresAt, false)}`}{/if}</dd>
+                      </div>
+                    </dl>
                   </div></td>
                 </tr>
               {/if}
@@ -146,10 +147,11 @@
 </Panel>
 
 <style>
-  /* Buttons right-aligned on one line; a disabled reason reads below them, left-aligned and capped at ~28ch. */
+  /* Buttons right-aligned on one line (the default row leaves the Set default cell empty, so Remove stays aligned);
+     a disabled reason reads below them, left-aligned and capped at ~28ch. */
   .target-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--s-1) var(--s-2); }
-  .target-actions > :global(button:first-child) { grid-area: 1 / 2; }
-  .target-actions > :global(button:last-of-type) { grid-area: 1 / 3; }
+  .set-default { grid-area: 1 / 2; }
+  .target-actions > :global(.remove) { grid-area: 1 / 3; }
   .target-actions :global(.reason) { grid-column: 1 / -1; max-width: 28ch; margin: 0; text-align: left; }
   .disclosure { margin: var(--s-1) 0 0 -8px; }
   .disclosure :global(.icon) { transform: rotate(-90deg); }
@@ -157,8 +159,11 @@
   .line { display: flex; align-items: center; gap: var(--s-2); }
   .details > td { padding-bottom: var(--s-4); background: var(--bg-0); }
   .details .stack { gap: var(--s-3); }
+  /* URL blocks side by side under small captions, the Dashboard link inline at the end; the kv sits below. */
+  .urls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-2) var(--s-4); }
+  .url { display: grid; flex: 1 1 16rem; gap: var(--s-1); min-width: 0; max-width: 360px; }
   .details .kv { max-width: 720px; }
-  .details a { justify-self: start; }
+  .details .kv-row { min-height: 0; padding: 2px 0; }
   /* Cards (§5.3): name + actions, hostname, identity | health, quota; details below. ≤1100 rather than ≤900:
      beside the rail the five columns need about 710 px. */
   @media (max-width: 1100px) {
@@ -177,7 +182,10 @@
     .targets td[data-label='Actions'] { grid-area: auto; }
     .target-actions :global(.reason) { justify-self: auto; }
     .target-actions { grid-template-columns: 1fr 1fr; }
-    .target-actions > :global(button:first-child) { grid-area: 1 / 1; }
-    .target-actions > :global(button:last-of-type) { grid-area: 1 / 2; }
+    .set-default { grid-area: 1 / 1; }
+    .target-actions > :global(.remove) { grid-area: 1 / 2; }
+    /* The global reflow labels every cell; the name and the actions need no caption, as in the ≤1100 cards. */
+    .targets td:is(:first-child, :last-child)::before { content: none; }
+    .url { flex-basis: 100%; max-width: none; }
   }
 </style>

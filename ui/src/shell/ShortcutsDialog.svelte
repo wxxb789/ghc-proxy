@@ -2,11 +2,14 @@
   import { writeShortcutsEnabled } from '../lib/shortcuts.ts'
   import { app } from '../lib/store.svelte.ts'
 
-  const KEYS: Array<[string, string]> = [
+  // The checkbox switches only the single-key group; the second group always works.
+  const SINGLE_KEYS: Array<[string, string]> = [
     ['1 – 5', 'Overview, Requests, Accounts, Models, Behavior'],
     ['/', 'Focus the view filter (Requests, Models)'],
     ['l', 'Turn Live updates on or off'],
     ['?', 'Open this dialog'],
+  ]
+  const ALWAYS_KEYS: Array<[string, string]> = [
     ['Esc', 'Close a popover, the menu or a dialog; clear a filter'],
     ['↑ ↓ Home End', 'Move through table rows'],
   ]
@@ -35,10 +38,15 @@
 
 <dialog bind:this={dialog} class='dialog' aria-labelledby='shortcuts-h' {onclose}>
   <h2 id='shortcuts-h'>Keyboard shortcuts</h2>
-  <label class='check'><input type='checkbox' checked={app.prefs.shortcuts} onchange={toggle} />Single-key shortcuts</label>
-  <p class='hint'>Turns the single-character keys off. Arrow keys and Esc always work.</p>
-  <dl class='kv'>
-    {#each KEYS as [keys, action] (keys)}<div class='kv-row'><dt><kbd>{keys}</kbd></dt><dd>{action}</dd></div>{/each}
-  </dl>
+  <div class='shortcut-groups'>
+    <label class='check'><input type='checkbox' checked={app.prefs.shortcuts} onchange={toggle} />Single-key shortcuts</label>
+    <dl class={['kv', !app.prefs.shortcuts && 'is-off']}>
+      {#each SINGLE_KEYS as [keys, action] (keys)}<div class='kv-row'><dt><kbd>{keys}</kbd></dt><dd>{action}</dd></div>{/each}
+    </dl>
+    <p class='placard'>Always on</p>
+    <dl class='kv'>
+      {#each ALWAYS_KEYS as [keys, action] (keys)}<div class='kv-row'><dt><kbd>{keys}</kbd></dt><dd>{action}</dd></div>{/each}
+    </dl>
+  </div>
   <div class='dialog-actions'><button type='button' class='btn secondary' onclick={() => dialog.close()}>Close</button></div>
 </dialog>

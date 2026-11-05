@@ -106,7 +106,10 @@ describe('models view', () => {
     const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
     target.dispatchEvent(space)
     expect(space.defaultPrevented).toBe(true) // no page scroll
-    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    // The count lives only in the copy button; the status sits first in the one-row selection bar.
+    expect(copyButton()).toHaveTextContent('Copy selected (1)')
+    expect(screen.queryByText(/\d selected$/)).not.toBeInTheDocument()
+    expect(document.querySelector('.selection-bar')!.firstElementChild).toBe(status())
     expect(screen.getByRole('grid', { name: 'Models' })).toHaveAttribute('aria-multiselectable', 'true')
   })
 
@@ -122,7 +125,7 @@ describe('models view', () => {
     await user.click(row('gpt-5.4'))
     await clearStatus(() => user.click(row('mystery')))
     await clearStatus(() => user.click(screen.getByRole('checkbox', { name: 'Select all shown models' })))
-    await clearStatus(() => user.click(screen.getByRole('button', { name: 'Clear' })))
+    await clearStatus(() => user.click(screen.getByRole('button', { name: 'Clear selection' })))
     expect(copyButton()).toBeDisabled()
   })
 
@@ -167,8 +170,8 @@ describe('models view', () => {
     const user = setup()
     renderModels()
     const filter = screen.getByRole('searchbox', { name: 'Filter models' })
-    expect(count()).toHaveTextContent('4 of 4')
-    expect(document.querySelector('.view-meta')).toHaveTextContent('4 of 4 · for work · loaded 14:00:41')
+    expect(count()).toHaveTextContent(/^4 models$/)
+    expect(document.querySelector('.view-meta')).toHaveTextContent(/^4 models · loaded 14:00:41$/)
 
     await user.type(filter, 'OPUS')
     expect(rowIds()).toEqual(['claude-opus-5.5'])
@@ -191,7 +194,7 @@ describe('models view', () => {
 
     await user.keyboard('{Escape}')
     expect(filter).toHaveValue('')
-    expect(count()).toHaveTextContent('4 of 4')
+    expect(count()).toHaveTextContent(/^4 models$/)
     expect(location.hash).toBe('#/models')
     await user.keyboard('{Escape}')
     expect(filter).not.toHaveFocus()
@@ -249,7 +252,7 @@ describe('models view', () => {
     const user = setup()
     renderModels()
     await user.click(row('gpt-5.4'))
-    screen.getByRole('button', { name: 'Clear' }).focus()
+    screen.getByRole('button', { name: 'Clear selection' }).focus()
     await user.keyboard('{Enter}')
     expect(app.selection.models.length).toBe(0)
     await vi.waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Models' })).toHaveFocus())
@@ -259,18 +262,23 @@ describe('models view', () => {
     const twin = model({ id: 'gpt-5.4', name: 'GPT-5.4', vendor: 'OpenAI', upstream: { ...CATALOG[0]!.upstream, endpoints: ['/responses', '/responses'] } })
     renderModels([...CATALOG, twin])
     expect(rowIds()).toEqual(['claude-haiku-4.5', 'claude-opus-5.5', 'gpt-5.4', 'gpt-5.4', 'mystery'])
-    expect(count()).toHaveTextContent('5 of 5')
+    expect(count()).toHaveTextContent(/^5 models$/)
   })
 
   it('renders multi-line limits, capabilities, compatibility and the preview tag', () => {
     renderModels()
+    expect(Array.from(document.querySelectorAll('thead th'), header => header.textContent).slice(1))
+      .toEqual(['Model', 'Messages route', 'Upstream endpoints', 'Limits', 'Capabilities', 'Proxy compatibility'])
     const cells = [...row('claude-opus-5.5').querySelectorAll('td')]
-    expect(cells[1]).toHaveTextContent('claude-opus-5.5 Claude Opus 5.5 preview')
-    expect(cells[3]).toHaveTextContent('native-messages')
-    expect(Array.from(cells[4]!.querySelectorAll('.line'), line => line.textContent)).toEqual(['/v1/messages', '/chat/completions'])
-    expect(cells[5]).toHaveTextContent('context200,000prompt168,000output64,000')
-    expect(Array.from(cells[6]!.querySelectorAll('.tag-mono'), tag => tag.textContent)).toEqual(['tool_calls', 'vision', 'reasoning_effort'])
-    const compat = [...cells[7]!.querySelectorAll('.line')]
+    expect(cells[1]).toHaveTextContent(/^claude-opus-5\.5 Claude Opus 5\.5 preview · 2026-09-01$/)
+    expect(cells[2]).toHaveTextContent('native-messages')
+    expect(Array.from(cells[3]!.querySelectorAll('.line'), line => line.textContent)).toEqual(['/v1/messages', '/chat/completions'])
+    expect(cells[4]).toHaveTextContent('context200,000prompt168,000output64,000')
+    expect(Array.from(cells[5]!.querySelectorAll('.tag-mono'), tag => tag.textContent)).toEqual(['tool_calls', 'vision', 'reasoning_effort'])
+    // Card captions (≤560) stay only on the route, the endpoints and the compatibility lines.
+    expect(cells.map(cell => cell.dataset.label))
+      .toEqual([undefined, undefined, 'Messages route', 'Upstream endpoints', undefined, undefined, 'Proxy compatibility'])
+    const compat = [...cells[6]!.querySelectorAll('.line')]
     expect(compat.map(line => line.textContent)).toEqual([
       'responses native',
       'structured yes',
@@ -282,15 +290,71 @@ describe('models view', () => {
     expect(compat.filter(line => line.classList.contains('muted')).map(line => line.textContent)).toEqual(['filters none'])
   })
 
+  it('names the vendor on line 2 only when ungrouped and skips a name that repeats the id', async () => {
+    const user = setup()
+    renderModels([
+      ...CATALOG,
+      model({ id: 'o4-mini', vendor: 'OpenAI', preview: true }),
+      model({ id: 'bare', version: '' }),
+    ])
+    const sub = (id: string) => row(id).querySelector('.model .sub')
+    expect(document.querySelector('tr.vendor-group > th')).toHaveAttribute('colspan', '7')
+    expect(sub('claude-haiku-4.5')).toHaveTextContent(/^Claude Haiku 4\.5 · 2026-09-01$/)
+    expect(sub('gpt-5.4')).toHaveTextContent(/^2026-09-01$/) // "GPT-5.4" repeats the id
+    expect(sub('o4-mini')).toHaveTextContent(/^preview · 2026-09-01$/)
+    expect(sub('mystery')).toHaveTextContent(/^2026-09-01$/)
+    expect(sub('bare')).toBeNull()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Group vendor' }))
+    expect(sub('claude-haiku-4.5')).toHaveTextContent(/^Claude Haiku 4\.5 · Anthropic · 2026-09-01$/)
+    expect(sub('gpt-5.4')).toHaveTextContent(/^OpenAI · 2026-09-01$/)
+    expect(sub('mystery')).toHaveTextContent(/^2026-09-01$/)
+    expect(sub('bare')).toHaveTextContent(/^Anthropic$/)
+  })
+
+  it('counts the catalog plural-aware and shows "N of M" only while a filter is active', () => {
+    const { unmount } = renderModels([CATALOG[0]!])
+    expect(count()).toHaveTextContent(/^1 model$/)
+    unmount()
+    renderModels(CATALOG, '#/models?q=%20%20')
+    expect(count()).toHaveTextContent(/^4 models$/)
+  })
+
   it('shows the empty-cache state with a Refresh metadata action that follows the rail rules', () => {
     app.accountsMode = 'legacy'
-    renderModels([])
-    expect(count()).toHaveTextContent('0 of 0')
-    expect(screen.getByText('No models loaded for work.')).toBeInTheDocument()
+    const { unmount } = renderModels([])
+    expect(count()).toHaveTextContent(/^0 models$/)
+    expect(screen.getByText('No models loaded.')).toBeInTheDocument()
     expect(screen.getByText('Models appear after the Copilot catalog loads.')).toBeInTheDocument()
     const refresh = screen.getByRole('button', { name: 'Refresh metadata' })
     expect(refresh).toHaveAttribute('aria-disabled', 'true')
     expect(refresh).toHaveAccessibleDescription('Needs named accounts')
+    unmount()
+
+    // With a usable Refresh metadata the title and the action say it all.
+    app.accountsMode = 'routing'
+    renderModels([])
+    expect(screen.getByText('No models loaded.')).toBeInTheDocument()
+    expect(screen.queryByText('Models appear after the Copilot catalog loads.')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh metadata' })).not.toHaveAttribute('aria-disabled')
+    expect(screen.getByRole('checkbox', { name: 'Select all shown models' })).toBeDisabled()
+  })
+
+  it('fades the right edge while the catalog can scroll further sideways', () => {
+    renderModels()
+    const scroller = document.querySelector<HTMLElement>('.table-scroll')!
+    const frame = scroller.parentElement!
+    expect(frame).not.toHaveClass('more-right')
+    Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: 1200 })
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 900 })
+    Object.defineProperty(scroller, 'scrollLeft', { configurable: true, writable: true, value: 0 })
+    window.dispatchEvent(new Event('resize'))
+    flushSync()
+    expect(frame).toHaveClass('more-right')
+    scroller.scrollLeft = 300
+    scroller.dispatchEvent(new Event('scroll'))
+    flushSync()
+    expect(frame).not.toHaveClass('more-right')
   })
 
   it('shows the no-match state and clears the filter from it', async () => {

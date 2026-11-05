@@ -36,12 +36,11 @@
       Dedicated hostname
       <input id='account-bootstrap-hostname' class='mono' required maxlength='253' value={accountsUi.bootstrapHostname} oninput={event => accountsUi.bootstrapHostname = event.currentTarget.value} disabled={busy} aria-describedby='account-bootstrap-help' />
       <span id='account-bootstrap-help' class='help'>
-        {app.bootstrapSuggested && `The suggested hostname is ${app.bootstrapSuggested}. `}You can change this hostname before enabling.
-        {#if isLoopbackHost(base)}<span class='line'>After enabling, this page reopens at {baseDashboardUrl(base, page.location.href)}.</span>{/if}
+        The current account remains the default. {#if isLoopbackHost(base)}After enabling, this page reopens at {baseDashboardUrl(base, page.location.href)}.{/if}
       </span>
     </label>
     <div class='row'>
-      <button type='submit' class='btn primary' disabled={busy} aria-busy={busy || undefined}>Enable routing</button>
+      <button type='submit' class='btn primary' disabled={busy} aria-busy={busy || undefined}>Enable named accounts</button>
     </div>
     <StatusText id='account-bootstrap-status' line={accountsUi.bootstrapStatus} />
   </form>

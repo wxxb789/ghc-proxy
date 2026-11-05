@@ -1,4 +1,8 @@
+/// <reference types="node" />
 import type { BehaviorEffect, BehaviorResponse } from '@contract'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { render, screen, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -49,7 +53,8 @@ async function load(next: BehaviorResponse | Response = payload) {
   await refreshSelectedView('behavior')
 }
 
-const row = (label: string) => screen.getByText(label, { selector: 'dt' }).nextElementSibling as HTMLElement
+// The dt's full text, including the sr-only part a group subhead makes redundant on screen.
+const row = (label: string) => screen.getByText((_, element) => element?.tagName === 'DT' && element.textContent === label).nextElementSibling as HTMLElement
 const panel = (name: string) => screen.getByRole('region', { name })
 const bodyRows = () => within(panel('Effects since startup')).getAllByRole('row').slice(1)
 
@@ -74,10 +79,43 @@ describe('behavior view', () => {
     expect(row('Chat Completions strategies')).toHaveTextContent('chat-completions')
     expect(row('Native Responses filters')).toHaveTextContent('claude-* → temperature, top_p')
     expect(row('Native output token floor')).toHaveTextContent('1,024')
-    expect(row('Native context management')).toHaveTextContent('enabled · auto-compact on · threshold 0.8 · 3 models')
-    expect(row('Native context management')).toHaveAttribute('title', 'gpt-5, o3, o4')
+    // Every part is visible text (no tooltip): state, compaction, then the keyed model list in mono.
+    const context = row('Native context management')
+    expect(Array.from(context.querySelectorAll(':scope > .line'), line => line.textContent)).toEqual(['enabled', 'auto-compact on · threshold 0.8', 'models gpt-5, o3, o4'])
+    expect(context.querySelector('.mono')).toHaveTextContent(/^gpt-5, o3, o4$/)
+    expect(context).not.toHaveAttribute('title')
     expect(row('max_completion_tokens models')).toHaveTextContent('gpt-5, o3')
     expect(row('Unresolvable Responses items')).toHaveTextContent('filtered')
+  })
+
+  it('groups the strategy and Native Responses rows under subheads, keeping full names for AT', async () => {
+    await load(configured())
+    render(Behavior)
+    const groups = (name: string) => within(panel(name)).getAllByRole('heading', { level: 3 }).map(heading => [heading.textContent, heading.nextElementSibling?.querySelectorAll('dt').length])
+    expect(groups('Model routing')).toEqual([['Strategies', 3]])
+    expect(groups('Parameters and context')).toEqual([['Native Responses', 5]])
+    // Ungrouped rows come first so nothing after a subhead looks grouped; the subheaded block is last.
+    expect(within(panel('Parameters and context')).getAllByRole('term').map(term => term.textContent)).toEqual([
+      'Function apply_patch',
+      'Responses via Chat',
+      'max_completion_tokens models',
+      'Unresolvable Responses items',
+      'Native Responses filters',
+      'Replace defaults',
+      'Native output token floor',
+      'Native context management',
+      'Native remote image URLs',
+    ])
+    const visible = (term: HTMLElement) => [...term.childNodes].filter(node => !(node instanceof HTMLElement && node.classList.contains('sr-only'))).map(node => node.textContent).join('')
+    expect(visible(screen.getByText('Native Responses', { selector: '.sr-only' }).parentElement!)).toBe('filters')
+    expect(visible(row('Messages strategies').previousElementSibling as HTMLElement)).toBe('Messages')
+    expect(visible(row('Native remote image URLs').previousElementSibling as HTMLElement)).toBe('remote image URLs')
+  })
+
+  it('lists no context-management models as none', async () => {
+    await load()
+    render(Behavior)
+    expect(row('Native context management').lastElementChild).toHaveTextContent(/^models none$/)
   })
 
   it('renders none for empty lists', async () => {
@@ -109,7 +147,8 @@ describe('behavior view', () => {
     expect(row('Native remote image URLs')).toHaveTextContent(images)
     expect(row('Unresolvable Responses items')).toHaveTextContent(items)
     // Spec §4.3 plain-value colors: off words (`disabled`, `no`, `rejected`) are --text-3; `forwarded` stays --text-1.
-    const muted = (label: string) => row(label).querySelector('.muted') !== null
+    // The value's first element carries the tone (a multi-line value mutes every line).
+    const muted = (label: string) => row(label).firstElementChild!.classList.contains('muted')
     for (const label of ['Auto-correct', 'Replace defaults', 'Function apply_patch', 'Responses via Chat', 'Native context management'])
       expect(muted(label)).toBe(!on)
     expect(muted('Native remote image URLs')).toBe(on)
@@ -149,20 +188,24 @@ describe('behavior view', () => {
       ],
     }))
     render(Behavior)
+    // Line 2 of the effect cell; its `Category · ` prefix only shows in the ≤560 cards.
     expect(bodyRows().map(tr => tr.querySelector('.sub')?.textContent)).toEqual([
-      'recovery.retry',
-      'output.capped',
-      'routing.rewrite',
-      'output.alpha',
-      'output.lowered',
-      'recovery.fallback',
+      'Recovery · recovery.retry',
+      'Output · output.capped',
+      'Routing · routing.rewrite',
+      'Output · output.alpha',
+      'Output · output.lowered',
+      'Recovery · recovery.fallback',
     ])
+    expect(bodyRows()[0]!.querySelector('.sub .category-inline')).toHaveTextContent('Recovery ·')
+    // Cards are self-explanatory, so cells carry no reflow labels.
+    expect(within(panel('Effects since startup')).getByRole('table').querySelector('[data-label]')).toBeNull()
     const [top, , , zero] = bodyRows()
     expect(within(top!).getByRole('meter')).toHaveAttribute('aria-valuenow', '100')
     expect(top).toHaveTextContent('1,204')
     expect(zero).toHaveClass('zero')
     expect(within(zero!).queryByRole('meter')).not.toBeInTheDocument()
-    expect(within(panel('Effects since startup')).getByText('6 effects · 3 active')).toBeInTheDocument()
+    expect(within(panel('Effects since startup')).getByText('3 of 6 active')).toBeInTheDocument()
   })
 
   it('shows +N since open after counts rise and blank at 0', async () => {
@@ -183,7 +226,7 @@ describe('behavior view', () => {
     await userEvent.setup().click(screen.getByRole('checkbox', { name: 'Hide zero' }))
     expect(bodyRows()).toHaveLength(1)
     expect(screen.queryByText('Output tokens lowered')).not.toBeInTheDocument()
-    expect(screen.getByText('2 effects · 1 active')).toBeInTheDocument()
+    expect(screen.getByText('1 of 2 active')).toBeInTheDocument()
   })
 
   it('shows a fault strip and keeps last-known data marked stale', async () => {
@@ -194,5 +237,15 @@ describe('behavior view', () => {
     expect(screen.getAllByText(/Couldn't load Behavior/)).toHaveLength(1)
     expect(row('Auto-correct')).toHaveTextContent('enabled')
     expect(within(panel('Model routing')).getByText('stale')).toBeInTheDocument()
+  })
+})
+
+// Read from disk: Vitest does not process component CSS, and jsdom does no layout.
+describe('behavior view styles', () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'Behavior.svelte'), 'utf8').split('<style>')[1]!
+
+  it('marks a pressed Raw JSON toggle, including in forced colors', () => {
+    expect(css).toMatch(/\.btn\.raw-toggle\[aria-pressed='true'\] \{\s*background: var\(--accent-tint\);/)
+    expect(css).toMatch(/@media \(forced-colors: active\) \{\s*\.btn\.raw-toggle\[aria-pressed='true'\] \{\s*forced-color-adjust: none;\s*background: Highlight;/)
   })
 })

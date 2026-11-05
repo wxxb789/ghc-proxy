@@ -48,11 +48,10 @@ export function resetAccountsState(): void {
   app.m365.probeStarted = true
   Object.assign(app.deviceAuth, { busy: false, session: null })
   accountsUi.status = { text: '', tone: '' }
-  accountsUi.bootstrapStatus = { text: 'The current account remains the default.', tone: '' }
+  accountsUi.bootstrapStatus = { text: '', tone: '' }
   accountsUi.bootstrapHostname = ''
   resetAddForm()
   addForm.status = { text: '', tone: '' }
-  addForm.retryHint = false
   page.location = location
 }
 

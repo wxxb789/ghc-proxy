@@ -36,7 +36,8 @@
       : { label: 'Premium quota', value: statusText(quotaStatus), tone: toneOf('health', quotaStatus) }
     const cooldowns = formatCooldowns(queue)
     return [
-      { label: 'Upstream', value: `${auth.upstream === 'm365' ? 'Microsoft 365' : 'GitHub'} · ${overview.status}`, tone: overview.status === 'ok' ? 'ok' : 'warn' },
+      // Provider only: `overview.status` is the Copilot verdict, which the Copilot row shows.
+      { label: 'Upstream', value: auth.upstream === 'm365' ? 'Microsoft 365' : 'GitHub', tone: 'hollow' },
       ...(auth.upstream === 'm365' ? [] : [{ label: 'GitHub', value: statusText(auth.github.status), tone: toneOf('health', auth.github.status) }]),
       { label: 'Copilot', value: statusText(auth.copilot.status), tone: toneOf('health', auth.copilot.status) },
       quotaRow,

@@ -65,16 +65,22 @@ describe('add GitHub account: device authorization (T:431-450)', () => {
     const { fake } = await renderAccounts(routes())
     await submit()
     expect(fake.log.find(request => request.method === 'POST')!.body).toEqual({ accountName: 'Team', hostname: 'team.localhost', gheDomain: '' })
+    // The preview describes the Hostname field without joining its name.
+    expect(screen.getByRole('textbox', { name: 'Hostname' })).toHaveAccessibleDescription('Client base URL: http://team.localhost:4141')
     const card = document.getElementById('account-auth')!
     expect(card).toHaveTextContent('ABCD-1234')
     expect(card).not.toHaveTextContent('secret-device-code')
     expect(document.body).not.toHaveTextContent('device_code')
     expect(screen.getByRole('link', { name: /Open GitHub device login/ })).toHaveAttribute('href', 'https://github.com/login/device')
     expect(screen.getByRole('button', { name: 'Copy code' })).toHaveFocus()
+    // The tag says pending; no fallback sentence repeats it, and no lead text repeats the Copy code button.
     expect(card).toHaveTextContent('pending')
-    expect(card).toHaveTextContent('Waiting for authorization')
+    expect(card).not.toHaveTextContent('Waiting for authorization')
+    expect(card).not.toHaveTextContent('Copy this code')
     expect(card).toHaveTextContent('Code expires in 15:00')
     expect(status()).toHaveTextContent('Authorize in GitHub')
+    // The status reads in the submit row, beside the button.
+    expect(submitButton().parentElement).toContainElement(status())
   })
 
   it('renders no link for a non-https verification URI but still shows the code', async () => {
@@ -135,7 +141,7 @@ describe('add GitHub account: device authorization (T:431-450)', () => {
     await submit()
     await settle(DEVICE_AUTH_POLL_MS)
     expect(status()).toHaveTextContent('Authentication failed')
-    expect(screen.getByText('Check the details and select Authenticate with GitHub again.')).toBeInTheDocument()
+    expect(screen.queryByText(/select Authenticate with GitHub again/)).not.toBeInTheDocument()
     expect(document.getElementById('account-auth')).toHaveTextContent('The device code expired.')
     expect(submitButton()).not.toBeDisabled()
     expect((document.getElementById('account-name') as HTMLInputElement).value).toBe('Team')
@@ -157,6 +163,7 @@ describe('add GitHub account: device authorization (T:431-450)', () => {
 
   it('a start error reports in the status line', async () => {
     const { fake } = await renderAccounts({ ...routes(), 'POST /dashboard/api/accounts': () => jsonError(400, 'Account name is already in use.') })
+    expect(screen.getByRole('textbox', { name: 'Hostname' })).not.toHaveAttribute('aria-describedby')
     await submit()
     expect(status()).toHaveTextContent('Authentication could not start: Account name is already in use.')
     expect(faults.accounts?.message).toBe('Account name is already in use.')

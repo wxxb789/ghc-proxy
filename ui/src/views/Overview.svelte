@@ -1,5 +1,4 @@
 <script lang='ts'>
-  import FaultStrip from '../components/FaultStrip.svelte'
   import IssueRow from '../components/IssueRow.svelte'
   import Kv from '../components/Kv.svelte'
   import Lamp from '../components/Lamp.svelte'
@@ -7,7 +6,7 @@
   import Skeleton from '../components/Skeleton.svelte'
   import Tag from '../components/Tag.svelte'
   import ViewHeader from '../components/ViewHeader.svelte'
-  import { formatCooldowns, formatDate, formatDuration, formatNumber } from '../lib/format.ts'
+  import { formatClockOrDate, formatCooldowns, formatNumber } from '../lib/format.ts'
   import { health } from '../lib/health.svelte.ts'
   import { app, faults } from '../lib/store.svelte.ts'
   import AuthPanel from './overview/AuthPanel.svelte'
@@ -15,22 +14,23 @@
   import QuotaPanel from './overview/QuotaPanel.svelte'
 
   // Overview (spec §5.1): summary, Issues (warn/bad only), cluster, Quota + Authentication, Runtime.
+  // The overview fault has no strip here: its Issues row carries the message, since/count and Retry.
   const overview = $derived(app.data.overview)
+  // Slots and pending live in the Queue tile.
   const runtime = $derived.by(() => {
     if (!overview)
       return null
     const { activity } = overview
-    const queue = activity.upstreamQueue
     return [
-      ['Started', formatDate(overview.startedAt)],
+      ['Started', formatClockOrDate(overview.startedAt)],
       ['Requests started', formatNumber(activity.started)],
       ['Recent finished', formatNumber(activity.recentRequests)],
-      ['Upstream slots', `${formatNumber(queue.active)} / ${formatNumber(queue.concurrency)}`],
-      ['Pending queue', `${formatNumber(queue.pending)} / ${formatNumber(queue.maxPending)}`],
-      ['Cooldowns', formatCooldowns(queue)],
+      ['Cooldown', formatCooldowns(activity.upstreamQueue)],
       ['Version', overview.version],
     ]
   })
+  // The view's verdict is last-known while the connection is down, so it shows only while connected.
+  const connected = $derived(app.connection.state === 'connected')
   // Last-known overview data under an overview fault: every overview-fed region shows a stale tag.
   const stale = $derived(!!faults.overview && !!app.loadedAt.overview)
 </script>
@@ -39,21 +39,17 @@
   <ViewHeader title='Overview'>
     {#snippet meta()}
       {#if overview}
-        <Tag value={overview.status} domain='health' />
-        <span>· {overview.auth.upstream === 'm365' ? 'Microsoft 365' : 'GitHub'} upstream · up {formatDuration(overview.uptimeMs)}</span>
+        {#if connected}<Tag value={overview.status} domain='health' />{/if}
+        <span>{connected ? '· ' : ''}{overview.auth.upstream === 'm365' ? 'Microsoft 365' : 'GitHub'} upstream</span>
       {/if}
     {/snippet}
   </ViewHeader>
-  <p class='summary'><Lamp tone={health.summary.tone} />{health.summary.text}</p>
-  {#if overview && overview.auth.accounts.totalAccounts > 1}
-    <p class='meta'>Overview, quota and models reflect "{overview.auth.accounts.currentAccount}". Requests and Behavior cover every account.</p>
-  {/if}
+  <!-- A warn/bad issue (connection included) heads the Issues panel instead. -->
+  {#if !health.worst}<p class='summary'><Lamp tone={health.summary.tone} />{health.summary.text}</p>{/if}
 </div>
-<FaultStrip scope='overview' />
 <div class='grid-12'>
   {#if health.worst}
     <Panel title='Issues' id='issues' flush>
-      {#snippet meta()}{health.issues.length}{/snippet}
       <ul class='issue-list'>
         {#each health.issues as issue (issue.id)}<IssueRow {issue} />{/each}
       </ul>
@@ -65,7 +61,7 @@
   <Panel title='Runtime' id='runtime'>
     {#snippet meta()}{#if stale}<Tag value='stale' tone='warn' />{/if}{/snippet}
     {#if runtime}
-      <dl class='kv cols-3 runtime'>
+      <dl class='kv runtime'>
         {#each runtime as [label, value] (label)}<Kv {label} {value} mono={label === 'Version'} />{/each}
       </dl>
     {:else}
@@ -84,6 +80,11 @@
   @media (min-width: 1280px) {
     .col-quota { grid-column: span 7; }
     .col-auth { grid-column: span 5; }
+  }
+  /* ≥1280 one row of label-over-value cells; 901–1279 two kv columns; narrower stacks. */
+  @media (min-width: 1280px) {
+    .runtime { grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: var(--s-6); }
+    .runtime :global(.kv-row) { grid-template-columns: minmax(0, 1fr); gap: 0; border-bottom: 0; }
   }
   @media (min-width: 901px) and (max-width: 1279px) {
     .runtime { columns: 2; column-gap: var(--s-6); display: block; }

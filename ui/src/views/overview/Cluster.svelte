@@ -6,7 +6,7 @@
   import Skeleton from '../../components/Skeleton.svelte'
   import Sparkline from '../../components/Sparkline.svelte'
   import Tag from '../../components/Tag.svelte'
-  import { formatClock, formatDuration, formatNumber, formatPercent } from '../../lib/format.ts'
+  import { formatDuration, formatNumber, formatPercent } from '../../lib/format.ts'
   import { buckets, failureRate, peak, premiumUsed, sinceOpen, sparkRuns, sumDelta, throughput, windowMinutes } from '../../lib/samples.ts'
   import { app, samples } from '../../lib/store.svelte.ts'
 
@@ -23,9 +23,14 @@
   const minutes = $derived(span || '<1')
   const rate = $derived(throughput(list, now))
   const used = $derived(premiumUsed(list))
+  const activeRuns = $derived(sparkRuns(list, 'active', now))
 
   const rose = (key: SampleKey, tone: string) => sumDelta(list, key, now - 300_000) > 0 && tone
-  const sinceOpenText = (key: SampleKey) => `+${formatNumber(sinceOpen(samples.first, latest, key) ?? 0)} since open`
+  // Blank at zero: flat micro-bars already say nothing happened (the empty sub-line keeps its height).
+  const sinceOpenText = (key: SampleKey) => {
+    const count = sinceOpen(samples.first, latest, key) ?? 0
+    return count > 0 ? `+${formatNumber(count)} since open` : ''
+  }
 </script>
 
 {#snippet head(label: string, value: string, sub: string, rise?: string | false)}
@@ -42,11 +47,11 @@
 <div class='panel'>
   <div class='cluster' role='group' aria-label='Runtime summary'>
     <div class='tile'>
-      {@render head('Uptime', formatDuration(overview?.uptimeMs), `since ${formatClock(overview?.startedAt)}`)}
+      {@render head('Uptime', formatDuration(overview?.uptimeMs), '')}
     </div>
-    <a class='tile' href='#/requests?state=active' aria-label='Active requests: {formatNumber(activity?.activeRequests)}. Show active requests'>
+    <a class='tile' href='#/requests?state=active' aria-label='Active requests: {formatNumber(activity?.activeRequests)}. Show active requests' aria-describedby={activeRuns.flat().length ? 'active-trend' : undefined}>
       {@render head('Active', formatNumber(activity?.activeRequests), list.length < 2 ? 'collecting…' : `peak ${formatNumber(peak(list, 'active') ?? 0)} · ${minutes} min`)}
-      <Sparkline runs={sparkRuns(list, 'active', now)} label='Active' minutes={span} />
+      <Sparkline runs={activeRuns} label='Active' minutes={span} id='active-trend' />
     </a>
     <div class='tile'>
       {@render head('Completed', formatNumber(activity?.completed), `incl. ${formatNumber(activity?.failed)} failed`)}
@@ -61,15 +66,15 @@
       <MicroBars buckets={buckets(list, 'aborted', now)} tone='warn' />
     </div>
     <div class='tile'>
-      {@render head('Queue', `${formatNumber(queue?.active)} / ${formatNumber(queue?.pending)}`, `${formatNumber(queue?.concurrency)} slots · max ${formatNumber(queue?.maxPending)}`)}
+      {@render head('Queue', `${formatNumber(queue?.active)} / ${formatNumber(queue?.concurrency)}`, `${formatNumber(queue?.pending)} pending · max ${formatNumber(queue?.maxPending)}`)}
       <Sparkline runs={sparkRuns(list, 'qActive', now)} second={sparkRuns(list, 'qPending', now)} label='Queue' minutes={span} />
     </div>
   </div>
   <div class='derived'>
+    <p class='end'>{#if stale}<Tag value='stale' tone='warn' />{/if} {app.live ? `since page open · ${minutes} min` : 'Live is paused'}</p>
     <p><span class='placard'>Throughput</span> {#if rate === null}<Nil /> <span class='muted'>collecting…</span>{:else}{formatNumber(Math.round(rate * 10) / 10)} /min{/if}</p>
     <p><span class='placard'>Failure rate</span> {formatPercent(failureRate(list) ?? undefined)}</p>
     {#if used}<p><span class='placard'>Premium used</span> {formatNumber(used)}</p>{/if}
-    <p class='end'>{#if stale}<Tag value='stale' tone='warn' />{/if} {app.live ? `since page open · ${minutes} min` : 'Live is paused'}</p>
   </div>
 </div>
 

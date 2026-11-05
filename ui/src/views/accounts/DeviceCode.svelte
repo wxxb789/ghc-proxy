@@ -35,7 +35,7 @@
   <h3 id='account-auth-h'>Device code</h3>
   <ol class='steps stack'>
     <li>
-      <span class='row'>Copy this code
+      <span class='row'>
         <code class='user-code'>{session.authorization.userCode}</code>
         <button bind:this={copyButton} type='button' class='btn secondary sm' onclick={() => copyInto(copyStatus, session.authorization.userCode)}><Icon name='copy' />Copy code</button>
       </span>
@@ -46,7 +46,7 @@
     {/if}
     <li>
       Approve in GitHub, then return here.
-      <span class='row'><Tag value={session.state} domain='deviceAuth' /><span class='text-2'>{session.message || (pending ? 'Waiting for authorization' : '')}</span></span>
+      <span class='row'><Tag value={session.state} domain='deviceAuth' />{#if session.message}<span class='text-2'>{session.message}</span>{/if}</span>
       {#if pending}
         {#if remaining > 0}
           <span class='meta line'>Code expires in {formatCountdown(remaining)}</span>

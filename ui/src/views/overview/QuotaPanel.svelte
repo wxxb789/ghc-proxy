@@ -19,9 +19,11 @@
   const noData = $derived((q.status === 'stale' || q.status === 'unavailable') && pools.every(([, detail]) => !detail))
   const details = $derived([
     q.resetDate && `resets ${formatDate(q.resetDate)}`,
-    q.plan,
+    q.plan && `${q.plan} plan`,
     q.fetchedAt && `fetched ${formatClock(q.fetchedAt)}`,
-  ].filter(Boolean).map(text => ` · ${text}`).join(''))
+  ].filter(Boolean).join(' · '))
+  // Only a fetch problem gets a tag: a green "ok" would read as a verdict on the meters below.
+  const fetchProblem = $derived(q.status === 'stale' || q.status === 'unavailable')
 </script>
 
 {#snippet cell(label: string, value: string | false | undefined, numeric = true)}
@@ -31,7 +33,7 @@
 <Panel title='Quota' id='quota' flush>
   {#snippet meta()}
     {#if stale}<Tag value='stale' tone='warn' />{/if}
-    {#if !loaded}{:else if q.status === 'not_applicable'}{NOT_APPLICABLE}{:else}<span><Tag value={q.status} domain='health' />{details}</span>{/if}
+    {#if loaded && q.status !== 'not_applicable'}<span>{#if fetchProblem}<Tag value={q.status} domain='health' />{/if} {details}</span>{/if}
   {/snippet}
   {#if !loaded}
     <div class='pad' aria-busy='true'><Skeleton lines={3} /></div>
@@ -41,7 +43,7 @@
     <EmptyState title='No quota data yet.' />
   {:else}
     <div class='table-scroll'>
-      <table class='table'>
+      <table class='table reflow-blocks'>
         <thead><tr><th scope='col'>Pool</th><th scope='col' class='num'>Remaining</th><th scope='col' class='num'>Entitlement</th><th scope='col' class='num'>Percent</th><th scope='col'>Overage</th></tr></thead>
         <tbody>
           {#each pools as [label, detail] (label)}
@@ -53,7 +55,7 @@
               <td data-label='Percent' class='num'>
                 {#if limited && Number.isFinite(detail.percentRemaining)}<Meter value={detail.percentRemaining} label='{label} remaining' tone={quotaTone(detail)} /> {formatPercent(detail.percentRemaining)}{:else}<Nil />{/if}
               </td>
-              {@render cell('Overage', detail && (detail.overagePermitted ? 'Allowed' : 'No'), false)}
+              {@render cell('Overage', limited && (detail.overagePermitted ? 'Allowed' : 'No'), false)}
             </tr>
           {/each}
         </tbody>

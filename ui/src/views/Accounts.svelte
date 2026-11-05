@@ -8,14 +8,8 @@
 
   const accounts = $derived(app.data.accounts)
   const mode = $derived(app.accountsMode)
-  // Composed summary strings keep the legacy `-` placeholder (pins).
-  const summary = $derived(mode === 'unavailable'
-    ? 'Named-account management is unavailable'
-    : !accounts
-    ? ''
-    : accounts.routingEnabled
-    ? `Base ${accounts.baseHostname || '-'} / default ${accounts.defaultAccount || '-'}`
-    : `Legacy default ${accounts.defaultAccount || '-'} / routing not enabled`)
+  // Only the routing base hostname: the default is tagged in Targets, and the legacy and 409 states explain themselves below.
+  const summary = $derived(mode === 'routing' && accounts ? `Base hostname ${accounts.baseHostname || '-'}` : '')
   const formSlot = $derived(mode === 'routing' || mode === 'legacy')
 </script>
 
@@ -31,9 +25,9 @@
 </div>
 
 <style>
-  /* Side by side only at ≥1440 (§5.3); the foundation span-5/7 split already at 1280. */
+  /* Side by side only at ≥1440 (§5.3): the short Add form takes 4 columns, so the M365 panel keeps two inner columns. */
   @media (min-width: 1440px) {
-    .add-slot { grid-column: span 5; }
-    .m365-slot { grid-column: span 7; }
+    .add-slot { grid-column: span 4; }
+    .m365-slot { grid-column: span 8; }
   }
 </style>
