@@ -745,38 +745,39 @@ async function probeCredentialStoreMigrationContract(): Promise<void> {
   }
 }
 
+const DASHBOARD_ASSET_REFERENCE_RE = /\s(?:src|href)="(\/dashboard\/[^"]+)"/g
+
 async function probeDashboardBundleContract(): Promise<void> {
   const app = createDashboardRoutes()
-  const [htmlResponse, cssResponse, jsResponse, accountsResponse] = await Promise.all([
+  const [shellResponse, accountsResponse] = await Promise.all([
     app.handle(new Request('http://localhost/dashboard')),
-    app.handle(new Request('http://localhost/dashboard/styles.css')),
-    app.handle(new Request('http://localhost/dashboard/app.js')),
     app.handle(new Request('http://localhost/dashboard/api/accounts')),
   ])
 
-  assertProbe(htmlResponse.status === 200, `dashboard HTML returned ${htmlResponse.status}`)
-  assertProbe(cssResponse.status === 200, `dashboard CSS returned ${cssResponse.status}`)
-  assertProbe(jsResponse.status === 200, `dashboard JS returned ${jsResponse.status}`)
+  assertProbe(shellResponse.status === 200, `dashboard shell returned ${shellResponse.status}; the UI was not embedded`)
   assertProbe(
     accountsResponse.status === 409,
     `dashboard account management availability returned ${accountsResponse.status}`,
   )
+  const csp = shellResponse.headers.get('content-security-policy') ?? ''
+  assertProbe(csp.includes('script-src \'self\'') && !csp.includes('unsafe-'), 'dashboard shell lost its strict CSP')
 
-  const [html, css, js] = await Promise.all([
-    htmlResponse.text(),
-    cssResponse.text(),
-    jsResponse.text(),
-  ])
-  assertProbe(html.includes('/dashboard/styles.css'), 'dashboard HTML lost its CSS route')
-  assertProbe(html.includes('/dashboard/app.js'), 'dashboard HTML lost its JS route')
-  assertProbe(html.includes('data-tab="accounts"'), 'dashboard HTML lost its Accounts view')
-  assertProbe(html.includes('id="account-bootstrap-form"'), 'dashboard HTML lost legacy routing bootstrap')
-  assertProbe(css.includes('.app-header'), 'dashboard CSS was not bundled')
-  assertProbe(css.includes('.account-auth[hidden]'), 'dashboard CSS lost hidden auth state')
-  assertProbe(js.includes('fetchJson(\'/dashboard/api/overview\')'), 'dashboard JS was not bundled')
-  assertProbe(js.includes('/dashboard/api/accounts/bootstrap'), 'dashboard JS lost legacy routing bootstrap')
-  assertProbe(js.includes('/dashboard/api/accounts/default'), 'dashboard JS lost default-account management')
-  assertProbe(!js.includes('innerHTML'), 'dashboard JS uses unsafe HTML insertion')
+  const html = await shellResponse.text()
+  const references = Array.from(html.matchAll(DASHBOARD_ASSET_REFERENCE_RE), match => match[1] ?? '')
+  assertProbe(references.some(reference => reference.endsWith('.js')), 'dashboard shell lost its script reference')
+  assertProbe(references.some(reference => reference.endsWith('.css')), 'dashboard shell lost its stylesheet reference')
+
+  for (const reference of references) {
+    const response = await app.handle(new Request(new URL(reference, 'http://localhost/dashboard').href))
+    assertProbe(response.status === 200, `dashboard asset ${reference} returned ${response.status}`)
+    const expectedType = reference.endsWith('.css') ? 'text/css' : 'text/javascript'
+    assertProbe(
+      response.headers.get('content-type')?.startsWith(expectedType) === true,
+      `dashboard asset ${reference} has content type ${response.headers.get('content-type')}`,
+    )
+    assertProbe(response.headers.get('cache-control') === 'no-store', `dashboard asset ${reference} is cacheable`)
+    assertProbe((await response.text()).length > 0, `dashboard asset ${reference} is empty`)
+  }
 }
 
 async function probeDashboardNodeListenerBoundary(): Promise<void> {
@@ -789,7 +790,7 @@ async function probeDashboardNodeListenerBoundary(): Promise<void> {
 
     const loopback = await requestDashboard('127.0.0.1', port)
     assertProbe(loopback.status === 200, `loopback dashboard request returned ${loopback.status}`)
-    assertProbe(loopback.body.includes('/dashboard/styles.css'), 'loopback dashboard response lost its HTML')
+    assertProbe(loopback.body.includes('/dashboard/assets/app.js'), 'loopback dashboard response lost its HTML')
 
     const remoteAddress = firstNonLoopbackIpv4Address()
     if (remoteAddress) {

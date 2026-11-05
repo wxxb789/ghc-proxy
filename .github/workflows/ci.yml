@@ -84,6 +84,9 @@ jobs:
           --path-ignore-patterns='**/token-refresh-retry.test.ts'
           && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts
 
+      - name: Run Dashboard UI tests
+        run: bun run test:ui
+
   build:
     runs-on: ubuntu-latest
     steps:

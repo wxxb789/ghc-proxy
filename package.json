@@ -28,9 +28,11 @@
     "node": ">=26"
   },
   "scripts": {
-    "build": "tsdown && bun run build:msc-auth",
+    "build": "bun run build:ui && tsdown && bun run build:msc-auth",
     "build:msc-auth": "bun scripts/build-msc-auth.mjs",
+    "build:ui": "bun scripts/build-ui.ts",
     "dev": "bun run --watch ./src/main.ts start",
+    "dev:ui": "vite --config ui/vite.config.ts",
     "knip": "knip-bun",
     "lint": "eslint --cache",
     "lint:all": "eslint --cache .",
@@ -46,7 +48,8 @@
     "smoke:translation": "bun run scripts/smoke/translation.ts",
     "serve": "NODE_ENV=production bun run ./src/main.ts start --wait --idle-timeout=255 --upstream-timeout=1800",
     "start": "NODE_ENV=production bun scripts/build-msc-auth.mjs --start",
-    "typecheck": "npx tsc --project tsconfig.json"
+    "test:ui": "vitest run --root ui",
+    "typecheck": "npx tsc --project tsconfig.json && svelte-check --workspace ui --tsconfig ./tsconfig.json --fail-on-warnings"
   },
   "dependencies": {
     "@elysiajs/cors": "^1.4.2",
@@ -61,16 +64,28 @@
   },
   "devDependencies": {
     "@antfu/eslint-config": "^7.7.3",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/svelte": "5.4.2",
+    "@testing-library/user-event": "14.6.8",
     "@types/bun": "^1.4.0",
     "@types/proxy-from-env": "^1.0.4",
     "bumpp": "^11.1.0",
     "eslint": "^10.9.1",
+    "eslint-plugin-svelte": "3.23.1",
     "gpt-tokenizer": "^3.4.0",
+    "jsdom": "30.1.3",
     "knip": "^5.88.1",
     "lint-staged": "^17.3.0",
     "simple-git-hooks": "^2.13.1",
+    "svelte": "5.57.3",
+    "svelte-check": "4.7.7",
+    "svelte-eslint-parser": "1.10.0",
     "tsdown": "^0.22.14",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
   },
   "simple-git-hooks": {
     "pre-commit": "bunx lint-staged"

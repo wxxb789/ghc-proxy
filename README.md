@@ -561,9 +561,10 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/dashboard` | Dashboard application |
-| `GET` | `/dashboard/styles.css` | Dashboard stylesheet |
-| `GET` | `/dashboard/app.js` | Dashboard client script |
+| `GET` | `/dashboard` | Dashboard application (views are addressed by the URL hash, e.g. `/dashboard#/accounts`) |
+| `GET` | `/dashboard/assets/app.js` | Dashboard client script |
+| `GET` | `/dashboard/assets/app.css` | Dashboard stylesheet |
+| `GET` | `/dashboard/theme-init.js` | Dashboard theme bootstrap script (runs before first paint) |
 | `GET` | `/dashboard/api/overview` | Process, authentication, quota, request, and queue summary |
 | `GET` | `/dashboard/api/models` | Upstream model metadata and effective proxy capabilities |
 | `GET` | `/dashboard/api/behavior` | Active routing, compatibility policies, strategies, and effect counters |
@@ -750,6 +751,10 @@ bun run dev              # Start with --watch
 bun run start
 ```
 
+A source checkout serves the Dashboard only after `bun run build:ui` (or a full
+`bun run build`) has embedded it; until then `/dashboard` answers `503` with
+that instruction. The JSON API under `/dashboard/api/` works either way.
+
 On Windows, `bun run start --port 4141` also prepares `dist/msc-auth/msc-auth.exe`
 and `msalruntime.dll` before loading the production-style source CLI. Repeated
 starts reuse an unchanged payload. The helper's compiler prerequisites are source
@@ -761,10 +766,13 @@ tooling only; a release or complete explicit helper payload does not need .NET.
 bun install              # Install dependencies, including build-time tokenizer sources
 bun run dev              # Start with --watch
 bun run start            # Start without --watch
-bun run build            # Build with tsdown
+bun run build            # Build the Dashboard UI, then bundle with tsdown
+bun run build:ui         # Build and embed only the Dashboard UI (Svelte + Vite)
+bun run dev:ui           # Vite dev server for the Dashboard; proxies /dashboard/api to 127.0.0.1:4141
 bun run lint             # ESLint
-bun run typecheck        # tsc --noEmit
+bun run typecheck        # tsc --noEmit plus svelte-check for ui/
 bun test                 # Run tests
+bun run test:ui          # Dashboard UI tests (Vitest + jsdom)
 bun run matrix:live      # Real Copilot upstream compatibility matrix
 bun run matrix:live --vision-only --all-responses-models --json
 bun run matrix:live --stateful-only --json --model=gpt-5.2-codex

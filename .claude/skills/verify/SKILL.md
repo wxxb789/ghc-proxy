@@ -13,6 +13,7 @@ bun run lint:all \
     --path-ignore-patterns='**/token-file-removal.test.ts' \
     --path-ignore-patterns='**/token-refresh-retry.test.ts' \
   && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts \
+  && bun run test:ui \
   && bun run build \
   && bun run smoke:packaged
 ```

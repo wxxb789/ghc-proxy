@@ -70,3 +70,12 @@ Tracked items for future work. Items are roughly ordered by priority.
     - Confirm the exact set of Anthropic-supported document source variants and their fields against the current Messages API spec (`text | base64 | url | content | file` differ per type). A precise union that omits a real variant would 400 otherwise-valid requests.
     - Check whether the loose `Record<string, unknown>` is deliberate forward-compat passthrough; the point-of-use narrowing may already make the leak acceptable.
     - Weigh the type-design blast radius (this type feeds multiple translation paths) against the parse-don't-validate benefit before committing.
+
+## Dead-Code Candidates
+
+Recorded during other work; revalidate before removing.
+
+- [ ] **`POST /dashboard/api/m365/remove` has no client**
+  - Handler: `src/routes/dashboard/route.ts` (`.post('/dashboard/api/m365/remove', …)`), calling `AccountManager.removeM365Target()`.
+  - Neither the pre-Svelte Dashboard (`src/routes/dashboard/assets.ts` at `e4551e7`) nor the Svelte UI in `ui/` calls it; the Svelte UI removes the M365 target through `DELETE /dashboard/api/accounts/m365`. No test or doc references the route.
+  - `removeM365Target()` itself stays in use (`src/accounts/manager.ts`, account removal path). Removal would only drop the route and must keep the Dashboard API contract tests green.

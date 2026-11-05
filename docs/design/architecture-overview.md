@@ -18,6 +18,7 @@ ghc-proxy is an API translation proxy that converts GitHub Copilot's API into Op
 | Token Counting  | gpt-tokenizer                   |
 | SSE Streaming   | fetch-event-stream              |
 | Build Tool      | tsdown                          |
+| Dashboard UI    | Svelte 5 + Vite, build-time only (embedded into `dist/`) |
 | Linting         | ESLint (@antfu/eslint-config)   |
 | Published As    | `ghc-proxy` npm package          |
 
@@ -32,6 +33,13 @@ from this consumer contract.
 uses Elysia's default Bun adapter or lazily loads `@elysiajs/node` once on Node.
 The outbound proxy setup in `src/cli/proxy.ts` likewise loads `undici` only on
 Node. Both optional import paths ship as separate `dist/` chunks.
+
+The Dashboard UI does not change this contract. Svelte, Vite, and the UI test
+tooling are devDependencies used only by `bun run build:ui`, which embeds the
+built HTML, JavaScript, and CSS as strings in a generated TypeScript module.
+That module is runtime-neutral, is imported lazily on the first Dashboard
+request, and ships as its own `dist/` chunk. The packaged CLI has no frontend
+runtime dependency and reads no asset files.
 
 Production startup and listener-based selfchecks call `listenRuntimeServer()`.
 It resolves only after binding and returns the actual `port`, `url`, and an
@@ -155,7 +163,7 @@ Root OpenAI-compatible routes are mirrored under `/v1`. Anthropic Messages is
 | `GET /token` | Proxy | Return the current Copilot token state |
 | `GET /usage` | Proxy | Fetch Copilot quota/usage statistics |
 | `GET /health` | Proxy | Health state (`status`, `copilotToken`, `modelsLoaded`, `version`) |
-| `GET /dashboard` and `/dashboard/{styles.css,app.js}` | Proxy UI | Loopback-guarded operational Dashboard assets |
+| `GET /dashboard`, `/dashboard/assets/{app.js,app.css}`, and `/dashboard/theme-init.js` | Proxy UI | Loopback-guarded operational Dashboard shell and embedded assets |
 | `GET /dashboard/api/{overview,models,behavior,requests}` | Proxy UI | Sanitized Dashboard data projections |
 
 `GET /` is a minimal liveness response. Dashboard routes do not run through the

@@ -3,6 +3,15 @@ import antfu from '@antfu/eslint-config'
 export default antfu({
   type: 'app',
   stylistic: true,
+  componentExts: ['svelte'],
+  svelte: {
+    overrides: {
+      // The Dashboard CSP (style-src 'self') blocks inline style attributes.
+      'svelte/no-inline-styles': 'error',
+      'svelte/no-at-html-tags': 'error',
+      'svelte/require-each-key': 'error',
+    },
+  },
   ignores: [
     'dist/**',
     'node_modules/**',
@@ -19,4 +28,12 @@ export default antfu({
     '.claude/workflows/**',
     'docs/upgrade-plan.md',
   ],
+}, {
+  // Motion lives in the external stylesheet; Svelte transitions are banned (spec §3.8).
+  files: ['ui/**'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      paths: ['svelte/transition', 'svelte/animate', 'svelte/motion'].map(name => ({ name, message: 'Use CSS classes and @keyframes in app.css instead.' })),
+    }],
+  },
 })

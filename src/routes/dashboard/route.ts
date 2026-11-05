@@ -1,20 +1,21 @@
+import type { EmbeddedUi } from './embedded-ui'
 import type { DashboardQuotaCache } from './handler'
 import type { DashboardMetadataRefreshService } from './metadata-refresh'
+
 import type {
   AccountAuthenticationSession,
   AccountManagementSnapshot,
   AddAccountInput,
 } from '~/accounts/manager'
-
 import { Elysia } from 'elysia'
-import { z } from 'zod'
 
+import { z } from 'zod'
 import { AccountManagementError } from '~/accounts/manager'
 import { signInMscAccount } from '~/clients/msc-auth'
 import { m365EndpointSchema } from '~/lib/m365-endpoints'
 import { isLoopbackAddress, resolveRequestPeer } from '~/lib/peer'
 import { RECENT_REQUEST_LIMIT } from '~/observability/request-store'
-import { DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS } from './assets'
+import { DASHBOARD_UI_ASSET_PATHS, DASHBOARD_UI_INDEX_PATH, loadEmbeddedUi } from './embedded-ui'
 
 import {
   dashboardQuotaCache,
@@ -99,31 +100,28 @@ interface DashboardRouteOptions {
   metadataRefresher?: DashboardMetadataRefreshService
   quotaCache?: DashboardQuotaCache
   serverPort?: number
+  /** Test seam: a fixed UI manifest, or `null` for an unbuilt checkout. */
+  ui?: EmbeddedUi | null
 }
 
 export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
   const accountManager = options.accountManager
   const metadataRefresher = options.metadataRefresher ?? dashboardMetadataRefresher
   const quotaCache = options.quotaCache ?? dashboardQuotaCache
+  const resolveUi = async () => options.ui === undefined ? await loadEmbeddedUi() : options.ui ?? undefined
 
-  return new Elysia({ name: 'dashboard' })
+  const app = new Elysia({ name: 'dashboard' })
     .onBeforeHandle(({ request, server }) => {
       const peer = resolveRequestPeer(request, server)
       return rejectDashboardAccess(request, peer.address, peer.live)
     })
-    .get('/dashboard', () => assetResponse(
-      DASHBOARD_HTML,
-      'text/html; charset=utf-8',
-      { 'content-security-policy': DASHBOARD_CSP },
-    ))
-    .get('/dashboard/styles.css', () => assetResponse(
-      DASHBOARD_CSS,
-      'text/css; charset=utf-8',
-    ))
-    .get('/dashboard/app.js', () => assetResponse(
-      DASHBOARD_JS,
-      'text/javascript; charset=utf-8',
-    ))
+    .get('/dashboard', async () => {
+      const ui = await resolveUi()
+      if (!ui)
+        return dashboardUiNotBuilt()
+      const index = ui[DASHBOARD_UI_INDEX_PATH]
+      return assetResponse(index.content, index.contentType, { 'content-security-policy': DASHBOARD_CSP })
+    })
     .get('/dashboard/api/overview', async () =>
       apiResponse(await getDashboardOverview(
         quotaCache,
@@ -321,6 +319,18 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         return accountManagementError(error)
       }
     })
+
+  // Exact asset routes (no wildcard): typos under /dashboard/ stay 404s.
+  for (const path of DASHBOARD_UI_ASSET_PATHS) {
+    app.get(path, async () => {
+      const ui = await resolveUi()
+      if (!ui)
+        return apiError('Dashboard UI is not built.', 503)
+      const asset = ui[path]
+      return assetResponse(asset.content, asset.contentType)
+    })
+  }
+  return app
 }
 
 async function getDashboardAccounts(
@@ -394,6 +404,21 @@ function assetResponse(
       'content-type': contentType,
     },
   })
+}
+
+function dashboardUiNotBuilt(): Response {
+  return new Response(
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Dashboard not built</title></head>'
+    + '<body><h1>Dashboard not built</h1><p>Run <code>bun run build:ui</code> to build the Dashboard in a source checkout.</p></body></html>',
+    {
+      status: 503,
+      headers: {
+        ...BASE_HEADERS,
+        'content-type': 'text/html; charset=utf-8',
+        'content-security-policy': DASHBOARD_CSP,
+      },
+    },
+  )
 }
 
 function accountManagementUnavailable(): Response {
