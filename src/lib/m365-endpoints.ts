@@ -1,9 +1,10 @@
 import { z } from 'zod'
 
-export const M365_DEFAULT_ENDPOINT = 'https://df.loki.delve.office.com/api/v1/llmapi'
+export const M365_DEFAULT_ENDPOINT = 'https://loki.delve.office.com/api/v1/llmapi'
 
 export const M365_BUILTIN_ENDPOINTS: readonly string[] = [
   M365_DEFAULT_ENDPOINT,
+  'https://df.loki.delve.office.com/api/v1/llmapi',
   'https://msit.loki.delve.office.com/api/v1/llmapi',
 ]
 

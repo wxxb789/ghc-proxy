@@ -1,14 +1,15 @@
 # M365 Upstream
 
 Second upstream provider: the Microsoft 365 Copilot coding-agent gateway. The
-default endpoint is `https://df.loki.delve.office.com/api/v1/llmapi`;
-`https://msit.loki.delve.office.com/api/v1/llmapi` remains a built-in option.
+default endpoint is `https://loki.delve.office.com/api/v1/llmapi`;
+`https://df.loki.delve.office.com/api/v1/llmapi` and
+`https://msit.loki.delve.office.com/api/v1/llmapi` remain built-in options.
 It speaks the Anthropic Messages protocol directly, so the request path reuses
 `native-messages` without translation.
 
 The dated live catalog, model, and limit observations below were measured on
-`msit.loki`; they do not establish connectivity or access on `df.loki` or a
-custom gateway.
+`msit.loki`; they do not establish connectivity or access on `loki`, `df.loki`,
+or a custom gateway.
 
 M365 is a **route target** beside the GitHub accounts, not a process-wide mode.
 A hostname mapping registers it (`accountRouting.hostnames`), a request's
@@ -26,8 +27,8 @@ URL.
 
 `config.json#m365.endpoint` stores the selected gateway;
 `config.json#m365.endpoints` stores additional saved choices. Omission of
-`endpoint` selects `df.loki`, including for existing configurations that only
-select a broker account. Example:
+`endpoint` selects `loki`, including for existing configurations that only
+select a broker account. An explicitly saved endpoint remains selected. Example:
 
 ```json
 {
