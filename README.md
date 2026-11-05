@@ -7,7 +7,7 @@
 A proxy that turns your GitHub Copilot subscription into an OpenAI and Anthropic compatible API. Use it to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://www.cursor.com/), or any tool that speaks the OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages protocol.
 
 > [!WARNING]
-> Reverse-engineered, unofficial, may break at any time. Excessive use can trigger GitHub abuse detection. **Use at your own risk.**
+> Not affiliated with GitHub. The upstream API is undocumented and may break at any time. Heavy use may be flagged by GitHub's usage systems. **Use at your own risk.**
 
 **TL;DR** — Choose either supported runtime:
 

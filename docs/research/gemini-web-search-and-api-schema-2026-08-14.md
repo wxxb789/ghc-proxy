@@ -1,7 +1,7 @@
 # Gemini web search and API schema support on GHC
 
 * **Date:** 2026-08-14
-* **Boundary:** raw GitHub Copilot upstream, bypassing ghc-proxy request
+* **Boundary:** raw GitHub Copilot upstream, without ghc-proxy request
   validation, translation, and parameter filtering
 * **Endpoint:** the Copilot token-provided
   `https://api.enterprise.githubcopilot.com`

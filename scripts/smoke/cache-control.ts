@@ -817,7 +817,7 @@ async function main() {
 
 /**
  * Probe whether the upstream Copilot API accepts `cache_control.scope`
- * by sending a request directly (bypassing proxy sanitization).
+ * by sending a request directly (without proxy sanitization).
  *
  * Returns 'supported' if the upstream accepts scope (meaning we should
  * remove the sanitizeCacheControl workaround), 'rejected' if it still

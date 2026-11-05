@@ -158,7 +158,7 @@ standard experimental start on ports 44523 and 44524.
 
 The raw services used the authentication and header construction from
 [`scripts/lib/probe-harness.ts`](../../scripts/lib/probe-harness.ts), but sent
-the JSON body directly to Copilot upstream, bypassing ghc-proxy route
+the JSON body directly to Copilot upstream, without ghc-proxy route
 validation, translation, model rewrites, and parameter filters. Probes ran
 sequentially, and transient capacity/gateway statuses would have been retried
 instead of recorded as capability rejections.

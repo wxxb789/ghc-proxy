@@ -5,7 +5,7 @@
  * Copilot's native /v1/messages endpoint accepts.
  *
  * This script sends requests DIRECTLY to Copilot's upstream /v1/messages
- * endpoint (bypassing all proxy handler logic) with various field
+ * endpoint (skipping all proxy handler logic) with various field
  * combinations to map out the accepted schema.
  *
  * Usage: bun run scripts/probes/messages/effort-fields.ts [--json]

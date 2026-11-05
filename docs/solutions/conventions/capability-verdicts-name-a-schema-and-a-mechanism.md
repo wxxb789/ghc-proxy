@@ -108,7 +108,7 @@ symptom, and until this round nothing in the repo distinguished them. That
 reasoning is now recorded in the probe itself
 (`NAME_FILTER_SUSPECTS` in `scripts/lib/tool-cases.ts`).
 
-**B. A malformed payload masquerading as a verdict.** Round 1 cross-posted the
+**B. A malformed payload misread as a verdict.** Round 1 cross-posted the
 raw Anthropic tool object to `/chat/completions` and recorded the 400 as
 "rejected". The error was:
 

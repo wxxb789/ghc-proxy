@@ -177,7 +177,7 @@ class ModelCache {
 
 The probe found two models — `claude-sonnet-4.5` and `claude-haiku-4.5` — that
 **accept** `format` while advertising `structured_outputs: false`. That
-observation is deliberately *not* exploited
+observation is deliberately *not* relied on
 (`docs/research/structured-output-native.md`, "Resulting proxy behavior"). The advertised list is a
 floor on capability, so routing on it stays safe; routing on observed behavior
 would bind the proxy to an undocumented quirk that upstream never promised. This
@@ -279,7 +279,7 @@ re-reading a sentence that had `Organization Policy constraint` in it.
   end before shipping. Code downstream of an exclusion has never run with that
   traffic.
 - **A rejection and an acceptance disagree with the advertised capability.**
-  Prefer the advertised list in both directions: do not exploit an unadvertised
+  Prefer the advertised list in both directions: do not rely on an unadvertised
   acceptance, and do not let a policy-shaped rejection override an advertised
   capability for models it never named.
 

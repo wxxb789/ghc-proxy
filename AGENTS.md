@@ -10,7 +10,7 @@ Copilot, etc.) working in this repository.
 
 ## Project Overview
 
-ghc-proxy is a reverse-engineered API translation proxy that converts GitHub Copilot's API into OpenAI- and Anthropic-compatible formats. It enables Claude Code, Cursor, and any OpenAI/Anthropic-speaking client to use a GitHub Copilot subscription. **Unofficial, may break at any time.**
+ghc-proxy is an API translation proxy that converts GitHub Copilot's API into OpenAI- and Anthropic-compatible formats. It enables Claude Code, Cursor, and any OpenAI/Anthropic-speaking client to use a GitHub Copilot subscription. **Not affiliated with GitHub; the upstream API is undocumented and may break at any time.**
 
 - **Runtime:** Bun >= 1.4 or Node.js >= 26; CI tracks the latest Node.js LTS and Current releases
 - **Language:** TypeScript (ESNext, strict mode)
