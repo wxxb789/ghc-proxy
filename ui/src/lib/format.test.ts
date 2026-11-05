@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { model } from '../test/fixtures.ts'
-import { formatClock, formatClockOrDate, formatCooldowns, formatCountdown, formatDate, formatDuration, formatPercent, formatQuotaPool, modelCompatibilityPairs, modelsTsv, relTime, tsvCell } from './format.ts'
+import { formatClock, formatClockOrDate, formatCooldowns, formatCountdown, formatDate, formatDuration, formatPercent, formatQuotaPool, modelsTsv, relTime, tsvCell } from './format.ts'
 
 describe('durations (spec §7.2)', () => {
   it.each([
@@ -96,18 +96,5 @@ describe('models TSV (legacy F§3.13, byte-identical)', () => {
       'gpt-5.4\t\tOpenAI\tgpt-5.4-2026\tchat-completions\t-\tcontext 400,000; prompt -; output -\tstreaming\tresponses unavailable; structured no; output_config no; chat tokens max_completion_tokens; filters temperature,top_p; context passthrough',
     ].join('\n')
     expect(modelsTsv([gpt, opus], 'http://localhost:4141')).toBe(expected)
-  })
-
-  it('exposes the compatibility cell as key/value pairs in TSV order', () => {
-    const base = model({ id: 'claude-opus-5.5' })
-    const effective = { ...base.effective, defaultResponsesStrategy: 'responses-chat-completions' as const }
-    expect(modelCompatibilityPairs({ ...base, effective })).toEqual([
-      ['responses', 'via Chat Completions'],
-      ['structured', 'yes'],
-      ['output_config', 'yes'],
-      ['chat tokens', 'max_tokens'],
-      ['filters', 'none'],
-      ['context', 'managed'],
-    ])
   })
 })

@@ -117,7 +117,6 @@ describe('health rules', () => {
     // Nearly used up (bad meter tone) is still Q2, and so is 0 left with overage permitted.
     const nearlyOut = inputs({ overview: overview({ quota: quota({ premiumInteractions: premium(3, 3) }) }) })
     expect(issue(nearlyOut, 'Q2')).toMatchObject({ tone: 'warn', body: '3.0 % left · resets 2026-12-01' })
-    expect(summarySentence(deriveIssues(nearlyOut), nearlyOut).tone).toBe('warn')
     const overage = overview({ quota: quota({ premiumInteractions: { ...premium(0, 0), overagePermitted: true } }) })
     expect(issue(inputs({ overview: overage }), 'Q1')).toBeUndefined()
     expect(issue(inputs({ overview: overage }), 'Q2')?.body).toBe('0.0 % left · resets 2026-12-01')
@@ -199,20 +198,14 @@ describe('account and restart rules', () => {
 })
 
 describe('summarySentence (spec §6.2)', () => {
-  const base = { overview: overview(), overviewAt: new Date(2026, 10, 5, 14, 2, 11), connection: inputs().connection }
-
-  it('covers loading, lost, blocked, issues and the all-normal sentences', () => {
-    expect(summarySentence([], { ...base, overview: null }).text).toBe('Connecting to ghc-proxy…')
-    expect(summarySentence([], { ...base, connection: { state: 'lost', blockedStatus: 0, blockedMessage: '' } }).text).toBe('Can\'t reach ghc-proxy. Showing data from 14:02:11.')
-    expect(summarySentence([], { ...base, connection: { state: 'blocked', blockedStatus: 403, blockedMessage: '' } }).text).toBe('This page can\'t read the proxy.')
-    const issues = deriveIssues(inputs({ overview: overview({ queue: { pending: 64, accountCooldown: true } }) }))
-    expect(summarySentence(issues, base)).toEqual({ tone: 'bad', text: 'The upstream queue is full · 1 more' })
-    expect(summarySentence([], base)).toEqual({ tone: 'ok', text: 'All normal. 81.2 % of premium requests left.' })
+  it('covers loading and the all-normal sentences', () => {
+    expect(summarySentence(null)).toEqual({ tone: 'hollow', text: 'Connecting to ghc-proxy…' })
+    expect(summarySentence(overview())).toEqual({ tone: 'ok', text: 'All normal. 81.2 % of premium requests left.' })
     const unlimited = { entitlement: 0, remaining: 0, percentRemaining: 100, unlimited: true, overagePermitted: false }
-    expect(summarySentence([], { ...base, overview: overview({ quota: quota({ premiumInteractions: unlimited }) }) }).text).toBe('All normal. Premium requests are unlimited.')
-    expect(summarySentence([], { ...base, overview: overview({ quota: { status: 'unavailable' } }) }).text).toBe('All normal.')
+    expect(summarySentence(overview({ quota: quota({ premiumInteractions: unlimited }) })).text).toBe('All normal. Premium requests are unlimited.')
+    expect(summarySentence(overview({ quota: { status: 'unavailable' } })).text).toBe('All normal.')
     const auth = overview().auth
-    expect(summarySentence([], { ...base, overview: overview({ auth: { ...auth, upstream: 'm365', identity: 'user@corp.com' }, quota: { status: 'not_applicable' } }) }).text)
+    expect(summarySentence(overview({ auth: { ...auth, upstream: 'm365', identity: 'user@corp.com' }, quota: { status: 'not_applicable' } })).text)
       .toBe('All normal.')
   })
 })

@@ -141,24 +141,19 @@ export function modelCapabilities(model: DashboardModel): string[] {
   })
 }
 
-/** Proxy compatibility as `[key, value]` pairs, in TSV order. */
-export function modelCompatibilityPairs(model: DashboardModel): Array<[string, string]> {
+export function modelCompatibilityLines(model: DashboardModel): string[] {
   const effective = model.effective
   const responses = effective.defaultResponsesStrategy === 'responses-passthrough'
     ? 'native'
     : effective.defaultResponsesStrategy === 'responses-chat-completions' ? 'via Chat Completions' : 'unavailable'
   return [
-    ['responses', responses],
-    ['structured', effective.messagesStructuredOutput ? 'yes' : 'no'],
-    ['output_config', effective.outputConfig ? 'yes' : 'no'],
-    ['chat tokens', effective.chatTokenParameter],
-    ['filters', effective.responsesParameterFilters.length ? effective.responsesParameterFilters.join(',') : 'none'],
-    ['context', effective.contextManagement ? 'managed' : 'passthrough'],
+    `responses ${responses}`,
+    `structured ${effective.messagesStructuredOutput ? 'yes' : 'no'}`,
+    `output_config ${effective.outputConfig ? 'yes' : 'no'}`,
+    `chat tokens ${effective.chatTokenParameter}`,
+    effective.responsesParameterFilters.length ? `filters ${effective.responsesParameterFilters.join(',')}` : 'filters none',
+    effective.contextManagement ? 'context managed' : 'context passthrough',
   ]
-}
-
-export function modelCompatibilityLines(model: DashboardModel): string[] {
-  return modelCompatibilityPairs(model).map(([key, value]) => `${key} ${value}`)
 }
 
 const TSV_HEADER = ['Model ID', 'Model Name', 'Vendor', 'Version', 'Messages Route', 'Upstream Endpoints', 'Limits', 'Capabilities', 'Proxy Compatibility']

@@ -251,18 +251,10 @@ export function worstTone(issues: readonly Issue[]): 'bad' | 'warn' | null {
   return issues.some(issue => issue.tone === 'bad') ? 'bad' : issues.some(issue => issue.tone === 'warn') ? 'warn' : null
 }
 
-/** Overview summary sentence with the lamp tone of the worst issue (spec §6.2). */
-export function summarySentence(issues: readonly Issue[], input: Pick<IssueInputs, 'overview' | 'overviewAt' | 'connection'>): { tone: ToneKind, text: string } {
-  const { overview, connection } = input
+/** Overview summary sentence for the all-clear state (spec §6.2); Overview hides it while any issue is loud. */
+export function summarySentence(overview: OverviewResponse | null): { tone: ToneKind, text: string } {
   if (!overview)
     return { tone: 'hollow', text: 'Connecting to ghc-proxy…' }
-  if (connection.state === 'lost')
-    return { tone: 'bad', text: `Can't reach ghc-proxy. Showing data from ${formatClock(input.overviewAt)}.` }
-  if (connection.state === 'blocked')
-    return { tone: 'bad', text: 'This page can\'t read the proxy.' }
-  const loud = issues.filter(issue => issue.tone !== 'info')
-  if (loud.length)
-    return { tone: loud[0]!.tone, text: loud[0]!.title + (loud.length > 1 ? ` · ${loud.length - 1} more` : '') }
   // Identity, reset date and plan live in the panels below; only the GitHub premium headroom is added here.
   const { quota } = overview
   const premium = overview.auth.upstream === 'm365' ? undefined : quota.premiumInteractions

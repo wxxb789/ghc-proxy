@@ -61,7 +61,8 @@ describe('accounts view: routing mode (T:346-374)', () => {
     expect(within(details).getByRole('link', { name: /Open this account's Dashboard/ })).toHaveAttribute('href', 'http://work.localhost:4141/dashboard')
     // Statuses live in the Health column; Details keeps the times (no seconds) and the account type.
     expect(details).not.toHaveTextContent('GitHub ok')
-    expect(kv(details, 'Validated')).toHaveTextContent(/^—none · business$/)
+    // A missing time is a Nil with no dangling separator.
+    expect(kv(details, 'Validated')).toHaveTextContent(/^—none business$/)
     expect(kv(details, 'Copilot refresh')).toHaveTextContent(/^\d\d:\d\d$/)
 
     await fireEvent.click(within(row('personal')).getByRole('button', { name: 'Details' }))
@@ -87,6 +88,23 @@ describe('accounts view: routing mode (T:346-374)', () => {
     const refresh = kv(document.getElementById('details-personal')!, 'Copilot refresh')
     expect(refresh).toHaveTextContent(/^\d\d:\d\d failed · expires \d\d:\d\d$/)
     expect(within(refresh).getByText('failed')).toHaveClass('fg-warn')
+  })
+
+  it('joins only the Copilot refresh parts that exist', async () => {
+    const expiresAt = '2026-11-05T15:00:00.000Z'
+    const copilot = (extra: object) => ({ status: 'ok' as const, modelsLoaded: true, ...extra })
+    await renderAccounts({ '/dashboard/api/accounts': () => accountsRouting({ accounts: [
+      account({ name: 'personal', isDefault: true, copilot: copilot({ expiresAt }) }),
+      account({ name: 'work', hostname: 'work.localhost', copilot: copilot({ lastRefreshSucceeded: false, expiresAt }) }),
+      account({ name: 'idle', hostname: 'idle.localhost', copilot: copilot({}) }),
+    ] }) })
+    const refresh = async (name: string) => {
+      await fireEvent.click(within(row(name)).getByRole('button', { name: 'Details' }))
+      return kv(document.getElementById(`details-${name}`)!, 'Copilot refresh')
+    }
+    expect(await refresh('personal')).toHaveTextContent(/^expires \d\d:\d\d$/)
+    expect(await refresh('work')).toHaveTextContent(/^failed · expires \d\d:\d\d$/)
+    expect(await refresh('idle')).toHaveTextContent(/^—none$/)
   })
 
   it('remove is aria-disabled with a visible reason and sends nothing', async () => {

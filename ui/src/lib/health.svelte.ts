@@ -28,7 +28,7 @@ class Health {
   issues = $derived(deriveIssues(issueInputs()))
   /** Tints the Issues button; info issues never do. */
   worst = $derived(worstTone(this.issues))
-  summary = $derived(summarySentence(this.issues, { overview: app.data.overview, overviewAt: app.loadedAt.overview, connection: app.connection }))
+  summary = $derived(summarySentence(app.data.overview))
   /** Accounts nav lamp from the last-known `/accounts`. */
   accountsLamp = $derived(accountsAttention(app.data.accounts, app.data.m365))
 }

@@ -110,6 +110,8 @@
               </tr>
               {#if open.includes(account.name)}
                 {@const base = clientBaseUrl(account.hostname)}
+                {@const { lastRefreshAt: refreshedAt, expiresAt } = account.copilot}
+                {@const failed = account.copilot.lastRefreshSucceeded === false}
                 <tr class='details'>
                   <td id='details-{account.name}' colspan='5'><div class='stack'>
                     <div class='urls'>
@@ -126,11 +128,11 @@
                     </div>
                     <dl class='kv'>
                       {#if !m365}
-                        <div class='kv-row'><dt>Validated</dt><dd>{#if account.github.lastValidatedAt}{formatClock(account.github.lastValidatedAt, false)}{:else}<Nil />{/if} · {account.github.accountType}</dd></div>
+                        <div class='kv-row'><dt>Validated</dt><dd>{#if account.github.lastValidatedAt}{`${formatClock(account.github.lastValidatedAt, false)} · ${account.github.accountType}`}{:else}<Nil />{` ${account.github.accountType}`}{/if}</dd></div>
                       {/if}
                       <div class='kv-row'>
                         <dt>Copilot refresh</dt>
-                        <dd>{#if account.copilot.lastRefreshAt}{formatClock(account.copilot.lastRefreshAt, false)}{:else}<Nil />{/if}{#if account.copilot.lastRefreshSucceeded === false}<span class='fg-warn'>{FAILED_SUFFIX}</span>{/if}{#if account.copilot.expiresAt}{` · expires ${formatClock(account.copilot.expiresAt, false)}`}{/if}</dd>
+                        <dd>{#if refreshedAt}{formatClock(refreshedAt, false)}{/if}{#if failed}<span class='fg-warn'>{refreshedAt ? FAILED_SUFFIX : 'failed'}</span>{/if}{#if expiresAt}{`${refreshedAt || failed ? ' · ' : ''}expires ${formatClock(expiresAt, false)}`}{:else if !refreshedAt && !failed}<Nil />{/if}</dd>
                       </div>
                     </dl>
                   </div></td>
