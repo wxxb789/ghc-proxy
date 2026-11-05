@@ -123,7 +123,7 @@ describe('metadata refresh (T:216-250, T:306-344)', () => {
   it('sends nothing while accounts are legacy (aria-disabled Refresh metadata)', async () => {
     const { fake, poller, store } = await setup('#/overview', { '/dashboard/api/accounts': () => accountsLegacy() })
     await poller.loadAllViews()
-    expect(store.metadataUnavailableReason()).toBe('Available after named accounts are enabled')
+    expect(store.metadataUnavailableReason()).toBe('Needs named accounts')
     fake.clear()
     await poller.refreshMetadata()
     expect(fake.log).toHaveLength(0)
@@ -221,6 +221,7 @@ describe('connection state machine (spec §2.5.2)', () => {
     await poller.liveTick()
     expect(store.samples.list).toHaveLength(1)
     expect(store.app.restartedAt).toBeInstanceOf(Date)
+    expect(store.announcer.text).toMatch(/^ghc-proxy restarted at \d{2}:\d{2}:\d{2}$/)
     expect(health.issues.some(issue => issue.id.startsWith('P1:'))).toBe(true)
   })
 })

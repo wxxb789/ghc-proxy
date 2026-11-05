@@ -12,7 +12,7 @@
 
 {#if fault}
   <div class='fault-strip'>
-    <p>Couldn't load {SCOPE_LABEL[scope]}: {fault.message} {#if loadedAt}Showing data from {formatClock(loadedAt)}.{/if}</p>
+    <p>Couldn't load {SCOPE_LABEL[scope]}: {fault.message}{#if loadedAt}<span class='muted'>{` · showing data from ${formatClock(loadedAt)}`}</span>{/if}</p>
     <button type='button' class='btn ghost sm' onclick={() => retryScope(scope)}>Retry</button>
   </div>
 {/if}

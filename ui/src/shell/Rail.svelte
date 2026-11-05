@@ -4,7 +4,7 @@
   import Icon from '../components/Icon.svelte'
   import Lamp from '../components/Lamp.svelte'
   import Tag from '../components/Tag.svelte'
-  import { formatTime } from '../lib/format.ts'
+  import { formatClock } from '../lib/format.ts'
   import { health } from '../lib/health.svelte.ts'
   import { router, VIEW_LABEL, VIEWS } from '../lib/router.svelte.ts'
   import { app } from '../lib/store.svelte.ts'
@@ -52,7 +52,7 @@
           <span class='nav-label'>{VIEW_LABEL[view]}</span>
           {#if view === 'requests' && active > 0}<Tag value='{active} active' tone='info' />{/if}
           {#if view === 'accounts' && health.accountsLamp}
-            <span class='nav-lamp' title='As of {formatTime(app.loadedAt.accounts)}'><Lamp tone={health.accountsLamp} /><span class='sr-only'>{health.accountsLamp === 'bad' ? 'needs attention' : 'has warnings'}</span></span>
+            <span class='nav-lamp' title='As of {formatClock(app.loadedAt.accounts)}'><Lamp tone={health.accountsLamp} /><span class='sr-only'>{health.accountsLamp === 'bad' ? 'needs attention' : 'has warnings'}</span></span>
           {/if}
           {#if app.prefs.shortcuts}<kbd>{VIEWS.indexOf(view) + 1}</kbd>{/if}
         </a>

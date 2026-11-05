@@ -1,6 +1,6 @@
 <script lang='ts'>
   import Tag from '../components/Tag.svelte'
-  import { formatTime } from '../lib/format.ts'
+  import { formatClock } from '../lib/format.ts'
   import { app } from '../lib/store.svelte.ts'
   import IssuesButton from './IssuesButton.svelte'
 
@@ -20,8 +20,8 @@
   </p>
   <p class='context-right' title={rtt}>
     {#if app.busy.metadata}Refreshing metadata…
-    {:else if restarted}Restarted {formatTime(restarted)}
-    {:else if updatedAt}Updated {formatTime(updatedAt)}{#if rtt}<span class='muted context-rtt'> · {rtt}</span>{/if}
+    {:else if restarted}Restarted {formatClock(restarted)}
+    {:else if updatedAt}Updated {formatClock(updatedAt)}{#if rtt}<span class='muted context-rtt'> · {rtt}</span>{/if}
     {/if}
   </p>
   <IssuesButton />

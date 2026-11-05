@@ -56,11 +56,6 @@ export function formatDate(value: string | undefined): string {
   return toDate(value)?.toLocaleString() ?? '—'
 }
 
-/** Locale clock time, as the legacy `Updated <time>` label. */
-export function formatTime(value: string | number | Date | undefined | null): string {
-  return toDate(value)?.toLocaleTimeString() ?? '—'
-}
-
 /** 24-hour `HH:MM:SS` (or `HH:MM` without seconds) in local time. */
 export function formatClock(value: string | number | Date | undefined | null, seconds = true): string {
   const date = toDate(value)
@@ -68,6 +63,14 @@ export function formatClock(value: string | number | Date | undefined | null, se
     return '—'
   const clock = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
   return seconds ? `${clock}:${pad2(date.getSeconds())}` : clock
+}
+
+/** `HH:MM:SS` for today, else the full local date. */
+export function formatClockOrDate(value: string | number | Date | undefined | null, now = Date.now()): string {
+  const date = toDate(value)
+  if (!date)
+    return '—'
+  return date.toDateString() === new Date(now).toDateString() ? formatClock(date) : date.toLocaleString()
 }
 
 const RELATIVE_UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [['hour', 3_600_000], ['minute', 60_000], ['second', 1000]]
@@ -138,19 +141,24 @@ export function modelCapabilities(model: DashboardModel): string[] {
   })
 }
 
-export function modelCompatibilityLines(model: DashboardModel): string[] {
+/** Proxy compatibility as `[key, value]` pairs, in TSV order. */
+export function modelCompatibilityPairs(model: DashboardModel): Array<[string, string]> {
   const effective = model.effective
   const responses = effective.defaultResponsesStrategy === 'responses-passthrough'
     ? 'native'
     : effective.defaultResponsesStrategy === 'responses-chat-completions' ? 'via Chat Completions' : 'unavailable'
   return [
-    `responses ${responses}`,
-    `structured ${effective.messagesStructuredOutput ? 'yes' : 'no'}`,
-    `output_config ${effective.outputConfig ? 'yes' : 'no'}`,
-    `chat tokens ${effective.chatTokenParameter}`,
-    effective.responsesParameterFilters.length ? `filters ${effective.responsesParameterFilters.join(',')}` : 'filters none',
-    effective.contextManagement ? 'context managed' : 'context passthrough',
+    ['responses', responses],
+    ['structured', effective.messagesStructuredOutput ? 'yes' : 'no'],
+    ['output_config', effective.outputConfig ? 'yes' : 'no'],
+    ['chat tokens', effective.chatTokenParameter],
+    ['filters', effective.responsesParameterFilters.length ? effective.responsesParameterFilters.join(',') : 'none'],
+    ['context', effective.contextManagement ? 'managed' : 'passthrough'],
   ]
+}
+
+export function modelCompatibilityLines(model: DashboardModel): string[] {
+  return modelCompatibilityPairs(model).map(([key, value]) => `${key} ${value}`)
 }
 
 const TSV_HEADER = ['Model ID', 'Model Name', 'Vendor', 'Version', 'Messages Route', 'Upstream Endpoints', 'Limits', 'Capabilities', 'Proxy Compatibility']

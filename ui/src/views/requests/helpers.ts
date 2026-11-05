@@ -1,5 +1,4 @@
 import type { ObservedRequest } from '@contract'
-import { formatClock } from '../../lib/format.ts'
 
 export type StateFilter = 'all' | 'active' | 'completed' | 'failed' | 'aborted' | 'errors'
 
@@ -38,10 +37,4 @@ export const isTicking = (row: ObservedRequest) => row.state === 'in_flight' || 
 /** Shown duration: running rows add the time since the snapshot was fetched. */
 export function elapsed(row: ObservedRequest, now: number, fetchedAt: number): number {
   return isTicking(row) ? row.durationMs + Math.max(0, now - fetchedAt) : row.durationMs
-}
-
-/** `HH:MM:SS` for today, else the full local date. */
-export function startedText(value: string, now: number): string {
-  const date = new Date(value)
-  return date.toDateString() === new Date(now).toDateString() ? formatClock(date) : date.toLocaleString()
 }

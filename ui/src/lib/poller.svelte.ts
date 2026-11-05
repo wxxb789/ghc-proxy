@@ -4,6 +4,7 @@ import type { MetadataRefreshResponse, OverviewResponse } from '@contract'
 import type { View } from './router.svelte.ts'
 import type { DataScope } from './store.svelte.ts'
 import { api, ApiError } from './api.ts'
+import { formatClock } from './format.ts'
 import { loadM365 } from './m365-load.svelte.ts'
 import { router } from './router.svelte.ts'
 import { isRestart, pushSample, sampleFrom } from './samples.ts'
@@ -94,7 +95,7 @@ async function loadOverview(): Promise<void> {
     samples.first = null
     effectsBaseline.map = null
     app.restartedAt = new Date(now)
-    announce(`Proxy restarted at ${app.restartedAt.toLocaleTimeString()}`)
+    announce(`ghc-proxy restarted at ${formatClock(app.restartedAt)}`)
   }
   samples.list = pushSample(samples.list, sample)
   samples.first ??= samples.list[0]!

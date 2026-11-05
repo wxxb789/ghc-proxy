@@ -54,7 +54,7 @@
           {#if insights.latency}
             p50 {formatDuration(insights.latency.p50)} · p95 {formatDuration(insights.latency.p95)} · max {formatDuration(insights.latency.max)}
           {:else}
-            — <span class='muted'>needs 5 finished requests</span>
+            — <span class='muted'>needs 5 completed requests</span>
           {/if}
         </dd>
       </div>

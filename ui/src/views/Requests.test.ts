@@ -68,6 +68,7 @@ describe('requests selection (legacy pins)', () => {
     const detail = screen.getByRole('complementary', { name: 'Request detail' })
     expect(within(detail).getByText('No request selected')).toBeInTheDocument()
     expect(screen.getByText('No requests yet.')).toBeInTheDocument()
+    expect(screen.getByText(/^Point a client at /)).toHaveTextContent(/Requests appear here while Live is on\.$/)
     expect(location.hash).toBe('#/requests')
   })
 })
@@ -288,7 +289,7 @@ describe('requests view', () => {
     load({ recent: [request('r1', { durationMs: 100 }), request('r2', { status: 404, durationMs: 200 })] })
     const insights = screen.getByText('Insights').closest('details')!
     expect(insights.querySelector('summary')).toHaveTextContent(/^Insights · last 2 finished · spanning \S/)
-    expect(insights).toHaveTextContent('needs 5 finished requests')
+    expect(insights).toHaveTextContent('needs 5 completed requests')
     expect(insights).toHaveTextContent('2xx 1 · 4xx 1 · 5xx 0 · aborted 0 · error rate 50.0 %')
   })
 })

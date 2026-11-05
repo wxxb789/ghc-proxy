@@ -370,10 +370,11 @@ a.tile:hover { background: var(--bg-2); color: inherit; }
 .tile:focus-visible { outline-offset: -2px; }
 .readout { font: 600 28px/32px var(--font-display); letter-spacing: -0.02em; }
 .readout .unit { font-size: 16px; }
-.tile-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--text-3); }
+.tile-sub { min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--text-3); }
 .tile .spark { margin: auto -16px 0; width: calc(100% + 32px); }
 .derived { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-6); min-height: 36px; padding: 6px 16px; border-top: 1px solid var(--line-strong); }
-.derived .end { margin-left: auto; color: var(--text-3); font-size: 12px; }
+/* The window caption leads the strip, next to the figures it scopes. */
+.derived .end { color: var(--text-3); font-size: 12px; }
 
 /* ---------- mini charts (§4.8) ---------- */
 .spark { display: block; width: 100%; height: 24px; overflow: visible; }
@@ -417,7 +418,10 @@ a.tile:hover { background: var(--bg-2); color: inherit; }
 .code-copy { position: absolute; top: 4px; right: 4px; }
 
 /* ---------- empty state, skeleton (§4.14, §4.15) ---------- */
-.empty { display: grid; justify-items: center; align-content: center; gap: var(--s-1); min-height: 120px; padding: var(--s-6) var(--s-4); text-align: center; }
+.empty {
+  display: grid; justify-items: center; align-content: center; gap: var(--s-1); min-height: 120px; padding: var(--s-6) var(--s-4);
+  text-align: center; white-space: normal; overflow-wrap: anywhere;
+}
 .empty > .icon { color: var(--text-3); margin-bottom: var(--s-1); }
 .empty-title { font-weight: 600; }
 .empty-hint { max-width: 52ch; font-size: 12px; line-height: 16px; color: var(--text-2); }
@@ -507,6 +511,11 @@ a.tile:hover { background: var(--bg-2); color: inherit; }
   .table:not(.no-reflow) :is(th, td):is(:first-child, :last-child) { padding-left: 0; padding-right: 0; }
   .table:not(.no-reflow) td.num { text-align: left; }
   .table:not(.no-reflow) td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; line-height: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+  /* Opt-in compact blocks: the first cell titles the block, the other labels sit inline on the left. */
+  .table.reflow-blocks td:first-child { font-weight: 500; }
+  .table.reflow-blocks td:first-child::before { content: none; }
+  .table.reflow-blocks td[data-label]:not(:first-child) { position: relative; min-height: 20px; padding-left: 7rem; }
+  .table.reflow-blocks td[data-label]:not(:first-child)::before { position: absolute; top: 4px; left: 0; width: 6.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 /* ---------- motion and forced colors (§3.4, §3.8) ---------- */

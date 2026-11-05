@@ -9,6 +9,7 @@
     /** `secondary` | `danger` | `ghost` | `primary`, plus sizes like `sm`, `full`. */
     class?: string
     busy?: boolean
+    /** Tooltip while available; the visible reason replaces it while unavailable. */
     title?: string
     children: Snippet
   }
@@ -23,5 +24,5 @@
 </script>
 
 <button type='button' class='btn {className}' aria-disabled={reason ? 'true' : undefined} aria-busy={busy || undefined} disabled={busy}
-        aria-describedby={reason ? reasonId : undefined} title={reason ?? title} onclick={click}>{@render children()}</button>
+        aria-describedby={reason ? reasonId : undefined} title={reason ? undefined : title} onclick={click}>{@render children()}</button>
 {#if reason}<p id={reasonId} class='reason'>{reason}</p>{/if}

@@ -75,6 +75,11 @@ describe('accounts view: routing mode (T:346-374)', () => {
     expect(within(row('work')).getByRole('button', { name: 'Remove' })).toHaveAttribute('title', 'Remove this account from ghc-proxy')
   })
 
+  it('explains that a sole GitHub target cannot be removed', async () => {
+    await renderAccounts({ '/dashboard/api/accounts': () => accountsRouting({ accounts: [account({ name: 'personal', hostname: 'personal.localhost', isDefault: true })] }) })
+    expect(within(row('personal')).getByRole('button', { name: 'Remove' })).toHaveAccessibleDescription('This is the only target and cannot be removed.')
+  })
+
   it('explains why the M365 target cannot be removed', async () => {
     await renderAccounts({ '/dashboard/api/accounts': () => accountsRouting({ defaultAccount: 'm365', accounts: [{ ...m365Account, isDefault: true }, account({ name: 'work', hostname: 'work.localhost' })] }) })
     expect(within(row('m365')).getByRole('button', { name: 'Remove' })).toHaveAccessibleDescription('Choose another default target before removing the M365 target.')
@@ -112,6 +117,8 @@ describe('accounts view: routing mode (T:346-374)', () => {
     await vi.waitFor(() => expect(document.getElementById('accounts-status')).toHaveTextContent('Couldn\'t set the default account: Default exploded'))
     expect(faults.accounts?.message).toBe('Default exploded')
     expect(screen.getByText(/Couldn't load Accounts: Default exploded/)).toBeInTheDocument()
+    // The panel's own fault strip is its one staleness indicator: no extra stale tag.
+    expect(within(screen.getByRole('region', { name: 'Targets' })).queryByText('stale')).not.toBeInTheDocument()
   })
 })
 

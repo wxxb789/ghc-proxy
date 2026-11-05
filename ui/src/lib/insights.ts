@@ -175,20 +175,14 @@ export function deriveIssues(input: IssueInputs): Issue[] {
   const info: Issue[] = []
   const { connection, overview } = input
 
-  if (connection.state === 'lost') {
-    bad.push({
-      id: 'C1',
-      tone: 'bad',
-      title: 'Can\'t reach ghc-proxy',
-      body: `Retrying every 2 s while Live is on. Last update ${formatClock(input.overviewAt)}.`,
-      actions: [{ label: 'Retry now', kind: 'retry', scope: 'overview' }],
-    })
-  }
+  // C1 has no body: the connection strip already says whether it retries or Live is paused.
+  if (connection.state === 'lost')
+    bad.push({ id: 'C1', tone: 'bad', title: 'Can\'t reach ghc-proxy', actions: [{ label: 'Retry now', kind: 'retry', scope: 'overview' }] })
   if (connection.state === 'blocked') {
     bad.push({
       id: 'C2',
       tone: 'bad',
-      title: 'This page can\'t read the proxy',
+      title: 'Access denied',
       body: connection.blockedMessage,
       actions: connection.blockedStatus === 421 ? [{ label: 'Open on localhost', kind: 'link', href: localhostDashboardUrl(input.href) }] : [],
     })
@@ -269,16 +263,14 @@ export function summarySentence(issues: readonly Issue[], input: Pick<IssueInput
   const loud = issues.filter(issue => issue.tone !== 'info')
   if (loud.length)
     return { tone: loud[0]!.tone, text: loud[0]!.title + (loud.length > 1 ? ` · ${loud.length - 1} more` : '') }
-  const { auth, quota } = overview
-  if (auth.upstream === 'm365')
-    return { tone: 'ok', text: `All normal. Microsoft 365 Copilot is ready for ${auth.identity || 'Broker account'}.` }
-  const premium = quota.premiumInteractions
-  let quotaText = ''
+  // Identity, reset date and plan live in the panels below; only the GitHub premium headroom is added here.
+  const { quota } = overview
+  const premium = overview.auth.upstream === 'm365' ? undefined : quota.premiumInteractions
   if (premium?.unlimited)
-    quotaText = ' Premium requests are unlimited.'
-  else if (premium && Number.isFinite(premium.percentRemaining) && quota.status !== 'not_applicable' && quota.status !== 'unavailable')
-    quotaText = ` ${formatPercent(premium.percentRemaining)} of premium requests left${quota.resetDate ? `, resets ${formatDate(quota.resetDate)}` : ''}.`
-  return { tone: 'ok', text: `All normal. Copilot is ready for ${auth.github.login || auth.github.accountType}.${quotaText}` }
+    return { tone: 'ok', text: 'All normal. Premium requests are unlimited.' }
+  if (premium && Number.isFinite(premium.percentRemaining) && quota.status !== 'not_applicable' && quota.status !== 'unavailable')
+    return { tone: 'ok', text: `All normal. ${formatPercent(premium.percentRemaining)} of premium requests left.` }
+  return { tone: 'ok', text: 'All normal.' }
 }
 
 /** Nearest-rank percentile over an ascending array. */
@@ -298,7 +290,7 @@ export function latencyStats(rows: readonly ObservedRequest[]): LatencyStats | n
 
 export interface Share { label: string, count: number, pct: number }
 
-/** Count desc, label asc; beyond `top` the rest folds into `other (k)`. Floored percentages never sum above 100. */
+/** Count desc, label asc; beyond `top` the rest folds into `k others`. Floored percentages never sum above 100. */
 export function shares(labels: readonly string[], top = Infinity): Share[] {
   const counts = new Map<string, number>()
   for (const label of labels)
@@ -306,7 +298,7 @@ export function shares(labels: readonly string[], top = Infinity): Share[] {
   const sorted = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
   const rest = sorted.splice(top)
   if (rest.length)
-    sorted.push([`other (${rest.length})`, rest.reduce((sum, [, count]) => sum + count, 0)])
+    sorted.push([plural(rest.length, 'other'), rest.reduce((sum, [, count]) => sum + count, 0)])
   return sorted.map(([label, count]) => ({ label, count, pct: Math.floor((count / labels.length) * 100) }))
 }
 

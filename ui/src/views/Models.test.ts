@@ -290,7 +290,7 @@ describe('models view', () => {
     expect(screen.getByText('Models appear after the Copilot catalog loads.')).toBeInTheDocument()
     const refresh = screen.getByRole('button', { name: 'Refresh metadata' })
     expect(refresh).toHaveAttribute('aria-disabled', 'true')
-    expect(refresh).toHaveAccessibleDescription('Available after named accounts are enabled')
+    expect(refresh).toHaveAccessibleDescription('Needs named accounts')
   })
 
   it('shows the no-match state and clears the filter from it', async () => {

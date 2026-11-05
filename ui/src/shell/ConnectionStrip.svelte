@@ -1,5 +1,5 @@
 <script lang='ts'>
-  import { formatTime } from '../lib/format.ts'
+  import { formatClock } from '../lib/format.ts'
   import { localhostDashboardUrl } from '../lib/insights.ts'
   import { app } from '../lib/store.svelte.ts'
 
@@ -10,7 +10,7 @@
 {#if connection.state === 'lost' || connection.state === 'blocked'}
   <div class='connection-strip' role='status'>
     {#if connection.state === 'lost'}
-      Can't reach ghc-proxy — {app.live ? 'retrying every 2 s' : 'Live is paused'} · last update {formatTime(app.loadedAt.overview)}
+      Can't reach ghc-proxy — {app.live ? 'retrying every 2 s' : 'Live is paused'} · last update {formatClock(app.loadedAt.overview)}
     {:else}
       {connection.blockedMessage}
       {#if connection.blockedStatus === 421}<a href={localhostDashboardUrl(location.href)}>Open on localhost</a>{/if}

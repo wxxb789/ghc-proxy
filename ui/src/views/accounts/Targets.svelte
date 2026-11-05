@@ -28,7 +28,9 @@
         ? 'The M365 target is the only target and cannot be removed.'
         : account.isDefault ? 'Choose another default target before removing the M365 target.' : null
     }
-    return account.isDefault || only ? 'Choose another default account before removing this one.' : null
+    if (only)
+      return 'This is the only target and cannot be removed.'
+    return account.isDefault ? 'Choose another default account before removing this one.' : null
   }
 
   function toggle(name: string) {

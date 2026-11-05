@@ -51,15 +51,16 @@ describe('deriveIssues: a healthy proxy is quiet', () => {
 })
 
 describe('connection rules', () => {
-  it('c1 lost → Retry now; clears on success', () => {
+  it('c1 lost → Retry now with no body (the connection strip carries the cadence); clears on success', () => {
     const lost = issue(inputs({ connection: { state: 'lost', blockedStatus: 0, blockedMessage: '' } }), 'C1')
     expect(lost).toMatchObject({ tone: 'bad', title: 'Can\'t reach ghc-proxy', actions: [{ kind: 'retry', scope: 'overview' }] })
+    expect(lost?.body).toBeUndefined()
     expect(issue(inputs(), 'C1')).toBeUndefined()
   })
 
   it('c2 blocked: 421 links to localhost on the same port', () => {
     const blocked = issue(inputs({ connection: { state: 'blocked', blockedStatus: 421, blockedMessage: 'No account is configured for hostname "x".' } }), 'C2')
-    expect(blocked?.body).toBe('No account is configured for hostname "x".')
+    expect(blocked).toMatchObject({ title: 'Access denied', body: 'No account is configured for hostname "x".' })
     expect(blocked?.actions[0]).toMatchObject({ label: 'Open on localhost', href: 'http://localhost:4141/dashboard#/overview' })
     expect(issue(inputs({ connection: { state: 'blocked', blockedStatus: 403, blockedMessage: 'denied' } }), 'C2')?.actions).toEqual([])
   })
@@ -206,10 +207,13 @@ describe('summarySentence (spec §6.2)', () => {
     expect(summarySentence([], { ...base, connection: { state: 'blocked', blockedStatus: 403, blockedMessage: '' } }).text).toBe('This page can\'t read the proxy.')
     const issues = deriveIssues(inputs({ overview: overview({ queue: { pending: 64, accountCooldown: true } }) }))
     expect(summarySentence(issues, base)).toEqual({ tone: 'bad', text: 'The upstream queue is full · 1 more' })
-    expect(summarySentence([], base).text).toBe('All normal. Copilot is ready for octocat. 81.2 % of premium requests left, resets 2026-12-01.')
+    expect(summarySentence([], base)).toEqual({ tone: 'ok', text: 'All normal. 81.2 % of premium requests left.' })
+    const unlimited = { entitlement: 0, remaining: 0, percentRemaining: 100, unlimited: true, overagePermitted: false }
+    expect(summarySentence([], { ...base, overview: overview({ quota: quota({ premiumInteractions: unlimited }) }) }).text).toBe('All normal. Premium requests are unlimited.')
+    expect(summarySentence([], { ...base, overview: overview({ quota: { status: 'unavailable' } }) }).text).toBe('All normal.')
     const auth = overview().auth
-    expect(summarySentence([], { ...base, overview: overview({ auth: { ...auth, upstream: 'm365', identity: 'user@corp.com' } }) }).text)
-      .toBe('All normal. Microsoft 365 Copilot is ready for user@corp.com.')
+    expect(summarySentence([], { ...base, overview: overview({ auth: { ...auth, upstream: 'm365', identity: 'user@corp.com' }, quota: { status: 'not_applicable' } }) }).text)
+      .toBe('All normal.')
   })
 })
 
@@ -220,9 +224,10 @@ describe('ring insights (spec §6.4)', () => {
     expect(latencyStats([request('a'), request('b')])).toBeNull()
   })
 
-  it('folds shares beyond the top into other (k) without exceeding 100 %', () => {
+  it('folds shares beyond the top into "k others" without exceeding 100 %', () => {
     const result = shares(['a', 'a', 'b', 'c', 'd', 'e'], 3)
-    expect(result.map(share => share.label)).toEqual(['a', 'b', 'c', 'other (2)'])
+    expect(result.map(share => share.label)).toEqual(['a', 'b', 'c', '2 others'])
+    expect(shares(['a', 'b', 'c', 'd'], 3).at(-1)?.label).toBe('1 other')
     expect(result.reduce((sum, share) => sum + share.pct, 0)).toBeLessThanOrEqual(100)
   })
 

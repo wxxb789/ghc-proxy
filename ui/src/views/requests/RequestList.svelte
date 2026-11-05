@@ -6,10 +6,10 @@
   import Skeleton from '../../components/Skeleton.svelte'
   import Tag from '../../components/Tag.svelte'
   import { rovingGrid } from '../../lib/actions/rovingGrid.ts'
-  import { formatDuration } from '../../lib/format.ts'
+  import { formatClockOrDate, formatDuration } from '../../lib/format.ts'
   import { app } from '../../lib/store.svelte.ts'
   import { httpTone } from '../../lib/tone.ts'
-  import { elapsed, isTicking, startedText } from './helpers.ts'
+  import { elapsed, isTicking } from './helpers.ts'
 
   interface Props {
     /** Visible rows; `null` before the first load. */
@@ -99,7 +99,7 @@
             {@const tone = httpTone(row.status)}
             <tr data-row data-id={row.requestId} tabindex='-1' aria-selected={row.requestId === selectedId}>
               <td class='c-state'><Tag value={row.state} domain='request' /></td>
-              <td class='c-time num' title={new Date(row.startedAt).toLocaleString()}>{startedText(row.startedAt, now)}</td>
+              <td class='c-time num' title={new Date(row.startedAt).toLocaleString()}>{formatClockOrDate(row.startedAt, now)}</td>
               <td class='c-endpoint mono'><span class='muted'>{row.method}</span> {row.endpoint}</td>
               <td class='c-model mono'>
                 {#if row.modelTransforms.length}<span class='muted' title='requested {row.requestedModel || '—'}'>↺</span>{/if}
@@ -116,7 +116,7 @@
                 {#if total}
                   <EmptyState title='No requests match this filter.'><button type='button' class='btn secondary sm' onclick={onclear}>Clear filter</button></EmptyState>
                 {:else}
-                  <EmptyState title='No requests yet.' hint='Point a client at {location.origin}/v1 (OpenAI) or {location.origin} (Anthropic). Requests appear here within 2 seconds while Live is on.' />
+                  <EmptyState title='No requests yet.' hint='Point a client at {location.origin}/v1 (OpenAI) or {location.origin} (Anthropic). Requests appear here while Live is on.' />
                 {/if}
               </td>
             </tr>
@@ -131,9 +131,9 @@
   .req-list { position: relative; }
   .req-scroll { max-height: calc(100dvh - 260px); overflow-anchor: auto; container-type: inline-size; }
   .req-new { position: absolute; top: 40px; left: 50%; z-index: 2; transform: translateX(-50%); box-shadow: var(--shadow-pop); }
-  td { white-space: nowrap; }
+  tr[data-row] > td { white-space: nowrap; }
   /* Model ids wrap only after a hyphen while the list is a table. */
-  .c-model { white-space: normal; }
+  tr[data-row] > .c-model { white-space: normal; }
 
   /* ≤1100 the list narrows: Strategy and Account stay in the detail only. */
   @container (max-width: 759px) {

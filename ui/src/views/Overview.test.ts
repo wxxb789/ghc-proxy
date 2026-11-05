@@ -69,17 +69,17 @@ describe('overview header and summary', () => {
 
   it('reads all normal with the premium percent, plus the header meta and the multi-account note', () => {
     show(overview())
-    expect(screen.getByText('All normal. Copilot is ready for octocat. 81.2 % of premium requests left, resets 2026-12-01.')).toBeInTheDocument()
+    expect(screen.getByText('All normal. 81.2 % of premium requests left.')).toBeInTheDocument()
     expect(screen.getByText(/GitHub upstream · up 3h 12m/)).toBeInTheDocument()
     expect(screen.getByText('Overview, quota and models reflect "work". Requests and Behavior cover every account.')).toBeInTheDocument()
   })
 
-  it('reads unlimited premium, falls back to the account type and hides the note for one account', () => {
+  it('reads unlimited premium and hides the note for one account', () => {
     show(overview({
       auth: { github: { status: 'ok', accountType: 'business' }, accounts: { currentAccount: 'work', defaultAccount: 'work', totalAccounts: 1 } },
       quota: quota({ premiumInteractions: { entitlement: 0, remaining: 0, percentRemaining: 100, unlimited: true, overagePermitted: false } }),
     }))
-    expect(screen.getByText('All normal. Copilot is ready for business. Premium requests are unlimited.')).toBeInTheDocument()
+    expect(screen.getByText('All normal. Premium requests are unlimited.')).toBeInTheDocument()
     expect(screen.queryByText(/Requests and Behavior cover every account/)).not.toBeInTheDocument()
   })
 
@@ -232,7 +232,7 @@ describe('overview on the M365 upstream', () => {
     expect(quotaPanel.querySelector('.panel-meta')).toHaveTextContent(NOT_APPLICABLE)
     expect(within(quotaPanel).getAllByText(NOT_APPLICABLE)).toHaveLength(2)
     expect(within(quotaPanel).queryByRole('table')).not.toBeInTheDocument()
-    expect(screen.getByText('All normal. Microsoft 365 Copilot is ready for user@corp.com.')).toBeInTheDocument()
+    expect(screen.getByText('All normal.')).toBeInTheDocument()
     expect(screen.getByText(/Microsoft 365 upstream/)).toBeInTheDocument()
   })
 

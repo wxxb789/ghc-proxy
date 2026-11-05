@@ -10,9 +10,11 @@
     /** When set, renders the sr-only sentence `<label>, last <minutes> min: low …, high …, now ….` (`last minute` under one minute). */
     label?: string
     minutes?: number
+    /** Id of the sr-only sentence, for `aria-describedby` where an `aria-label` hides it. */
+    id?: string
   }
 
-  const { runs, second = [], label, minutes = 0 }: Props = $props()
+  const { runs, second = [], label, minutes = 0, id }: Props = $props()
   const values = $derived(runs.flat().map(point => point[1]))
   const max = $derived(Math.max(1, ...values, ...second.flat().map(point => point[1])))
   const y = (value: number) => 23 - (value / max) * 22
@@ -29,5 +31,5 @@
   {/if}
 </svg>
 {#if label && values.length}
-  <span class='sr-only'>{label}, {minutes >= 1 ? `last ${minutes} min` : 'last minute'}: low {formatNumber(Math.min(...values))}, high {formatNumber(Math.max(...values))}, now {formatNumber(values.at(-1))}.</span>
+  <span {id} class='sr-only'>{label}, {minutes >= 1 ? `last ${minutes} min` : 'last minute'}: low {formatNumber(Math.min(...values))}, high {formatNumber(Math.max(...values))}, now {formatNumber(values.at(-1))}.</span>
 {/if}

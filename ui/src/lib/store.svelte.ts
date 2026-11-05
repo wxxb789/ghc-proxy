@@ -92,7 +92,7 @@ export const app = $state({
   selection: { requestId: null as string | null, models: [] as string[] },
   ui: {
     insightsOpen: true,
-    rawJsonOpen: true,
+    rawJsonOpen: false,
     behaviorRaw: { routing: false, params: false },
     hideZeroEffects: false,
     /** Target names whose Details row is open. */
@@ -156,7 +156,7 @@ export function clearFault(scope: Scope): void {
 /** Why Refresh metadata is unavailable, or `null` while it may run (spec §2.4). */
 export function metadataUnavailableReason(): string | null {
   if (app.accountsMode === 'legacy')
-    return 'Available after named accounts are enabled'
+    return 'Needs named accounts'
   if (app.accountsMode === 'unavailable')
     return 'Account management is unavailable for this process'
   return null
