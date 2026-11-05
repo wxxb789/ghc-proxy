@@ -18,7 +18,6 @@ export interface ClientConfig {
   accountType: 'individual' | 'business' | 'enterprise'
   /** Defaults to `github` when omitted. */
   upstream?: UpstreamKind
-  /** Selected gateway endpoint for the `m365` upstream. */
   m365Endpoint?: string
   /** Helper path for the `m365` upstream; discovery applies when omitted. */
   mscAuthExe?: string

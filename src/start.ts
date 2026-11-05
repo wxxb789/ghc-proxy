@@ -205,7 +205,6 @@ async function runServer(options: RunServerOptions): Promise<void> {
       mscAuthExe: options.mscAuthExe,
       mscAuthAccount: authStore.mscAuthAccount,
       mscAuthUpn: cachedConfig.m365?.upn,
-      m365Endpoint: cachedConfig.m365?.endpoint,
       auth: serverAuthDefaults(options, accountType),
     })
     await initializeM365Target(target)
@@ -467,7 +466,6 @@ async function setupRoutedAccounts(
         mscAuthExe: options.mscAuthExe,
         mscAuthAccount: authStore.mscAuthAccount,
         mscAuthUpn: getCachedConfig().m365?.upn,
-        m365Endpoint: getCachedConfig().m365?.endpoint,
         auth: serverAuthDefaults(options, accountType),
       })
     }

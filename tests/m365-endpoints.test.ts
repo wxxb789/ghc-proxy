@@ -16,6 +16,8 @@ import { PATHS } from '~/lib/paths'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
 import { createAccountRuntime, resetAccountRuntimes, resolveRequestAccountRuntime, runWithAccountRuntime } from '~/state'
 
+import { clearConfig } from './helpers'
+
 const CUSTOM_ENDPOINT = 'https://gateway.example.test/api/v1/llmapi'
 const MSIT_ENDPOINT = 'https://msit.loki.delve.office.com/api/v1/llmapi'
 let savedConfig: ConfigFile
@@ -24,7 +26,7 @@ let helperExe: string
 
 beforeEach(async () => {
   savedConfig = structuredClone(getCachedConfig())
-  for (const key of Object.keys(getCachedConfig())) Reflect.deleteProperty(getCachedConfig(), key)
+  clearConfig()
   helperDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'ghc-m365-helper-'))
   helperExe = path.join(helperDirectory, 'msc-auth.exe')
   await fs.writeFile(helperExe, 'unused')
@@ -34,7 +36,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  for (const key of Object.keys(getCachedConfig())) Reflect.deleteProperty(getCachedConfig(), key)
+  clearConfig()
   Object.assign(getCachedConfig(), savedConfig)
   resetAccountRuntimes()
   resetMscTokenCache()

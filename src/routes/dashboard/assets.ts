@@ -736,13 +736,11 @@ let m365ProbeAccounts;
 let m365ProbeStarted = false;
 let m365HostnameDirty = false;
 let m365EndpointDirty = false;
-let m365EndpointSaving = false;
-let m365TargetRegistering = false;
+let m365TargetBusy = false;
 let m365OnboardingAvailable = false;
-let m365Endpoints = [];
 
 function updateM365EndpointControls() {
-  const disabled = !m365OnboardingAvailable || m365EndpointSaving || m365TargetRegistering;
+  const disabled = !m365OnboardingAvailable || m365TargetBusy;
   for (const id of ['m365-endpoint', 'm365-endpoint-save', 'm365-custom-endpoint', 'm365-custom-endpoint-save']) {
     byId(id).disabled = disabled;
   }
@@ -771,7 +769,7 @@ function renderM365(state) {
   updateM365EndpointControls();
   const endpointSelect = byId('m365-endpoint');
   const pendingEndpoint = m365EndpointDirty ? endpointSelect.value : '';
-  m365Endpoints = [...new Set([...(state.endpoints || []), state.endpoint].filter(Boolean))];
+  const m365Endpoints = [...new Set([...(state.endpoints || []), state.endpoint].filter(Boolean))];
   const displayedEndpoints = [...new Set([...m365Endpoints, pendingEndpoint].filter(Boolean))];
   clearNode(endpointSelect);
   for (const endpoint of displayedEndpoints) {
@@ -956,16 +954,16 @@ async function postM365(path, body, onSaved) {
 
 async function saveM365Endpoint(event) {
   event.preventDefault();
-  if (!m365OnboardingAvailable || m365EndpointSaving || m365TargetRegistering) return;
+  if (!m365OnboardingAvailable || m365TargetBusy) return;
   const addingCustom = event.currentTarget.id === 'm365-custom-endpoint-form';
   const endpoint = addingCustom
     ? byId('m365-custom-endpoint').value.trim()
     : byId('m365-endpoint').value;
   const body = { endpoint };
   if (addingCustom) {
-    body.endpoints = [...new Set([...m365Endpoints, ...Array.from(byId('m365-endpoint').options, option => option.value), endpoint])];
+    body.endpoints = [...new Set([...Array.from(byId('m365-endpoint').options, option => option.value), endpoint])];
   }
-  m365EndpointSaving = true;
+  m365TargetBusy = true;
   updateM365EndpointControls();
   byId('m365-endpoint-status').textContent = 'Saving upstream endpoint\u2026';
   try {
@@ -977,15 +975,15 @@ async function saveM365Endpoint(event) {
       ? 'Saved upstream endpoint: ' + state.endpoint
       : byId('m365-status').textContent;
   } finally {
-    m365EndpointSaving = false;
+    m365TargetBusy = false;
     updateM365EndpointControls();
   }
 }
 
 async function registerM365(event) {
   event.preventDefault();
-  if (!m365OnboardingAvailable || m365EndpointSaving || m365TargetRegistering) return;
-  m365TargetRegistering = true;
+  if (!m365OnboardingAvailable || m365TargetBusy) return;
+  m365TargetBusy = true;
   updateM365EndpointControls();
   try {
     await postM365('/dashboard/api/m365/register', {
@@ -994,7 +992,7 @@ async function registerM365(event) {
       endpoint: byId('m365-endpoint').value,
     }, function () { m365EndpointDirty = false; });
   } finally {
-    m365TargetRegistering = false;
+    m365TargetBusy = false;
     updateM365EndpointControls();
   }
 }

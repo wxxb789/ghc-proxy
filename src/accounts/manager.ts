@@ -605,14 +605,13 @@ export class AccountManager {
       this.assertHostnameAvailable(hostname, RESERVED_M365_TARGET)
       const saved = getCachedConfig().m365
       const account = parsedInput.account === undefined ? saved?.account : parsedInput.account ?? undefined
-      const endpoint = parsedInput.endpoint ?? saved?.endpoint ?? M365_DEFAULT_ENDPOINT
       const nextConfig: AccountRoutingConfig = {
         ...current,
         hostnames: { ...current.hostnames, [hostname]: RESERVED_M365_TARGET },
       }
       const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
       const runtime = createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
-        m365Endpoint: endpoint,
+        m365Endpoint: parsedInput.endpoint,
         mscAuthExe: this.authDefaults.mscAuthExe,
         mscAuthAccount: account,
         mscAuthUpn: saved?.upn,
