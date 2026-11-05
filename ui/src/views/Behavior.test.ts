@@ -248,4 +248,12 @@ describe('behavior view styles', () => {
     expect(css).toMatch(/\.btn\.raw-toggle\[aria-pressed='true'\] \{\s*background: var\(--accent-tint\);/)
     expect(css).toMatch(/@media \(forced-colors: active\) \{\s*\.btn\.raw-toggle\[aria-pressed='true'\] \{\s*forced-color-adjust: none;\s*background: Highlight;/)
   })
+
+  it('caps the Effect column without shortening the row rules: a trailing filler cell takes the slack', () => {
+    expect(css).not.toMatch(/\.table\.effects \{\s*max-width/)
+    expect(css).toMatch(/\.effects \.c-effect \{\s*width: 524px;/)
+    expect(css).toMatch(/\.effects tr::after \{\s*content: '';\s*display: table-cell;/)
+    // ≤560 rows are grids: the filler would become a stray grid item.
+    expect(css).toMatch(/@media \(max-width: 560px\) \{[^@]*\.effects tbody tr::after \{\s*display: none;/)
+  })
 })

@@ -68,16 +68,20 @@ The rail shows `paused` while Live is off.
 
 Load failures are recorded per scope (overview, accounts, models, behavior,
 requests, metadata). A fault clears only when the same scope next succeeds,
-and the last-known data stays visible and is marked stale. M365 load and action
-errors stay in the M365 panel's own status lines.
+and the last-known data stays visible. The affected view shows an inline fault
+strip with the time of that data, and Overview, Models, and Behavior also tag
+that data `stale`; the Accounts Targets panel relies on its strip alone.
+Overview has no strip: its Issues panel lists the overview fault with a Retry
+action. M365 load and action errors stay in the M365 panel's own status lines.
 
 One pure `deriveIssues()` function turns faults, connection state, the latest
 overview, the sample buffer, and last-known account and M365 data into an
 ordered Issues list. Each issue has a `bad`, `warn`, or `info` tone, a
 plain-language title, and at most one next action. It exists only while its
 condition holds. The same list feeds the Issues button on every view, the
-Overview summary sentence, and the Overview Issues panel. `info` issues never
-tint the button.
+Overview summary sentence, and the Overview Issues panel. Overview shows the
+summary sentence only while no `warn` or `bad` issue exists; otherwise the
+Issues panel's first row is the headline. `info` issues never tint the button.
 
 Client-side insights are ephemeral, in-browser derivations, not a history
 system. Overview keeps up to 180 overview samples (6 minutes at the Live

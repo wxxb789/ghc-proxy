@@ -1,3 +1,7 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { cleanup, fireEvent, screen, within } from '@testing-library/svelte'
 import { tick } from 'svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -182,5 +186,20 @@ describe('accounts view: unavailable mode (409)', () => {
     expect(document.getElementById('account-add-form')).not.toBeInTheDocument()
     expect(document.getElementById('account-bootstrap-hostname')).not.toBeInTheDocument()
     expect(faults).not.toHaveProperty('accounts')
+  })
+})
+
+// Read from disk: Vitest does not process component CSS, and jsdom does no layout or media queries.
+describe('targets card styles', () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'Targets.svelte'), 'utf8').split('<style>')[1]!
+
+  it('drops the ≤560 TARGET/ACTIONS captions with a selector that outranks the later global reflow label', () => {
+    // app.css `.table:not(.no-reflow) td[data-label]::before` is (0,3,2) and is bundled after component CSS,
+    // so the scoped override needs [data-label] too: `.targets.svelte-x td[data-label]:is(…)::before` is (0,4,2).
+    expect(css).toMatch(/@media \(max-width: 560px\) \{[^@]*\.targets td\[data-label\]:is\(:first-child, :last-child\)::before \{ content: none; \}/)
+  })
+
+  it('lines the Details Dashboard link up with the URL code boxes, not their reserved status lines', () => {
+    expect(css).toMatch(/\.urls \{[^}]*align-items: center;/)
   })
 })

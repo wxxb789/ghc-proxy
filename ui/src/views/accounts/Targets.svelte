@@ -159,8 +159,10 @@
   .line { display: flex; align-items: center; gap: var(--s-2); }
   .details > td { padding-bottom: var(--s-4); background: var(--bg-0); }
   .details .stack { gap: var(--s-3); }
-  /* URL blocks side by side under small captions, the Dashboard link inline at the end; the kv sits below. */
-  .urls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-2) var(--s-4); }
+  /* URL blocks side by side under small captions, the Dashboard link inline at the end; the kv sits below.
+     Centred: each block's caption above and copy-status line below are the same height, so the link
+     lines up with the code boxes rather than with the empty status line. */
+  .urls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-4); }
   .url { display: grid; flex: 1 1 16rem; gap: var(--s-1); min-width: 0; max-width: 360px; }
   .details .kv { max-width: 720px; }
   .details .kv-row { min-height: 0; padding: 2px 0; }
@@ -184,8 +186,9 @@
     .target-actions { grid-template-columns: 1fr 1fr; }
     .set-default { grid-area: 1 / 1; }
     .target-actions > :global(.remove) { grid-area: 1 / 2; }
-    /* The global reflow labels every cell; the name and the actions need no caption, as in the ≤1100 cards. */
-    .targets td:is(:first-child, :last-child)::before { content: none; }
+    /* The global reflow labels every cell; the name and the actions need no caption, as in the ≤1100 cards.
+       [data-label] keeps this above the global label rule, which is bundled later at equal specificity. */
+    .targets td[data-label]:is(:first-child, :last-child)::before { content: none; }
     .url { flex-basis: 100%; max-width: none; }
   }
 </style>

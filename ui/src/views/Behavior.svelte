@@ -87,7 +87,7 @@
   <div class='table-scroll' aria-busy={data ? undefined : 'true'}>
     {#if !data}<span class='sr-only'>Loading Behavior…</span>{/if}
     <table class='table effects'>
-      <thead><tr><th scope='col' class='c-category'>Category</th><th scope='col'>Effect</th><th scope='col' class='num c-count'>Count</th><th scope='col' class='num c-since'>Since open</th></tr></thead>
+      <thead><tr><th scope='col' class='c-category'>Category</th><th scope='col' class='c-effect'>Effect</th><th scope='col' class='num c-count'>Count</th><th scope='col' class='num c-since'>Since open</th></tr></thead>
       <tbody>
         {#if data}
           {#each shown as effect (effect.id)}
@@ -149,18 +149,29 @@
   .short::first-letter {
     text-transform: uppercase;
   }
-  /* Fixed side columns so a capped Effect column keeps Count near its label. */
-  .table.effects {
-    max-width: 1000px;
-  }
+  /* Fixed columns (1000 px in all) so a capped Effect column keeps Count near its label. */
   .effects .c-category {
     width: 180px;
+  }
+  .effects .c-effect {
+    width: 524px;
   }
   .effects .c-count {
     width: 200px;
   }
   .effects .c-since {
     width: 96px;
+  }
+  /* The slack goes to a trailing filler cell, so the header and row rules still span the panel. */
+  .effects tr::after {
+    content: '';
+    display: table-cell;
+  }
+  .effects thead tr::after {
+    border-bottom: 1px solid var(--line-strong);
+  }
+  .effects tbody tr:not(:last-child)::after {
+    border-bottom: 1px solid var(--line);
   }
   .effects .count {
     display: inline-flex;
@@ -189,6 +200,9 @@
   }
   /* Two-line cards: label and count, then muted `Category · id` (no per-cell labels). */
   @media (max-width: 560px) {
+    .effects tbody tr::after {
+      display: none;
+    }
     .table.effects tbody tr {
       grid-template-columns: minmax(0, 1fr) auto;
       column-gap: var(--s-3);
