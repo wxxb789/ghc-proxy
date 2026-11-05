@@ -147,6 +147,32 @@ describe('config module', () => {
     expect(getCachedConfig()).toEqual({})
   })
 
+  test('restores and normalizes saved M365 endpoints without dropping broker selection', async () => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      m365: {
+        account: 'home-account',
+        endpoint: ' https://gateway.example.test/api/ ',
+        endpoints: ['https://gateway.example.test/api/', 'https://gateway.example.test/api'],
+      },
+    }))
+
+    expect((await readConfig()).m365).toEqual({
+      account: 'home-account',
+      endpoint: 'https://gateway.example.test/api',
+      endpoints: ['https://gateway.example.test/api'],
+    })
+  })
+
+  test('fails closed rather than selecting a different M365 gateway for an invalid saved endpoint', async () => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({
+      smallModel: 'preserved',
+      m365: { endpoint: 'http://gateway.example.test/api' },
+    }))
+
+    await expect(readConfig()).rejects.toThrow('m365')
+    expect(getCachedConfig()).toEqual({})
+  })
+
   test('readConfig() — config is array → returns {}, warns', async () => {
     await fs.writeFile(tempConfigPath, JSON.stringify(['not', 'an', 'object']))
     const config = await readConfig()

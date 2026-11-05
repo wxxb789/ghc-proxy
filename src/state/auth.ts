@@ -4,6 +4,7 @@ export class AuthStore {
   copilotApiBase?: string
   /** Upstream API in use; the M365 path needs no GitHub credentials. */
   upstream: 'github' | 'm365' = 'github'
+  m365Endpoint?: string
   /** Explicit helper path for the M365 upstream. */
   mscAuthExe?: string
   /** Broker home account id or exact email selected for the M365 upstream. */

@@ -3,7 +3,8 @@ import type { CapiRequestContext } from '~/core/capi'
 
 import { randomUUID } from 'node:crypto'
 
-import { M365_BASE_URL, m365Headers } from './m365-upstream'
+import { M365_DEFAULT_ENDPOINT } from '~/lib/m365-endpoints'
+import { m365Headers } from './m365-upstream'
 
 export function standardHeaders() {
   return {
@@ -32,7 +33,7 @@ function editorHeaders(config: ClientConfig) {
 
 export function copilotBaseUrl(config: ClientConfig) {
   if (config.upstream === 'm365') {
-    return M365_BASE_URL
+    return (config.m365Endpoint ?? M365_DEFAULT_ENDPOINT).replace(TRAILING_SLASHES_RE, '')
   }
   if (config.copilotApiBase) {
     return config.copilotApiBase.replace(TRAILING_SLASHES_RE, '')

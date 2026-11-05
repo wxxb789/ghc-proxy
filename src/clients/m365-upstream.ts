@@ -11,8 +11,8 @@ import type { Model, ModelsResponse } from '~/types'
 import { randomUUID } from 'node:crypto'
 
 import { HTTPError } from '~/lib/error'
+import { M365_DEFAULT_ENDPOINT } from '~/lib/m365-endpoints'
 
-export const M365_BASE_URL = 'https://msit.loki.delve.office.com/api/v1/llmapi'
 export const M365_ANTHROPIC_VERSION = '2023-06-01'
 export const M365_API_VERSION = '2026-10-16'
 
@@ -129,9 +129,10 @@ export function normalizeM365Catalog(payload: unknown): ModelsResponse {
  */
 export async function fetchM365Models(
   token: string,
+  endpoint: string = M365_DEFAULT_ENDPOINT,
   fetchImpl: (input: string, init: RequestInit) => Promise<Response> = fetch,
 ): Promise<ModelsResponse> {
-  const response = await fetchImpl(`${M365_BASE_URL}/models`, {
+  const response = await fetchImpl(`${endpoint}/models`, {
     method: 'GET',
     headers: m365Headers(token),
     signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),

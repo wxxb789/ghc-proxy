@@ -13,10 +13,13 @@ import type { AuthStore } from '~/state/auth'
 
 import { fetchM365Models, M365_MODELS } from '~/clients/m365-upstream'
 import { getMscToken } from '~/clients/msc-auth'
+import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
+import { M365_DEFAULT_ENDPOINT } from '~/lib/m365-endpoints'
 import { createAccountRuntime, setTargetAvailability } from '~/state/account-runtime'
 
 export interface TargetRuntimeOptions {
+  m365Endpoint?: string
   mscAuthExe?: string
   mscAuthAccount?: string
   mscAuthUpn?: string
@@ -37,6 +40,7 @@ export function createTargetRuntime(
     return createAccountRuntime(name, {
       ...options.auth,
       upstream: 'm365',
+      m365Endpoint: options.m365Endpoint ?? getCachedConfig().m365?.endpoint ?? M365_DEFAULT_ENDPOINT,
       mscAuthExe: options.mscAuthExe,
       mscAuthAccount: options.mscAuthAccount,
       mscAuthUpn: options.mscAuthUpn,
@@ -69,7 +73,7 @@ export async function initializeM365Target(
     runtime.auth.copilotTokenLastRefreshSucceeded = true
     runtime.auth.mscAuthUsername = credential.username
     runtime.auth.mscAuthTenant = credential.tenant
-    const catalog = await fetchCatalog(credential.accessToken).catch((error: unknown) => {
+    const catalog = await fetchCatalog(credential.accessToken, runtime.auth.m365Endpoint).catch((error: unknown) => {
       if (error instanceof HTTPError && (error.status === 401 || error.status === 403))
         throw error
       return M365_MODELS

@@ -11,6 +11,7 @@ import { z } from 'zod'
 
 import { AccountManagementError } from '~/accounts/manager'
 import { signInMscAccount } from '~/clients/msc-auth'
+import { m365EndpointSchema } from '~/lib/m365-endpoints'
 import { isLoopbackAddress, resolveRequestPeer } from '~/lib/peer'
 import { RECENT_REQUEST_LIMIT } from '~/observability/request-store'
 import { DASHBOARD_CSS, DASHBOARD_HTML, DASHBOARD_JS } from './assets'
@@ -66,21 +67,27 @@ const setDefaultAccountSchema = z.object({
 const configureM365TargetSchema = z.object({
   account: z.string().nullable().optional(),
   hostname: z.string().min(1).optional(),
+  endpoint: m365EndpointSchema.optional(),
 }).strict()
 
 const m365SignInSchema = z.object({ upn: z.string().trim().min(1).optional() }).strict()
+
+const configureM365EndpointSchema = z.object({
+  endpoint: m365EndpointSchema,
+  endpoints: z.array(m365EndpointSchema).optional(),
+}).strict()
 
 export interface DashboardAccountManagement {
   beginAddAccount: (input: AddAccountInput) => Promise<AccountAuthenticationSession>
   bootstrapAccountRouting: (hostname: string) => Promise<void>
   configureM365Target: (
-    input: { account?: string | null, hostname?: string },
+    input: { account?: string | null, hostname?: string, endpoint?: string, endpoints?: string[] },
   ) => Promise<void>
   getAuthenticationSession: (id: string) => AccountAuthenticationSession | undefined
   getMscAuthExe?: () => string | undefined
   getAccountSnapshot: () => AccountManagementSnapshot
   registerM365Target: (
-    input: { account?: string | null, hostname?: string },
+    input: { account?: string | null, hostname?: string, endpoint?: string },
   ) => Promise<void>
   removeM365Target: () => Promise<void>
   removeAccount: (accountName: string) => Promise<void>
@@ -216,6 +223,23 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         return apiError('Invalid hostname payload.', 400)
       try {
         await accountManager.configureM365Target({ hostname: parsed.data.hostname })
+        return apiResponse(getM365DashboardState({
+          manager: accountManager,
+          serverPort: options.serverPort,
+        }))
+      }
+      catch (error) {
+        return accountManagementError(error)
+      }
+    })
+    .post('/dashboard/api/m365/endpoint', async ({ body }) => {
+      if (!accountManager)
+        return accountManagementUnavailable()
+      const parsed = configureM365EndpointSchema.safeParse(body)
+      if (!parsed.success)
+        return apiError('Invalid M365 endpoint payload. Use an HTTPS URL without credentials, query, or fragment.', 400)
+      try {
+        await accountManager.configureM365Target(parsed.data)
         return apiResponse(getM365DashboardState({
           manager: accountManager,
           serverPort: options.serverPort,

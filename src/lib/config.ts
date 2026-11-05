@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import { accountRoutingSchema } from '~/lib/account-routing'
 import { writePrivateFileAtomically } from '~/lib/atomic-file'
+import { m365EndpointSchema } from '~/lib/m365-endpoints'
 import { PATHS } from '~/lib/paths'
 
 const reasoningEffortSchema = z.enum([
@@ -61,6 +62,8 @@ const configFileSchema = z.object({
   m365: z.object({
     account: z.string().optional(),
     upn: z.string().optional(),
+    endpoint: m365EndpointSchema.optional(),
+    endpoints: z.array(m365EndpointSchema).transform(values => [...new Set(values)]).optional(),
   }).optional(),
   accountRouting: accountRoutingSchema.optional(),
 }).passthrough()
@@ -119,6 +122,15 @@ export async function readConfig(): Promise<ConfigFile> {
         )
       }
     }
+    if ('m365' in rawConfig) {
+      const m365Result = configFileSchema.shape.m365.safeParse(rawConfig.m365)
+      if (!m365Result.success) {
+        cachedConfig = {}
+        throw new ConfigValidationError(
+          `config.json m365 is invalid: ${m365Result.error.issues.map(issue => issue.message).join('; ')}`,
+        )
+      }
+    }
     const result = configFileSchema.safeParse(rawConfig)
     if (!result.success) {
       consola.warn(
@@ -159,6 +171,12 @@ export async function readConfig(): Promise<ConfigFile> {
       cachedConfig = {}
       throw new ConfigValidationError(
         `config.json accountRouting could not be parsed: ${(error as Error).message}`,
+      )
+    }
+    if (content?.includes('"m365"')) {
+      cachedConfig = {}
+      throw new ConfigValidationError(
+        `config.json m365 could not be parsed: ${(error as Error).message}`,
       )
     }
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -253,7 +271,13 @@ export async function writeConfigField<K extends keyof ConfigFieldShape>(
       }
     }
 
-    const merged = { ...existing, [field]: value }
+    const fieldValue = field === 'm365' && value !== undefined
+      ? configFileSchema.shape.m365.parse({
+          ...configFileSchema.shape.m365.parse(existing.m365),
+          ...value as ConfigFile['m365'],
+        })
+      : value
+    const merged = { ...existing, [field]: fieldValue }
 
     await writePrivateFileAtomically(
       configPath,
