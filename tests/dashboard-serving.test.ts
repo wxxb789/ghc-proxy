@@ -4,11 +4,12 @@ import { describe, expect, test } from 'bun:test'
 import { Elysia } from 'elysia'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
 import { toErrorResponse } from '~/server'
-import { DASHBOARD_PAGES } from '~/types/dashboard'
+
+const shellHtml = '<!doctype html><html lang="en"><head><script src="/dashboard/theme-init.js"></script><link rel="stylesheet" href="/dashboard/assets/app.css"></head><body><main></main><script type="module" src="/dashboard/assets/app.js"></script></body></html>'
 
 const ui: EmbeddedUi = {
   '/dashboard/index.html': {
-    content: '<!doctype html><html lang="en"><head><script src="/dashboard/theme-init.js"></script><link rel="stylesheet" href="/dashboard/assets/app.css"></head><body><main></main><script type="module" src="/dashboard/assets/app.js"></script></body></html>',
+    content: shellHtml,
     contentType: 'text/html; charset=utf-8',
   },
   '/dashboard/assets/app.js': {
@@ -34,13 +35,23 @@ function createApp(manifest: EmbeddedUi | null = ui) {
 describe('embedded Dashboard serving', () => {
   test('serves the shell for every exact page and its trailing-slash form', async () => {
     const app = createApp()
-    for (const path of ['/dashboard', ...DASHBOARD_PAGES.map(page => `/dashboard/${page}`)]) {
+    const pagePaths = [
+      '/dashboard',
+      '/dashboard/overview',
+      '/dashboard/traffic',
+      '/dashboard/requests',
+      '/dashboard/targets',
+      '/dashboard/models',
+      '/dashboard/behavior',
+    ]
+    for (const path of pagePaths) {
       for (const suffix of ['', '/']) {
         const response = await app.handle(new Request(`http://localhost${path}${suffix}`))
         expect(response.status).toBe(200)
         expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8')
         expect(response.headers.get('cache-control')).toBe('no-store')
         expect(response.headers.get('content-security-policy')).toBe('default-src \'none\'; script-src \'self\'; style-src \'self\'; connect-src \'self\'; img-src \'self\' data:; base-uri \'none\'; frame-ancestors \'none\'; form-action \'none\'; object-src \'none\'')
+        expect(await response.text()).toBe(shellHtml)
       }
     }
   })

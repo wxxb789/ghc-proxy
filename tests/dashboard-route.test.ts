@@ -11,6 +11,7 @@ import process from 'node:process'
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { Elysia } from 'elysia'
+import { beginAccountDeviceAuthentication } from '~/accounts/device-auth'
 import { AccountManager } from '~/accounts/manager'
 import { createTargetRuntime } from '~/accounts/target-runtime'
 import { resetMscTokenCache, setMscHelperRunner } from '~/clients/msc-auth'
@@ -419,48 +420,105 @@ describe('dashboard account management API', () => {
   })
 
   test('serves account data and authentication state without exposing credentials', async () => {
-    const manager = accountManagerFixture()
+    const runtime = createAccountRuntime('default')
+    runtime.auth.githubToken = 'github-secret-token'
+    runtime.auth.copilotToken = 'copilot-secret-token'
+    runtime.auth.githubLogin = 'octocat'
+    runtime.auth.githubValidatedAt = Date.now()
+    runtime.models.cacheModels({ object: 'list', data: [] })
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: { 'default.localhost': 'default' },
+    }, ['default'])
+    configureAccountRuntimes(routing, [runtime])
+    const manager = new AccountManager({ routing, runtimes: [runtime], routingEnabled: true }, {
+      beginAuthentication: options => beginAccountDeviceAuthentication(options, {
+        prepareRuntime: async () => {},
+        createClient: () => ({
+          getDeviceCode: async () => ({
+            device_code: 'private-device-code',
+            user_code: 'ABCD-1234',
+            verification_uri: 'https://github.com/login/device',
+            expires_in: 900,
+            interval: 5,
+          }),
+          pollAccessToken: (_device, options) => {
+            const { promise, reject } = Promise.withResolvers<string>()
+            options?.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Aborted', 'AbortError')),
+              { once: true },
+            )
+            return promise
+          },
+          getGitHubUser: async () => ({ login: 'octocat-work' }),
+        }),
+        activateCopilot: async () => () => {},
+        loadModels: async () => {},
+        now: () => 1_000,
+      }),
+      createSessionId: () => 'session-1',
+      persistence: {
+        addAccount: async (_input, applyRuntime) => applyRuntime(),
+        removeAccount: async (_accountName, _routing, applyRuntime) => applyRuntime(),
+        persistRouting: async (_routing, applyRuntime) => applyRuntime(),
+      },
+    })
     const app = createDashboardRoutes({ accountManager: manager })
 
-    const accountsResponse = await app.handle(new Request(
-      'http://localhost/dashboard/api/targets',
-    ))
-    const startResponse = await app.handle(new Request(
-      'http://localhost/dashboard/api/accounts',
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'origin': 'http://localhost',
+    try {
+      const accountsResponse = await app.handle(new Request(
+        'http://localhost/dashboard/api/targets',
+      ))
+      const startResponse = await app.handle(new Request(
+        'http://localhost/dashboard/api/accounts',
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'origin': 'http://localhost',
+          },
+          body: JSON.stringify({
+            accountName: 'work',
+            hostname: 'work.localhost',
+            gheDomain: 'company.ghe.com',
+          }),
         },
-        body: JSON.stringify({
+      ))
+      const statusResponse = await app.handle(new Request(
+        'http://localhost/dashboard/api/account-auth/session-1',
+      ))
+
+      expect(accountsResponse.status).toBe(200)
+      expect(startResponse.status).toBe(202)
+      expect(statusResponse.status).toBe(200)
+      expect(await startResponse.clone().json()).toMatchObject({
+        authentication: {
           accountName: 'work',
           hostname: 'work.localhost',
-          gheDomain: 'company.ghe.com',
-        }),
-      },
-    ))
-    const statusResponse = await app.handle(new Request(
-      'http://localhost/dashboard/api/account-auth/session-1',
-    ))
-
-    expect(accountsResponse.status).toBe(200)
-    expect(startResponse.status).toBe(202)
-    expect(statusResponse.status).toBe(200)
-    expect(manager.beginAddAccount).toHaveBeenCalledWith({
-      accountName: 'work',
-      hostname: 'work.localhost',
-      gheDomain: 'company.ghe.com',
-    })
-    expect(await accountsResponse.clone().json()).toMatchObject({
-      routing: { baseHostname: 'localhost', defaultAccount: 'default' },
-    })
-    const body = [accountsResponse, startResponse, statusResponse]
-      .map(response => response.clone())
-    const serialized = (await Promise.all(body.map(response => response.text()))).join('\n')
-    expect(serialized).not.toContain('github-secret-token')
-    expect(serialized).not.toContain('copilot-secret-token')
-    expect(serialized).not.toContain('private-device-code')
+          state: 'pending',
+          authorization: {
+            userCode: 'ABCD-1234',
+            verificationUri: 'https://github.com/login/device',
+            pollIntervalSeconds: 5,
+          },
+        },
+      })
+      expect(await accountsResponse.clone().json()).toMatchObject({
+        routing: { baseHostname: 'localhost', defaultAccount: 'default' },
+      })
+      const body = [accountsResponse, startResponse, statusResponse]
+        .map(response => response.clone())
+      const serialized = (await Promise.all(body.map(response => response.text()))).join('\n')
+      expect(serialized).toContain('ABCD-1234')
+      expect(serialized).not.toContain('github-secret-token')
+      expect(serialized).not.toContain('copilot-secret-token')
+      expect(serialized).not.toContain('private-device-code')
+    }
+    finally {
+      await manager.stop()
+    }
   })
 
   test('switches default through the protected management service', async () => {
