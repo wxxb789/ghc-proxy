@@ -109,7 +109,7 @@ applied — the failure mode
 documents. Those requests keep their existing routing.
 
 The two unadvertised acceptances (`claude-sonnet-4.5`, `claude-haiku-4.5`) are
-**not** exploited. They are the same asymmetry recorded in
+**not** relied on. They are the same asymmetry recorded in
 `sampling-parameters.md` for `gpt-5.3-codex` and `none`: the advertised list is
 a floor on capability, so routing on it stays safe, while routing on observed
 behavior would bind the proxy to an undocumented quirk.

@@ -16,7 +16,7 @@ applies_when:
 tags:
   - upstream-contract
   - copilot-api
-  - reverse-engineered-api
+  - undocumented-upstream-api
   - probe-before-assume
   - parameter-filter
   - translation-policy
@@ -27,7 +27,7 @@ tags:
 
 ## Context
 
-ghc-proxy is a reverse-engineered proxy. GitHub Copilot publishes no request
+ghc-proxy targets an undocumented upstream API. GitHub Copilot publishes no request
 schema, so every upstream payload type in this repo — `CapiChatCompletionsPayload`
 (`src/core/capi/types.ts`), `ResponsesPayload` (`src/types/responses.ts`),
 `REASONING_EFFORT_VALUES` (`src/types/copilot.ts`) — was written by hand from

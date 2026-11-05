@@ -215,7 +215,7 @@ frame denial. On a live server, dashboard routes require the actual peer socket
 address to be loopback. The URL hostname must be `localhost`, any
 `*.localhost` name, `0.0.0.0`, or an explicit loopback IPv4/IPv6 address;
 browser requests with a cross-origin `Origin` header receive 403. The peer
-check means a remote client cannot bypass the boundary by spoofing one of those
+check means a remote client cannot cross the boundary by claiming one of those
 Host values. Runtime values are inserted with DOM `textContent`, not HTML
 parsing.
 

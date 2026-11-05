@@ -4,7 +4,7 @@
  * Probe script: verify Copilot's native /v1/messages support for
  * Anthropic search_result content blocks.
  *
- * This sends requests directly to Copilot upstream, bypassing ghc-proxy
+ * This sends requests directly to Copilot upstream, skipping ghc-proxy
  * validation and translation.
  *
  * Usage:
