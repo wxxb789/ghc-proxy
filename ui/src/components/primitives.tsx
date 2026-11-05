@@ -58,12 +58,13 @@ export interface RegionProps<T> {
   empty?: ReactNode
   unavailable?: ReactNode
   retry?: () => void
+  plain?: boolean
 }
-export function Region<T>({ title, result, children, empty = 'No data in this view yet.', unavailable = 'This data is not available.', retry }: RegionProps<T>) {
+export function Region<T>({ title, result, children, empty = 'No data in this view yet.', unavailable = 'This data is not available.', retry, plain = false }: RegionProps<T>) {
   const heading = useId()
   const hasData = result.data !== undefined
   return (
-    <section className="region" aria-labelledby={heading} aria-busy={result.state === 'loading' || result.state === 'refreshing'}>
+    <section className={plain ? 'region region-plain' : 'region'} aria-labelledby={heading} aria-busy={result.state === 'loading' || result.state === 'refreshing'} data-state={result.state}>
       <div className="section-heading">
         <h2 id={heading}>{title}</h2>
         {result.state === 'refreshing' && <span className="muted">Updating</span>}

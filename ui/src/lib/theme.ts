@@ -23,7 +23,6 @@ export function useTheme(): [ThemePreference, (theme: ThemePreference) => void] 
       localStorage.setItem(THEME_STORAGE_KEY, theme)
     }
     catch {
-      // The current tab still uses the selected theme when storage is disabled.
     }
   }
   return [theme, updateTheme]

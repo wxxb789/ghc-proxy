@@ -1,5 +1,38 @@
-.behavior-values { display: grid; gap: 1rem; margin: 0 0 1.5rem; }
-.behavior-values > div { display: grid; gap: 0.3rem; }
-.behavior-values dt { color: var(--ink-muted); font-size: 0.8rem; }
-.behavior-values dd { margin: 0; overflow-wrap: anywhere; font-size: 0.9rem; }
-.behavior-values + .table-scroll { margin-top: 1rem; }
+.behavior-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.behavior-values > div {
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.behavior-values dt {
+  margin-bottom: 4px;
+  color: var(--ink-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.behavior-values dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.5;
+}
+
+.behavior-values + .table-scroll { margin-top: 12px; }
+
+@media (max-width: 560px) {
+  .behavior-values {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  }
+}

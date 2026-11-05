@@ -7,10 +7,11 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearch } from 'wouter'
 import { ApiError, createDashboardApi, SchemaMismatchError } from '../lib/api'
+import { navigateToHostname } from '../lib/navigation'
 import { queryMeta } from '../lib/poll'
 import { useAuthenticationTask } from '../lib/queries'
 import { createDashboardQueryClient } from '../lib/query-client'
-import { buildUrl, parseUrl, redirectUrl } from '../lib/url-state'
+import { buildUrl, parseUrl } from '../lib/url-state'
 import { NavigationContext, RuntimeContext, useDashboard } from './context'
 
 export interface DashboardRootProps {
@@ -51,8 +52,13 @@ export function DashboardRoot({ fetch, children, queryClient }: DashboardRootPro
   }, [client])
 
   const goToHostname = useCallback(async (hostname: string) => {
-    await stop()
-    window.location.assign(redirectUrl(window.location, hostname, url))
+    await navigateToHostname({
+      assign: url => window.location.assign(url),
+      hostname,
+      location: window.location,
+      state: url,
+      stop,
+    })
   }, [stop, url])
 
   useEffect(() => {

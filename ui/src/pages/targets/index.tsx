@@ -90,13 +90,16 @@ function TargetsConfiguration({ data }: { data: TargetsResult }) {
             empty="No targets are registered."
             columns={[
               { key: 'name', header: 'Target', render: target => (
-                <>
-                  <strong>{target.name}</strong>
-                  <p className="muted">
-                    {target.kind === 'github' ? 'GitHub' : 'M365'}
-                    {target.isDefault ? ' · Default' : ''}
-                  </p>
-                </>
+                <div className="target-identity">
+                  <span className="target-avatar" aria-hidden="true">{target.name.slice(0, 1).toUpperCase()}</span>
+                  <div>
+                    <strong>{target.name}</strong>
+                    <p className="muted">
+                      {target.kind === 'github' ? 'GitHub' : 'M365'}
+                      {target.isDefault ? ' · Default' : ''}
+                    </p>
+                  </div>
+                </div>
               ) },
               { key: 'identity', header: 'Identity', render: target => (
                 <>
@@ -231,6 +234,6 @@ function TargetsConfiguration({ data }: { data: TargetsResult }) {
 export function TargetsPage() {
   const targets = useTargets()
   return (
-    <Region title="Target configuration" result={targets.region} retry={() => { void targets.refetch() }} empty={targets.data ? <TargetsConfiguration data={targets.data} /> : undefined}>{data => <TargetsConfiguration data={data} />}</Region>
+    <Region plain title="Target configuration" result={targets.region} retry={() => { void targets.refetch() }} empty={targets.data ? <TargetsConfiguration data={targets.data} /> : undefined}>{data => <TargetsConfiguration data={data} />}</Region>
   )
 }

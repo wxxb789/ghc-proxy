@@ -8,6 +8,15 @@ import { useModels } from '../../lib/queries'
 import { modelCapabilities, modelCompatibility, modelLimits, selectedModelsTsv } from './projection'
 import './models.css'
 
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true" focusable="false">
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4.5 4.5" />
+    </svg>
+  )
+}
+
 function ModelCatalog({ data }: { data: ModelsResult }) {
   const { announce } = useDashboard()
   const [filter, setFilter] = useState('')
@@ -80,10 +89,13 @@ function ModelCatalog({ data }: { data: ModelsResult }) {
           <code>{data.apiBaseUrl}</code>
         </p>
       </div>
-      <div className="inline-controls">
-        <label className="form-field">
+      <div className="inline-controls models-controls">
+        <label className="form-field model-filter">
           Filter models
-          <input type="text" value={filter} onChange={event => setFilter(event.target.value)} />
+          <span className="input-with-icon">
+            <span className="input-icon" aria-hidden="true"><SearchIcon /></span>
+            <input type="text" value={filter} onChange={event => setFilter(event.target.value)} />
+          </span>
         </label>
         <label className="inline-controls">
           <input type="checkbox" checked={grouped} onChange={event => setGrouped(event.target.checked)} />

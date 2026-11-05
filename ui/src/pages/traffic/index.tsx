@@ -11,7 +11,7 @@ export function TrafficPage() {
   const requests = useRequests()
   const result = { ...metrics.region, state: metrics.region.state === 'empty' ? 'ready' as const : metrics.region.state }
   return (
-    <>
+    <div className="traffic-page">
       <Region title="Terminal traffic" result={result} retry={() => { void metrics.refetch() }}>
         {data => (
           <>
@@ -22,12 +22,14 @@ export function TrafficPage() {
           </>
         )}
       </Region>
-      <Region title="Latency" result={result} retry={() => { void metrics.refetch() }}>
-        {data => <LatencyChart key={`${data.startedAt}:${url.target ?? ''}`} metrics={data} />}
-      </Region>
-      <Region title="Distribution" result={result} retry={() => { void metrics.refetch() }}>
-        {data => <HistogramChart key={`${data.startedAt}:${url.target ?? ''}`} metrics={data} />}
-      </Region>
+      <div className="traffic-duo">
+        <Region title="Latency" result={result} retry={() => { void metrics.refetch() }}>
+          {data => <LatencyChart key={`${data.startedAt}:${url.target ?? ''}`} metrics={data} />}
+        </Region>
+        <Region title="Distribution" result={result} retry={() => { void metrics.refetch() }}>
+          {data => <HistogramChart key={`${data.startedAt}:${url.target ?? ''}`} metrics={data} />}
+        </Region>
+      </div>
       <Region title="Window breakdowns" result={result} retry={() => { void metrics.refetch() }}>
         {data => (
           <div className="monitor-chart-grid" key={`${data.startedAt}:${url.target ?? ''}`}>
@@ -40,6 +42,6 @@ export function TrafficPage() {
       <Region title="Recent failures" result={result} retry={() => { void metrics.refetch() }}>
         {data => <RecentFailures metrics={data} requests={requests} />}
       </Region>
-    </>
+    </div>
   )
 }

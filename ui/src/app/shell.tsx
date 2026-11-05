@@ -17,6 +17,81 @@ const GROUPS: readonly { label: string, pages: readonly DashboardPage[] }[] = [
   { label: 'Configure', pages: ['targets', 'models', 'behavior'] },
 ]
 
+const NAV_PATHS: Record<DashboardPage, ReactNode> = {
+  overview: (
+    <>
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.6" />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="1.6" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.6" />
+      <rect x="13.5" y="13.5" width="7" height="7" rx="1.6" />
+    </>
+  ),
+  traffic: <path d="M2.5 12h4l2.5-6.5 4 13 2.5-6.5h6" />,
+  requests: (
+    <>
+      <path d="M4 6h16M4 12h16M4 18h10" />
+      <circle cx="18.5" cy="18" r="1.2" fill="currentColor" stroke="none" />
+    </>
+  ),
+  targets: (
+    <>
+      <rect x="3.5" y="4" width="17" height="6.5" rx="2" />
+      <rect x="3.5" y="13.5" width="17" height="6.5" rx="2" />
+      <path d="M7 7.2h.01M7 16.8h.01" />
+    </>
+  ),
+  models: (
+    <>
+      <path d="m12 3 8.5 4.8L12 12.6 3.5 7.8 12 3Z" />
+      <path d="m3.5 12.2 8.5 4.8 8.5-4.8" />
+      <path d="m3.5 16.4 8.5 4.8 8.5-4.8" opacity=".55" />
+    </>
+  ),
+  behavior: (
+    <>
+      <path d="M4 7h9.5M18.5 7H20M4 17h1.5M10.5 17H20" />
+      <circle cx="16" cy="7" r="2.2" />
+      <circle cx="8" cy="17" r="2.2" />
+    </>
+  ),
+}
+
+function NavIcon({ page }: { page: DashboardPage }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      {NAV_PATHS[page]}
+    </svg>
+  )
+}
+
+function BrandMark() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M5 7.5h6.5a4.5 4.5 0 0 1 0 9H8" />
+      <path d="m10.5 13.5-3 3 3 3" />
+      <circle cx="18" cy="6.5" r="2.4" />
+      <path d="M10 12h3" />
+    </svg>
+  )
+}
+
+function FilterIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M4 5h16l-6.2 7.4V19l-3.6 1.6v-8.2L4 5Z" />
+    </svg>
+  )
+}
+
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+      <path d="M20 4v7h-7" />
+    </svg>
+  )
+}
+
 export function Shell({ children, title, description, actions }: ShellProps) {
   const runtime = useDashboard()
   const { announce } = runtime
@@ -63,7 +138,12 @@ export function Shell({ children, title, description, actions }: ShellProps) {
   const links = GROUPS.map(group => (
     <div key={group.label} className="nav-group">
       <p className="nav-group-label">{group.label}</p>
-      {group.pages.map(page => <Link key={page} href={pageUrl(url, page)} aria-current={url.page === page ? 'page' : undefined}>{PAGE_LABELS[page]}</Link>)}
+      {group.pages.map(page => (
+        <Link key={page} href={pageUrl(url, page)} aria-current={url.page === page ? 'page' : undefined}>
+          <span className="nav-icon" aria-hidden="true"><NavIcon page={page} /></span>
+          <span>{PAGE_LABELS[page]}</span>
+        </Link>
+      ))}
     </div>
   ))
   const refreshReason = overview.data?.capabilities.canRefreshMetadata
@@ -75,8 +155,11 @@ export function Shell({ children, title, description, actions }: ShellProps) {
       <a className="skip-link" href="#dashboard-main">Skip to content</a>
       <aside className="sidebar">
         <Link className="brand" href={pageUrl(url, 'overview')}>
-          ghc-proxy
-          <span>Local workspace</span>
+          <span className="brand-mark"><BrandMark /></span>
+          <span className="brand-copy">
+            <span className="brand-name">ghc-proxy</span>
+            <span className="brand-subtitle">Local workspace</span>
+          </span>
         </Link>
         <nav aria-label="Dashboard navigation">{links}</nav>
         <p className="sidebar-note">
@@ -138,7 +221,14 @@ export function Shell({ children, title, description, actions }: ShellProps) {
                   refresh.mutate()
               }}
             >
-              {refresh.isPending ? 'Refreshing…' : 'Refresh'}
+              {refresh.isPending
+                ? 'Refreshing…'
+                : (
+                    <>
+                      <span className="nav-icon" aria-hidden="true"><RefreshIcon /></span>
+                      Refresh
+                    </>
+                  )}
             </button>
             <label className="theme-control">
               <span className="sr-only">Theme</span>
@@ -150,28 +240,30 @@ export function Shell({ children, title, description, actions }: ShellProps) {
             </label>
           </div>
         </header>
-        {refreshReason && (
-          <p id="refresh-unavailable" className="refresh-reason">
-            Refresh unavailable:
-            {refreshReason}
-          </p>
-        )}
-        {overview.error && (
-          <p className="refresh-reason">
-            Health update unavailable:
-            {overview.region.explanation ?? overview.error.message}
-            {overview.data && ' Last known health is shown.'}
-          </p>
-        )}
-        {needsTargets && targets.error && (
-          <p className="refresh-reason">
-            Target list unavailable:
-            {targets.region.explanation ?? targets.error.message}
-            {targets.data && ' Last known targets are shown.'}
-          </p>
-        )}
-        <div className="transition-status" role="status" aria-atomic="true">{runtime.notice}</div>
-        {connectionLost && <p className="connection-warning">Connection lost. Showing last known data where available.</p>}
+        <div className="shell-notices">
+          {refreshReason && (
+            <p id="refresh-unavailable" className="refresh-reason">
+              Refresh unavailable:
+              {refreshReason}
+            </p>
+          )}
+          {overview.error && (
+            <p className="refresh-reason">
+              Health update unavailable:
+              {overview.region.explanation ?? overview.error.message}
+              {overview.data && ' Last known health is shown.'}
+            </p>
+          )}
+          {needsTargets && targets.error && (
+            <p className="refresh-reason">
+              Target list unavailable:
+              {targets.region.explanation ?? targets.error.message}
+              {targets.data && ' Last known targets are shown.'}
+            </p>
+          )}
+          <div className="transition-status" role="status" aria-atomic="true">{runtime.notice}</div>
+          {connectionLost && <p className="connection-warning">Connection lost. Showing last known data where available.</p>}
+        </div>
         <main id="dashboard-main" className="main-content">
           <div className="page-heading">
             <div>
@@ -179,7 +271,7 @@ export function Shell({ children, title, description, actions }: ShellProps) {
               <h1 ref={headingRef} tabIndex={-1}>{runtime.schemaMismatch ? 'Reload required' : pageTitle}</h1>
               {description && <p className="page-description">{description}</p>}
             </div>
-            {actions}
+            {actions && <div className="page-actions">{actions}</div>}
           </div>
           {runtime.schemaMismatch
             ? (
@@ -192,6 +284,7 @@ export function Shell({ children, title, description, actions }: ShellProps) {
                 <>
                   {isMonitorPage(url.page) && targets.data && targets.data.targets.length > 1 && (
                     <div className="global-filter">
+                      <span className="global-filter-icon" aria-hidden="true"><FilterIcon /></span>
                       <label htmlFor="global-target">Route target</label>
                       <select id="global-target" value={url.target ?? ''} onChange={event => navigate({ target: event.target.value || undefined, request: undefined })}>
                         <option value="">All targets</option>

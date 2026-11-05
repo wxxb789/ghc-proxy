@@ -142,6 +142,6 @@ export function BehaviorPage() {
   const { url } = useDashboardUrl()
   const behavior = useBehavior(url.window)
   return (
-    <Region title="Proxy behavior" result={behavior.region} retry={() => { void behavior.refetch() }}>{data => <BehaviorConfiguration data={data} />}</Region>
+    <Region plain title="Proxy behavior" result={behavior.region} retry={() => { void behavior.refetch() }}>{data => <BehaviorConfiguration data={data} />}</Region>
   )
 }

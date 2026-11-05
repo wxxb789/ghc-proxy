@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { act, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NavigationContext, useDashboard, useDashboardUrl } from '../../app/context'
+import { navigateToHostname } from '../../lib/navigation'
 import { authenticationFixture, createFakeFetch, deferred, m365Fixture, m365ReadinessFixture, m365SignInFixture, routingFixture, targetFixture, targetsFixture } from '../../test/fixtures'
 import { renderDashboard } from '../../test/render'
 import { TargetsPage } from './index'
@@ -24,8 +25,13 @@ function NavigationBoundary({ children, destination }: { children: ReactNode, de
   const navigation = useDashboardUrl()
   return (
     <NavigationContext value={{ ...navigation, goToHostname: async (hostname) => {
-      await runtime.stop()
-      destination(hostname)
+      await navigateToHostname({
+        assign: url => destination(new URL(url).hostname),
+        hostname,
+        location: window.location,
+        state: navigation.url,
+        stop: runtime.stop,
+      })
     } }}
     >
       {children}
