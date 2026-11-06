@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: Version bump level
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Runs repository code and dependencies, so it only gets read access.
+  gate:
+    name: Bump and validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      # Publishing re-checks Windows, the Bun floor, and Node Current after the
+      # tag exists; ci.yml covers them first, so require it to be green here.
+      - name: Require green CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CONCLUSION="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --event push --limit 1 --json conclusion --jq '.[0].conclusion // "missing"')"
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "CI for $GITHUB_SHA on main is '$CONCLUSION'; wait for a green ci.yml run before releasing."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 'lts/*'
+          check-latest: true
+
+      - name: Verify Node support baseline matches latest LTS
+        run: >-
+          node -e "const { engines } = require('./package.json');
+          const expected = '>=' + process.versions.node.split('.')[0];
+          if (engines.node !== expected)
+          throw new Error('package.json engines.node must be ' + expected + ' for the latest Node.js LTS');"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Bump version
+        id: bump
+        env:
+          LEVEL: ${{ inputs.level }}
+        run: |
+          bun x bumpp "$LEVEL" --yes --no-commit --no-tag --no-push
+          VERSION="$(node -p "require('./package.json').version")"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "Tag v$VERSION already exists on origin"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Nothing reaches origin unless the bumped tree passes the full gate.
+      - name: Run release validation gate
+        run: |
+          bun run lint:all
+          bun run typecheck
+          bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts'
+          bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts
+          bun run test:ui
+          bun run build
+          bun run smoke:packaged
+
+  # Holds the write token; installs and runs no repository dependencies.
+  tag:
+    name: Commit, tag, push, and dispatch publishing
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Commit, tag, and push atomically
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          npm version "$VERSION" --no-git-tag-version
+          CHANGES="$(git status --porcelain --untracked-files=no)"
+          if [ "$CHANGES" != " M package.json" ]; then
+            echo "The release commit must change only package.json, found:"
+            echo "$CHANGES"
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore: release v$VERSION" -- package.json
+          git tag -a "v$VERSION" -m "chore: release v$VERSION"
+          # --atomic rejects both refs if main moved during the run.
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/v$VERSION"
+
+      # Tags pushed with GITHUB_TOKEN do not trigger push workflows, but
+      # workflow_dispatch does. Publishing runs on the tag ref so npm and
+      # Docker provenance point at the release commit.
+      - name: Dispatch publishing workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          gh workflow run release-npm.yml --ref "v$VERSION"
+          gh workflow run release-docker.yml --ref "v$VERSION"

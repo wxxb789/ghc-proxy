@@ -1,13 +1,13 @@
 name: Release NPM
 
+# Dispatched on a vX.Y.Z tag by release.yml; also re-runnable by hand on a tag.
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  workflow_dispatch:
 
 jobs:
   msc-auth:
     name: Build Windows credential helper
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
