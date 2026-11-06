@@ -29,7 +29,7 @@ An advertised set is also not an ordered ladder every model implements a prefix 
 The record describes the model, not the deployment serving it. An advertised capability can still be refused by an account-scoped policy on the infrastructure a model happens to run on — so an advertisement is a claim about what the model can do, never a guarantee that this subscriber may do it. A refusal of that kind needs its own bounded, dated exclusion; folding it into the capability check would state it as a property of the model, which it is not.
 
 ### Decisions API
-The public OpenAI-compatible subset served by `POST /decisions` and `POST /v1/decisions`. It carries a model, string or message evidence, and keyed predicate, choice, or score questions. The proxy rejects public fields it cannot translate losslessly rather than dropping them, and returns an answer array in request order.
+The public OpenAI-compatible API served by `POST /decisions` and `POST /v1/decisions`. It carries a model, string or message evidence, and keyed predicate, choice, or score questions, and returns an answer array in request order. Models advertising Copilot `/v1/decisions` receive the public body with the resolved model id, plus placeholder names for unnamed or duplicate-named questions that are restored in the response; for System One models the proxy rejects public fields it cannot translate losslessly rather than dropping them.
 
 ### System One
 Copilot's keyed-question upstream contract at `POST /v1/systemone`. Its request pairs a state with a `questions` object keyed `q{index}`, and its response supplies an answer for each key plus usage. The Decisions route maps to and from this shape; the public boundary never exposes System One question or answer objects.

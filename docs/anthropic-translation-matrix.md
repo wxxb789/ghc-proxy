@@ -7,9 +7,10 @@ For the newer per-model routing behavior, including the Anthropic <-> Responses 
 ## Other protocol translations
 
 This matrix covers Anthropic <-> OpenAI Chat Completions only. The Decisions
-route translates OpenAI Decisions to Copilot System One; see
-[Decisions API](./docs/design/decisions-api.md) for its supported subset, its
-exact `/v1/systemone` admission gate, and its unverified live contract status.
+route passes OpenAI Decisions through to Copilot `/v1/decisions` or translates
+it to Copilot System One, per model; see
+[Decisions API](./design/decisions-api.md) for the admission rule and the
+System One subset.
 
 ## Anthropic Request -> OpenAI Request
 

@@ -22,9 +22,11 @@ import {
 type SystemOnePayload = Parameters<CopilotClient['createSystemOne']>[0]
 type SystemOneOptions = Parameters<CopilotClient['createSystemOne']>[1]
 type GetModelsOptions = Parameters<CopilotClient['getModels']>[0]
+type NativePayload = Parameters<CopilotClient['createDecisions']>[0]
 
 const originalCreateSystemOne = Client.prototype.createSystemOne
 const originalGetModels = Client.prototype.getModels
+const originalCreateDecisions = Client.prototype.createDecisions
 
 const validBody = {
   model: 'microsoft-decision-1',
@@ -86,6 +88,8 @@ describe('decisions route', () => {
   let createCalls: Array<{ payload: SystemOnePayload, options?: SystemOneOptions }>
   let getModelsCalls: number
   let createImpl: (payload: SystemOnePayload) => Promise<unknown>
+  let nativeCalls: Array<NativePayload>
+  let nativeImpl: (payload: NativePayload) => Promise<unknown>
 
   beforeEach(() => {
     setupDefaultTestState()
@@ -93,6 +97,12 @@ describe('decisions route', () => {
     createCalls = []
     getModelsCalls = 0
     createImpl = async () => validResponse
+    nativeCalls = []
+    nativeImpl = async () => ({})
+    Client.prototype.createDecisions = (async (payload: NativePayload) => {
+      nativeCalls.push(payload)
+      return nativeImpl(payload)
+    }) as typeof Client.prototype.createDecisions
 
     Client.prototype.createSystemOne = (async (
       payload: SystemOnePayload,
@@ -111,6 +121,7 @@ describe('decisions route', () => {
   afterEach(() => {
     Client.prototype.createSystemOne = originalCreateSystemOne
     Client.prototype.getModels = originalGetModels
+    Client.prototype.createDecisions = originalCreateDecisions
     clearConfig()
   })
 
@@ -245,6 +256,17 @@ describe('decisions route', () => {
 
     const response = await post('/v1/decisions', {
       ...validBody,
+      stream: true,
+    })
+
+    expect(response.status).toBe(400)
+    expect(getModelsCalls).toBe(0)
+    expect(createCalls).toHaveLength(0)
+  })
+
+  test('rejects System One-only evidence after admission without dispatch', async () => {
+    const response = await post('/v1/decisions', {
+      ...validBody,
       questions: [{
         type: 'choice',
         instructions: [{
@@ -256,7 +278,9 @@ describe('decisions route', () => {
     })
 
     expect(response.status).toBe(400)
-    expect(getModelsCalls).toBe(0)
+    expect(await response.json()).toMatchObject({
+      error: { type: 'translation_error', code: 'unsupported_decisions_image' },
+    })
     expect(createCalls).toHaveLength(0)
   })
 
@@ -277,9 +301,7 @@ describe('decisions route', () => {
     expect(createCalls).toHaveLength(0)
   })
 
-  test('rejects duplicate choice values before catalog work', async () => {
-    modelCache.clearModels()
-
+  test('rejects duplicate choice values for a System One model', async () => {
     const response = await post('/v1/decisions', {
       ...validBody,
       questions: [{
@@ -438,5 +460,85 @@ describe('decisions route', () => {
         state: 'completed',
       })
     }
+  })
+
+  describe('native Decisions models', () => {
+    const nativeModel = () => buildModel('gpt-6-luna-decisions', {
+      vendor: 'OpenAI',
+      supported_endpoints: ['/v1/decisions'],
+    })
+
+    beforeEach(() => {
+      modelCache.cacheModels(buildModelsResponse(decisionModel(), nativeModel()))
+    })
+
+    test('passes the public body and response through unchanged', async () => {
+      const body = {
+        model: 'gpt-6-luna-decisions',
+        input: [
+          {
+            role: 'user',
+            content: [
+              { type: 'input_text', text: 'Refund?', prompt_cache_breakpoint: { mode: 'explicit' } },
+              { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+            ],
+          },
+          { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{}' },
+          { type: 'function_call_output', call_id: 'call_1', output: 'order 123' },
+          { role: 'assistant', content: [{ type: 'refusal', refusal: 'No.' }], phase: 'final_answer' },
+        ],
+        questions: [{ type: 'predicate', name: 'refund', instructions: 'Refund requested?' }],
+        safety_identifier: 'user-1',
+        prompt_cache_key: 'support',
+        prompt_cache_options: { mode: 'explicit', ttl: '30m' },
+      }
+      const upstream = {
+        model: 'gpt-6-luna',
+        answers: [{ type: 'predicate', name: 'refund', probability: 0.97 }],
+        usage: {
+          input_tokens: 40,
+          input_tokens_details: { cached_tokens: 32, cache_write_tokens: 0 },
+          output_tokens: 0,
+          output_tokens_details: { reasoning_tokens: 0 },
+          total_tokens: 40,
+        },
+      }
+      nativeImpl = async () => upstream
+
+      const response = await post('/v1/decisions', body)
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual(upstream)
+      expect(nativeCalls).toEqual([body as unknown as NativePayload])
+      expect(createCalls).toHaveLength(0)
+    })
+
+    test('names questions for the gateway and restores the public names', async () => {
+      const names = [undefined, 'a', 'a', '', 'q0']
+      nativeImpl = async payload => ({
+        model: 'gpt-6-luna',
+        answers: payload.questions.map(question => ({ type: 'predicate', name: question.name, probability: 0.5 })),
+        usage: {},
+      })
+
+      const response = await post('/v1/decisions', {
+        ...validBody,
+        model: 'gpt-6-luna-decisions',
+        questions: names.map(name => ({ type: 'predicate', instructions: 'Is it?', ...(name === undefined ? {} : { name }) })),
+      })
+
+      expect(response.status).toBe(200)
+      expect(nativeCalls[0]?.questions.map(question => question.name)).toEqual(['_q0', 'a', 'q2', 'q3', 'q0'])
+      const json = await response.json() as { answers: Array<{ name: string | null }> }
+      expect(json.answers.map(answer => answer.name)).toEqual([null, 'a', 'a', '', 'q0'])
+    })
+
+    test('keeps the System One path for System One models', async () => {
+      const response = await post('/v1/decisions', validBody)
+
+      expect(response.status).toBe(200)
+      expect(createCalls).toHaveLength(1)
+      expect(nativeCalls).toHaveLength(0)
+    })
   })
 })

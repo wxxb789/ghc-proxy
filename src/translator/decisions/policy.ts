@@ -7,6 +7,9 @@ import type {
 
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 
+// Upstream System One rejects larger requests with a 422 ("the limit is 255").
+const MAX_SYSTEMONE_QUESTIONS = 255
+
 function unsupported(kind: string, message: string): never {
   throw new TranslationFailure(message, { status: 400, kind })
 }
@@ -17,13 +20,13 @@ function isMessage(item: object): item is DecisionsMessage {
 
 function assertPartSupported(part: DecisionsInputPart, role: DecisionsMessage['role']): void {
   if (part.type === 'input_image') {
-    unsupported('unsupported_decisions_image', 'Image input is not supported by this proxy.')
+    unsupported('unsupported_decisions_image', 'Image input is not supported by System One models.')
   }
 
   if (part.type === 'input_text' && part.prompt_cache_breakpoint != null) {
     unsupported(
       'unsupported_decisions_prompt_cache_breakpoint',
-      'Prompt cache breakpoints are not supported by this proxy.',
+      'Prompt cache breakpoints are not supported by System One models.',
     )
   }
 
@@ -38,13 +41,13 @@ function assertPartSupported(part: DecisionsInputPart, role: DecisionsMessage['r
     if (part.type === 'refusal') {
       unsupported(
         'unsupported_decisions_assistant_refusal',
-        'Assistant refusal evidence is not supported by this proxy.',
+        'Assistant refusal evidence is not supported by System One models.',
       )
     }
     if (part.type !== 'output_text') {
       unsupported(
         'unsupported_decisions_assistant_content',
-        'Assistant messages support only output_text content in this proxy.',
+        'Assistant messages support only output_text content for System One models.',
       )
     }
     return
@@ -62,7 +65,7 @@ function assertMessageSupported(message: DecisionsMessage): void {
   if (message.phase != null) {
     unsupported(
       'unsupported_decisions_message_phase',
-      'Message phase is not supported by this proxy.',
+      'Message phase is not supported by System One models.',
     )
   }
 
@@ -82,21 +85,20 @@ function assertQuestionSupported(question: DecisionsQuestion): void {
 
   for (const part of question.instructions) {
     if (part.type === 'input_image') {
-      unsupported('unsupported_decisions_image', 'Image input is not supported by this proxy.')
+      unsupported('unsupported_decisions_image', 'Image input is not supported by System One models.')
     }
     if (part.type === 'input_text' && part.prompt_cache_breakpoint != null) {
       unsupported(
         'unsupported_decisions_prompt_cache_breakpoint',
-        'Prompt cache breakpoints are not supported by this proxy.',
+        'Prompt cache breakpoints are not supported by System One models.',
       )
     }
   }
 }
 
 /**
- * Typed-value uniqueness is part of admission, not translation: rejecting it
- * here keeps the 400 stable on a cold catalog, where a later rejection would
- * first burn a GET /models (and surface a catalog failure instead).
+ * System One keys choices by index, so typed values must be unique for the
+ * response to map back to a single public value.
  */
 function assertChoiceValuesUnique(question: Extract<DecisionsQuestion, { type: 'choice' }>): void {
   const seen = new Set<string>()
@@ -109,27 +111,33 @@ function assertChoiceValuesUnique(question: Extract<DecisionsQuestion, { type: '
 }
 
 /**
- * Reject every public field this proxy cannot translate losslessly. The check
- * runs before catalog loading, so an invalid request never makes an upstream
- * call of any kind.
+ * Reject every public field the System One translation cannot preserve
+ * losslessly. Models served natively on `/v1/decisions` skip this check, so it
+ * runs after model admission and before any inference call.
  */
-export function assertDecisionsRequestSupported(payload: DecisionsRequest): void {
+export function assertSystemOneRequestSupported(payload: DecisionsRequest): void {
+  if (payload.questions.length > MAX_SYSTEMONE_QUESTIONS) {
+    unsupported(
+      'unsupported_decisions_question_count',
+      `System One models accept at most ${MAX_SYSTEMONE_QUESTIONS} questions.`,
+    )
+  }
   if (payload.safety_identifier != null) {
     unsupported(
       'unsupported_decisions_safety_identifier',
-      'safety_identifier is not supported by this proxy.',
+      'safety_identifier is not supported by System One models.',
     )
   }
   if (payload.prompt_cache_key != null) {
     unsupported(
       'unsupported_decisions_prompt_cache_key',
-      'prompt_cache_key is not supported by this proxy.',
+      'prompt_cache_key is not supported by System One models.',
     )
   }
   if (payload.prompt_cache_options != null) {
     unsupported(
       'unsupported_decisions_prompt_cache_options',
-      'prompt_cache_options is not supported by this proxy.',
+      'prompt_cache_options is not supported by System One models.',
     )
   }
 
@@ -138,7 +146,7 @@ export function assertDecisionsRequestSupported(payload: DecisionsRequest): void
       if (!isMessage(item)) {
         unsupported(
           'unsupported_decisions_tool_item',
-          'Tool-call and tool-output evidence is not supported by this proxy.',
+          'Tool-call and tool-output evidence is not supported by System One models.',
         )
       }
       assertMessageSupported(item)
