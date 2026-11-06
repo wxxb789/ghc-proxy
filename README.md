@@ -26,7 +26,7 @@ Before you start, make sure you have:
 1. **One supported JavaScript runtime:**
    - **Bun >= 1.4:** `winget install --id Oven-sh.Bun` on Windows, or see the [official installation guide](https://bun.com/docs/installation)
    - **Node.js >= 26:** install the latest LTS release from the [official Node.js download page](https://nodejs.org/en/download)
-2. **A GitHub Copilot subscription** -- individual, business, or enterprise
+2. **A GitHub Copilot subscription** -- individual, business, or enterprise (or, on Windows only, a Microsoft work account with Microsoft 365 Copilot access for the optional [`--upstream m365`](#microsoft-365-copilot---upstream-m365) target, which needs no GitHub credentials)
 
 ## Quick Start
 
@@ -60,7 +60,7 @@ This is the most common use case. There are two ways to set it up:
 bunx --bun ghc-proxy@latest start --claude-code
 ```
 
-This starts the proxy, opens an interactive model picker, and prints a ready-to-paste environment command. Run that command in another terminal to launch Claude Code with the correct configuration.
+This asks you to pick two models: a primary model (used for `ANTHROPIC_MODEL` and `ANTHROPIC_DEFAULT_SONNET_MODEL`) and a small model (`ANTHROPIC_DEFAULT_HAIKU_MODEL`). It then prints a ready-to-paste command for your shell that sets those variables along with `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` and then runs `claude`, and the proxy starts. Run that command in another terminal to launch Claude Code with the correct configuration. With M365-only or named-account routing, if the default target has no models yet, the proxy skips the command with a warning and starts anyway.
 
 ### Option B: Permanent config (Recommended)
 
@@ -118,8 +118,8 @@ bunx --bun ghc-proxy@latest start          # Start the proxy server
 bunx --bun ghc-proxy@latest auth           # Run GitHub auth flow without starting the server
 bunx --bun ghc-proxy@latest auth --account work # Create or replace a named account
 bunx --bun ghc-proxy@latest check-usage    # Show your Copilot usage/quota in the terminal
-bunx --bun ghc-proxy@latest debug          # Print diagnostic info (version, paths, token status)
-bunx --bun ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node runtime contracts in the packaged bundle
+bunx --bun ghc-proxy@latest debug          # Print diagnostic info (version, paths, token status); --json for machine-readable output
+bunx --bun ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node runtime contracts in the packaged bundle; --json for machine-readable output
 ```
 
 ### `start` Options
@@ -134,11 +134,11 @@ bunx --bun ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node
 | `--manual` | -- | `false` | Manually approve each request |
 | `--github-token` | `-g` | -- | Use a GitHub token for this process only (normally obtained with `auth`); this flag does not persist it to `config.json` |
 | `--upstream` | -- | `github` | Upstream API: `github`, or `m365` for the Microsoft 365 Copilot gateway (Windows only; always binds `127.0.0.1`) |
-| `--msc-auth-exe` | -- | bundled helper | Path to the `msc-auth` helper used by `--upstream m365` |
-| `--msc-auth-account` | -- | unambiguous broker account | Broker home account ID or exact email from `msc-auth --accounts`; ambiguous emails require the home ID |
+| `--msc-auth-exe` | -- | `GHC_MSC_AUTH_EXE`, else bundled helper | Path to the `msc-auth` helper used by `--upstream m365` |
+| `--msc-auth-account` | -- | `config.json` `m365.account`, then `m365.upn`, else the unambiguous broker account | Broker home account ID or exact email from `msc-auth --accounts`; ambiguous emails require the home ID |
 | `--claude-code` | `-c` | `false` | Generate a Claude Code launch command |
 | `--show-token` | -- | `false` | Display tokens on auth and refresh |
-| `--dump-failed-payloads` | `-D` | `false` | Dump failed `/responses` payloads on upstream 400 errors for debugging. Can also be enabled with `DUMP_FAILED_PAYLOADS=1`. |
+| `--dump-failed-payloads` | `-D` | `false` | Dump failed `/responses` payloads on upstream 400 errors for debugging. Can also be enabled with `DUMP_FAILED_PAYLOADS=1` (or `true`). |
 | `--proxy-env` | -- | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from env (Node.js only; Bun reads proxy env natively) |
 | `--idle-timeout` | -- | `120` | Bun server idle timeout in seconds (`0` disables; Bun max is `255`; streaming routes disable idle timeout automatically) |
 | `--upstream-timeout` | -- | `1800` | Upstream request timeout in seconds (`0` disables). Enforced as a total-duration `AbortSignal`. Note both runtimes also apply their own ~300s **idle** timeout to `fetch` (Bun's built-in limit; Node's undici `headersTimeout`/`bodyTimeout`), which fires when no byte arrives for that long — a steadily streaming response is not capped by it, but a stalled one is rejected at ~300s and returned as a `504`. |
@@ -148,6 +148,17 @@ bunx --bun ghc-proxy@latest selfcheck      # Probe tokenizer chunks and Bun/Node
 | `--upstream-queue-base-delay` | -- | `2` | Base delay in seconds for upstream retry backoff when `Retry-After` is absent |
 | `--upstream-queue-max-delay` | -- | `60` | Maximum computed backoff in seconds; never shortens a valid `Retry-After` minimum |
 | `--ghe-domain` | `--ghe` | -- | GitHub Enterprise Cloud company domain (e.g. `company.ghe.com`). Required for GHE.com device login on first run; persisted automatically for later runs. |
+
+The five upstream queue/recovery flags override the matching `config.json` fields (`upstreamQueueConcurrency`, `upstreamQueueMaxRetries`, `upstreamRecoveryBudgetSeconds`, `upstreamQueueBaseDelaySeconds`, `upstreamQueueMaxDelaySeconds`); the listed defaults apply only when neither the flag nor the field is set.
+
+### `auth` Options
+
+| Option | Alias | Default | Description |
+|--------|-------|---------|-------------|
+| `--account` | -- | active account | Named account to create or replace in `credentials.json` |
+| `--ghe-domain` | `--ghe` | persisted domain | GitHub Enterprise Cloud company domain (e.g. `company.ghe.com`) |
+| `--show-token` | -- | `false` | Display the GitHub token after auth |
+| `--verbose` | `-v` | `false` | Enable verbose logging |
 
 ## Rate Limiting
 
@@ -195,7 +206,9 @@ bunx --bun ghc-proxy@latest auth --ghe-domain company.ghe.com
 bunx --bun ghc-proxy@latest start --account-type enterprise
 ```
 
-The proxy normalizes and persists the GHE domain automatically after a successful authentication, so you only need to pass `--ghe-domain` on the first run or when switching tenants.
+The proxy normalizes and persists the GHE domain with the credential after a successful authentication, so later `start` runs need no flag. To switch tenants, run `auth --ghe-domain <new-domain>` (add `--account <name>` for a named account). A single-account installation is migrated to named-account routing on its first `start` without `--ghe-domain` or `--github-token`; after that, `start --ghe-domain` is rejected (see [Named Account Routing](#named-account-routing)).
+
+When a GHE domain is in effect (passed with `--ghe-domain` or read from the persisted credential or `config.json`), the default `individual` account type is promoted to `enterprise`, so `--account-type enterprise` is optional for GHE.com.
 
 > **Note:** `--account-type enterprise` alone is not sufficient for GHE.com login — the proxy needs the company domain to construct the correct device login URL (`https://<company>.ghe.com/login/device`). GHE.com support is scoped to `*.ghe.com` only and does not apply to self-hosted GitHub Enterprise Server instances.
 
@@ -211,9 +224,10 @@ bunx --bun ghc-proxy@latest start --upstream m365
 
 - **Windows only.** The credential comes from the bundled `msc-auth` helper over WAM/MSAL; the client has no device-code or loopback flow. The helper ships in the npm artifact (`dist/msc-auth/`). Windows source startup (`bun run start`) prepares a complete, current helper automatically; the first local build needs the .NET 10 SDK, C++ build tools, and Windows SDK. A complete `MSC_AUTH_DIR` payload or `--msc-auth-exe` / `GHC_MSC_AUTH_EXE` override avoids compiling. See [helper setup](./msc-auth/README.md#starting-the-proxy-from-source).
 - **Broker accounts.** Opening Accounts discovers Windows broker accounts once; Live polling does not repeatedly spawn the helper. Emails and Microsoft tenant IDs are displayed separately from GitHub identities. `msc-auth --accounts` lists `upn<TAB>homeAccountId<TAB>environment`; select an exact email or home ID with `--msc-auth-account`, or use the Dashboard picker, which persists `m365.account`. A profile signed in only inside the Copilot app may not be visible to WAM: use **Sign in another M365 account**, finish the Windows dialog, then apply the selection. Consumer accounts (MSA) do not support this gateway.
+- **Gateway endpoint.** The default gateway is `https://loki.delve.office.com/api/v1/llmapi`; `https://df.loki.delve.office.com/api/v1/llmapi` and `https://msit.loki.delve.office.com/api/v1/llmapi` are built-in alternatives. In a process with account management, pick an **Upstream endpoint** or add a **Custom HTTPS endpoint** in Dashboard **Accounts → M365 Copilot target**. The selection is stored in `config.json#m365.endpoint`, extra saved choices in `m365.endpoints`; there is no CLI flag. In an M365-only `start --upstream m365` process (or one started with `--github-token`/`--ghe-domain`) these controls are disabled, so set `m365.endpoint` in `config.json` and restart. Catalog discovery and Messages requests both use the selected endpoint, with no automatic failover. Only select trusted endpoints: the Microsoft access token is sent to the selected address. See [Gateway endpoint selection](./docs/design/m365-upstream.md#gateway-endpoint-selection).
 - **Account removal.** Accounts has a **Remove** action for each non-default target. Choose another default before removing the current default; the only remaining target cannot be removed. GitHub removal deletes its local proxy credential and hostname mappings transactionally. Removing M365 deletes its proxy target, not its Windows broker account.
 - **Mixed targets.** Register the target once (`accountRouting.hostnames["m365.localhost"] = "m365"`, or the Dashboard section) and point a client at that hostname. Requests that select it are accepted only from the local machine, serve Anthropic Messages only, and answer `503` with the recorded cause while the account is unavailable. GitHub hostnames are unaffected.
-- **Live catalog.** The current upstream `GET /api/v1/llmapi/models` returned 10 models on 2026-11-03: five Messages models and five Responses models. The proxy exposes its supported Messages subset through `http://m365.localhost:4141/models` and `/v1/models`; use the M365 hostname rather than a GitHub hostname. Transient discovery failures may use the built-in catalog; 401/403 access failures leave the target unavailable instead of reporting it ready.
+- **Live catalog.** Every built-in gateway serves its catalog at `<endpoint>/models` (the proxy requests the same path on a custom endpoint), and the listed models can differ between gateways. On 2026-11-03 the `msit.loki` catalog returned 10 models: five Messages models and five Responses models. The proxy exposes its supported Messages subset through `http://m365.localhost:4141/models` and `/v1/models`; use the M365 hostname rather than a GitHub hostname. In the Dashboard, the Models view can show the M365 catalog (or any other target's) from whatever hostname the Dashboard was opened on: pick the target, or open `/dashboard#/models?target=m365`. Transient discovery failures may use the built-in catalog; 401/403 access failures leave the target unavailable instead of reporting it ready.
 - **Loopback only when it is the only target.** `--upstream m365` binds `127.0.0.1` because the credential spends your own account's quota; in a mixed process the M365 hostname alone is restricted to loopback peers.
 
 See [M365 Upstream](./docs/design/m365-upstream.md) for the header contract, measured limits, and the family fallbacks applied to unadvertised model names.
@@ -265,6 +279,9 @@ bunx --bun ghc-proxy@latest auth --account work --ghe-domain company.ghe.com
 
 Account names are case-sensitive, 1-64 characters, and may contain ASCII
 letters, numbers, `.`, `_`, and `-`; the first character must be alphanumeric.
+The name `m365` is reserved for the Microsoft 365 gateway target: a GitHub
+credential cannot use it, but `accountRouting.defaultAccount` and `hostnames`
+values may select it without a `credentials.json` entry.
 
 An existing single-account installation is automatically migrated at startup.
 The credential migrated from the former single-token configuration is named
@@ -307,7 +324,7 @@ rotates, or load-balances the request to another account. Process-wide policy
 configuration remains shared.
 
 `accountRouting` is automatically created only when the existing credential
-store contains exactly one account. In routing mode every referenced account must already exist, and
+store contains exactly one account. In routing mode every referenced GitHub account must already exist in `credentials.json`, and
 `defaultAccount` must be explicit. Invalid or ambiguous routing config fails
 startup. Dashboard bootstrap is unavailable while process-wide
 `start --github-token` or `start --ghe-domain` overrides are active, and those
@@ -345,14 +362,14 @@ All fields are optional. The full schema:
 | `responsesChatCompletionsFallback` | `boolean` | `false` | Opt in to the Responses create bridge for models that advertise `/chat/completions` but not `/responses` |
 | `responsesOfficialEmulatorTtlSeconds` | `number` | `14400` | In-memory TTL for locally emulated Responses state |
 | `modelReasoningEfforts` | `Record<string, string>` | `{}`; unlisted models use `high` | Per-model reasoning effort defaults for Anthropic-to-Responses translation. Each value must be one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (ascending) |
-| `upstreamQueueConcurrency` | `number` | `10` | Maximum concurrent Copilot upstream requests |
+| `upstreamQueueConcurrency` | `number` | `10` | Maximum concurrent upstream requests per route target (each named account has its own queue) |
 | `upstreamQueueMaxRetries` | `number` | `1` | Maximum retries across capacity and approved pre-connection failures (`0..2`) |
 | `upstreamRecoveryBudgetSeconds` | `number` | `60` | Shared recovery deadline after the first retryable outcome or active-cooldown encounter (`1..120` seconds) |
 | `overloadFallbacks` | `Record<string, string>` | `{}` (disabled) | Exact effective-model mappings for one opt-in fallback dispatch after terminal model `529` |
 | `upstreamQueueBaseDelaySeconds` | `number` | `2` | Base delay (seconds) for upstream retry backoff when `Retry-After` is absent |
 | `upstreamQueueMaxDelaySeconds` | `number` | `60` | Maximum computed backoff (seconds); does not clamp `Retry-After` |
-| `gheDomain` | `string` | unset | GitHub Enterprise Cloud company domain (persisted automatically after GHE.com auth) |
-| `m365` | `{ account?, upn? }` | unset | Broker account for `--upstream m365`; `account` is the home account id from `msc-auth --accounts` |
+| `gheDomain` | `string` | unset | Legacy single-account GHE.com company domain, updated whenever a login runs without `auth --account`. Once `credentials.json` exists, the active credential's own `gheDomain` takes precedence; this field still applies to `start --github-token` and to migrating a legacy `config.json` token. Named accounts in `accountRouting` always use their credential's `gheDomain` |
+| `m365` | `{ account?, upn?, endpoint?, endpoints? }` | unset | Microsoft 365 Copilot target settings, used by `--upstream m365` and by an `m365` route target in a mixed process: `account` is the broker home account id from `msc-auth --accounts` (`--msc-auth-account` overrides it); `upn` is an exact broker account email, used only when no account is set (an email that matches no broker account, or more than one, leaves the target unavailable); `endpoint` is the selected HTTPS gateway (default `https://loki.delve.office.com/api/v1/llmapi`); `endpoints` lists extra saved gateway choices. Invalid `m365` settings fail startup |
 | `accountRouting` | `{ baseHostname, defaultAccount, hostnames }` | unset | Automatically created for legacy single-account installs; exact DNS hostname routing rejects unknown hosts |
 
 Example:
@@ -425,7 +442,9 @@ Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
 }
 ```
 
-> **Note:** Model fallbacks apply only inside the **Chat Completions adapter** used by the Messages fallback path; native Messages and Responses strategies pass the model ID through to Copilot unchanged. With no Opus override, `claude-opus-5` is selected only when cached models advertise it but omit `claude-opus-5.5`.
+> **Note:** Model fallbacks apply only inside the **Chat Completions adapter** used by the Messages fallback path and by `/v1/messages/count_tokens`; native Messages and Responses strategies pass the model ID through to Copilot unchanged. With no Opus override, `claude-opus-5` is selected only when cached models advertise it but omit `claude-opus-5.5`.
+>
+> The M365 target is an exception: when no `modelRewrites` rule matches, unadvertised `claude-opus-*`, `claude-sonnet-*`, and `claude-haiku-*` IDs are mapped to `claude-opus-5.5`, `claude-sonnet-5.5`, and `claude-haiku-5.5` before strategy selection, and `MODEL_FALLBACK_*` / `modelFallback` are ignored (see [M365 family fallbacks](./docs/design/m365-upstream.md#family-fallbacks)).
 
 ### Model Rewrites
 
@@ -440,7 +459,7 @@ For more general model substitution, use `modelRewrites` in the config file. Eac
 }
 ```
 
-Unlike model fallbacks (which only apply to the chat completions path), rewrites are applied **uniformly to all three endpoints** — `/v1/messages`, `/v1/chat/completions`, and `/v1/responses`. Target model names are normalized against Copilot's known model list using dash/dot equivalence (e.g. `gpt-4.1` matches `gpt-4-1`).
+Unlike model fallbacks (which only apply to the chat completions path), rewrites are applied **uniformly** to `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, and `/v1/decisions`. The token-counting routes (`/v1/messages/count_tokens` and `/v1/responses/input_tokens`) do not apply rewrites. Target model names are normalized against Copilot's known model list using dash/dot equivalence (e.g. `gpt-4.1` matches `gpt-4-1`). The same correction applies to the requested model ID when no rule matches, even without any `modelRewrites`.
 
 Rewrites run **before** any other model policy — small-model routing and strategy selection all see the rewritten model.
 
@@ -462,7 +481,7 @@ Mappings are exact one-hop choices, not a traversed graph. Blank, same-model, an
 
 ## Upstream Capacity Recovery
 
-An upstream `429` establishes an account cooldown. A `529` is scoped to the final effective upstream model; if no effective model is known, it remains request-only. Eligible models can bypass cooled waiters while a global slot is free, but active slots and the maximum pending depth remain process-global limits.
+An upstream `429` establishes an account cooldown. A `529` is scoped to the final effective upstream model; if no effective model is known, it remains request-only. Eligible models can bypass cooled waiters while one of the account's slots is free, but active slots and the maximum pending depth are still shared by every model on that account. Each account has its own queue; all queues use the same configured settings, but occupancy and cooldowns never cross accounts.
 
 The first attempt keeps the normal upstream timeout. The recovery budget starts at the first approved retryable outcome or the first encounter with an already-active cooldown, then covers every later cooldown/backoff wait, queue acquisition, same-model attempt until `Response`, and overload fallback. A valid integer-seconds, HTTP-date, or full-string fractional-seconds `Retry-After` is a strict lower bound and installs its full cooldown deadline. If that minimum cannot fit, the proxy skips the same-model retry instead of shortening it. Without a valid header, full jitter is sampled from zero through the smallest of exponential backoff, `upstreamQueueMaxDelaySeconds`, and remaining budget.
 
@@ -479,9 +498,12 @@ Recovery logs use the existing request ID and structured fields such as event, r
 
 The switch defaults to `false`. Routing is conservative:
 
-- the target `smallModel` must exist in Copilot's model list
+- both the requested model (after any `modelRewrites` / dash-dot correction) and the target `smallModel` must exist in Copilot's model list
 - it must preserve the original model's declared endpoint support
 - tool, thinking, and vision requests are not rerouted to a model that lacks the required capabilities
+- requests with an extended-context `anthropic-beta` value of the form `context-<N>k-…` or `context-<N>m-…` (e.g. `context-1m-2025-08-07`) are never rerouted; other `context-` betas such as `context-management-*` do not block rerouting
+
+A request counts as a compact request when its system prompt (a string, or any text block of a system block array) starts with the summarization prefix `You are a helpful AI assistant tasked with summarizing conversations`, which Claude Code sends for compaction.
 
 ## How it Works
 
@@ -499,6 +521,8 @@ ghc-proxy sits between your tools and the GitHub Copilot API:
 ```
 
 The proxy authenticates with GitHub using the [device code OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow) (the same flow VS Code uses), then exchanges the GitHub token for a short-lived Copilot token that auto-refreshes.
+
+Each request's hostname selects a route target. Besides GitHub Copilot accounts, a target can be the Microsoft 365 Copilot gateway (default `https://loki.delve.office.com/api/v1/llmapi`). That target authenticates with your Windows work account through the bundled `msc-auth` helper and the Windows token broker (WAM) instead of GitHub device flow, serves Anthropic Messages only, and is reachable from loopback peers only. See [Microsoft 365 Copilot](#microsoft-365-copilot---upstream-m365).
 
 When the Copilot token response includes `endpoints.api`, `ghc-proxy` now prefers that runtime API base automatically instead of relying only on the configured account type. This keeps enterprise/business routing aligned with the endpoint GitHub actually returned for the current token.
 
@@ -553,6 +577,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET`  | `/` | Plain-text `Server running` check |
 | `GET`  | `/health` | Liveness/readiness probe — returns `{ status, copilotToken, modelsLoaded, version }` |
 | `GET`  | `/usage` | Copilot quota / usage monitoring |
 | `GET`  | `/token` | Inspect the current Copilot token |
@@ -566,7 +591,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | `GET` | `/dashboard/assets/app.css` | Dashboard stylesheet |
 | `GET` | `/dashboard/theme-init.js` | Dashboard theme bootstrap script (runs before first paint) |
 | `GET` | `/dashboard/api/overview` | Process, authentication, quota, request, and queue summary |
-| `GET` | `/dashboard/api/models` | Upstream model metadata and effective proxy capabilities |
+| `GET` | `/dashboard/api/models` | Upstream model metadata and effective proxy capabilities for the target the request hostname routes to, or for another route target (including M365) with `?target=<name>`; an unknown target returns `404` |
 | `GET` | `/dashboard/api/behavior` | Active routing, compatibility policies, strategies, and effect counters |
 | `GET` | `/dashboard/api/requests` | Active requests and the most recent 256 completed request summaries |
 | `GET` | `/dashboard/api/accounts` | Safe per-account identity, tenant, authentication, Copilot status, quota, hostname, and default marker |
@@ -574,8 +599,18 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | `POST` | `/dashboard/api/accounts` | Start device authentication for a new named account and its dedicated hostname |
 | `GET` | `/dashboard/api/account-auth/:id` | Read the safe state of an in-progress account authentication |
 | `POST` | `/dashboard/api/accounts/default` | Persist and activate an explicit default account |
+| `DELETE` | `/dashboard/api/accounts/:accountName` | Remove a non-default target (the current default and the only remaining target cannot be removed) |
+| `POST` | `/dashboard/api/refresh` | Force a metadata refresh for every routed target (GitHub: identity, quota, and models; M365: models) |
+| `GET` | `/dashboard/api/m365` | M365 target state: registration, gateway endpoint and choices, hostname, broker account, models, availability, and routing |
+| `POST` | `/dashboard/api/m365/probe` | Check platform and `msc-auth` helper readiness, and list Windows broker (WAM) accounts |
+| `POST` | `/dashboard/api/m365/sign-in` | Sign in another M365 account through WAM (returns the account identity, never a token) |
+| `POST` | `/dashboard/api/m365/register` | Register the M365 target (account, hostname, gateway endpoint) |
+| `POST` | `/dashboard/api/m365/remove` | Remove the M365 proxy target (not the Windows broker account) |
+| `POST` | `/dashboard/api/m365/account` | Select the M365 broker account |
+| `POST` | `/dashboard/api/m365/hostname` | Change the M365 target hostname |
+| `POST` | `/dashboard/api/m365/endpoint` | Select the M365 gateway endpoint and optionally save the list of endpoint choices |
 
-Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. A normal legacy single-account process automatically migrates to named routing at startup, so adding accounts and changing the default are available after startup. Processes using `start --github-token` or `start --ghe-domain` retain legacy behavior and return `409` for account management because those overrides cannot be assigned safely. Dashboard requests are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection, transaction, and security contract.
+Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. A normal legacy single-account process automatically migrates to named routing at startup, so adding accounts and changing the default are available after startup. Account management returns `409` when it is unavailable for the process: with legacy `start --github-token` or `start --ghe-domain` overrides (they cannot be assigned safely), in an M365-only `start --upstream m365` process, or for a legacy `credentials.json` without `accountRouting` that holds more than one account or whose active account name is not routing-compatible. With `accountRouting` configured, `--github-token` and `--ghe-domain` are startup errors. Dashboard requests are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection, transaction, and security contract.
 
 > **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/decisions`, `/responses` and its resource routes, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
 
@@ -596,9 +631,11 @@ Dashboard routes are restricted to local access and return `403` when the peer, 
 - automatic trimming of Responses `input` to the latest `compaction` item is disabled by default and only applies when `responsesApiAutoCompactInput` is `true`
 - reasoning defaults for Anthropic -> Responses translation can be tuned with `modelReasoningEfforts`
 - request parameters that a model rejects (e.g. `temperature`/`top_p` on reasoning models) are stripped on the Responses boundary rather than leaked upstream as a `400`; see [Responses Parameter Filters](#responses-parameter-filters)
+- a `max_output_tokens` below Copilot's floor of `16` is raised to `16` on the native `/v1/responses` path and the `/v1/messages` -> Responses path (not the Chat bridge) instead of being leaked upstream as a `400`
+- a `reasoning.effort` that the resolved model does not list in its advertised `reasoning_effort` levels is replaced with the highest level it does advertise, with a warning logged; this applies on the native path and the Chat bridge. `none` and `minimal` pass through unchanged, and models that advertise no effort levels are left untouched
 - built-in web search (`web_search`, `web_search_preview`, and their dated variants) is forwarded to Copilot rather than blocked; every `/responses` model reached by the August 4, 2026 acceptance sweep accepted the tool, while functional search execution was verified on `gpt-5.6-sol` and `gpt-5.6-terra`, see [docs/research/responses-web-search.md](docs/research/responses-web-search.md)
 - external image URLs on the native Responses path fail explicitly with `400`; the opt-in Chat bridge accepts only HTTP(S) or data URLs when the target's vision capability is eligible
-- official `input_file` and `item_reference` input items are modeled explicitly and validated, but the verified Copilot GPT Responses boundary is stateless: it rejects `store: true` and cannot resolve returned item IDs on later requests. The proxy deliberately applies a proxy-wide `store: false` policy, removes all `item_reference` items before dispatch, and removes `function_call_output` items whose `call_id` has no matching `function_call` in the same input array. Without the optional emulator, a caller that requested storage still receives a successful stateless response; retrieve/delete/continuation semantics are available only from the local emulator
+- official `input_file` and `item_reference` input items are modeled explicitly and validated, but the verified Copilot GPT Responses boundary is stateless: it rejects `store: true` and cannot resolve returned item IDs on later requests. The proxy deliberately applies a proxy-wide `store: false` policy, removes all `item_reference` items before dispatch, and removes `function_call_output` items whose `call_id` has no matching `function_call` in the same input array. Without the optional emulator, a caller that requested storage still receives a successful stateless response; retrieve/delete/continuation semantics are available only from the local emulator. The output-only `phase` annotation (`commentary` / `final_answer`) is also stripped from input message items before dispatch, on the native `/v1/responses` path and the `/v1/messages` -> Responses path, because some models reject it as input with a `400`
 
 Example opt-in configuration for these two Responses-specific policies:
 
@@ -640,7 +677,10 @@ support. It does not execute hosted tools, resolve prompt templates or files,
 invent encrypted reasoning state, provide remote compaction, or add a second
 state store. `conversation`, `previous_response_id`, and `store` continuation
 are available only through the existing account-scoped local Responses
-emulator. The bridge covers `POST /responses` and `/v1/responses` create only;
+emulator. Without the emulator, a bridged request must send `store: false`
+explicitly; omitting `store` (OpenAI's default is `true`) or sending `true`
+returns `400` (`unsupported_responses_state`), unlike the native path, which
+forces `store: false` and succeeds statelessly. The bridge covers `POST /responses` and `/v1/responses` create only;
 `input_tokens`, retrieve, input-items, and delete keep their existing
 native/emulator behavior. Enabling the flag is not evidence of Gemini model
 quality or complete Codex long-session compatibility; those claims require a
@@ -650,7 +690,7 @@ pinned client fixture and separate verification.
 
 Some Copilot models reject request parameters that the OpenAI wire format allows. The clearest case: **reasoning models** (the `gpt-5` family, o-series, codex) reject sampling parameters and answer `POST /responses` with `400 Unsupported parameter: 'temperature' is not supported with this model.` Since the client cannot always be changed, the proxy strips the offending parameters on the Responses boundary instead of leaking the incompatibility outward.
 
-This is expressed as a small rule engine that runs on both the native `/v1/responses` path and the `/v1/messages` → Responses translation path:
+This is expressed as a small rule engine that runs on both the native `/v1/responses` path and the `/v1/messages` → Responses translation path. It does not apply to requests served through the [Responses via Chat Completions](#responses-via-chat-completions) bridge, which forwards `temperature`/`top_p` to Chat Completions unchanged:
 
 - **Built-in default rule:** any model that advertises `reasoning_effort` has `temperature` stripped. It also has `top_p` stripped except for `*-codex` / `*-codex-*` models, which are exempt because the July 26, 2026 probe found the tested Codex model accepted `top_p` while its reasoning-model siblings rejected it. This exemption narrows only the built-in rule; an operator rule can still strip `top_p`.
 - **`responsesApiParameterFilters`:** add your own rules. Each rule is `{ "models": [glob, ...], "params": [name, ...] }`; every rule whose `models` glob matches the resolved model contributes its `params`. Rules are **added** to the default (the union of parameters is stripped). Model globs use the same `*` wildcard as `modelRewrites`.
@@ -670,7 +710,7 @@ Stripped parameters are removed entirely (never sent as `null`), because upstrea
 
 ## Docker
 
-Pre-built images are available on GHCR:
+Pre-built multi-arch images (`linux/amd64`, `linux/arm64`) are available on GHCR. Each release is tagged `latest`, `vX.Y.Z`, `vX.Y`, and `vX` (with the `v` prefix), for example `ghcr.io/wxxb789/ghc-proxy:v0.12.1`:
 
 ```bash
 docker pull ghcr.io/wxxb789/ghc-proxy
@@ -716,6 +756,8 @@ docker run --rm -p 127.0.0.1:4141:4141 \
   -e GH_TOKEN=your_token \
   ghcr.io/wxxb789/ghc-proxy
 ```
+
+If the first container argument begins with `-` (other than the legacy `--auth`), the entrypoint passes the arguments to `start`: `docker run ... ghcr.io/wxxb789/ghc-proxy --verbose --rate-limit 30` runs `start --verbose --rate-limit 30`, and in Compose you can use `command: ["--verbose"]`. Other subcommands run as given, for example `docker run --rm ghcr.io/wxxb789/ghc-proxy selfcheck --json`.
 
 Docker Compose:
 
@@ -766,19 +808,24 @@ tooling only; a release or complete explicit helper payload does not need .NET.
 bun install              # Install dependencies, including build-time tokenizer sources
 bun run dev              # Start with --watch
 bun run start            # Start without --watch
-bun run build            # Build the Dashboard UI, then bundle with tsdown
+bun run build            # Build the Dashboard UI, bundle with tsdown, then build:msc-auth
+                         # (Windows publishes the helper with the .NET 10 SDK; MSC_AUTH_DIR copies a prebuilt one; skipped elsewhere)
 bun run build:ui         # Build and embed only the Dashboard UI (Svelte + Vite)
 bun run dev:ui           # Vite dev server for the Dashboard; proxies /dashboard/api to 127.0.0.1:4141
-bun run lint             # ESLint
+bun run lint             # ESLint (cached)
+bun run lint:all         # Full ESLint scan (what CI runs)
 bun run typecheck        # tsc --noEmit plus svelte-check for ui/
-bun test                 # Run tests
+bun test --path-ignore-patterns='**/token-file-removal.test.ts' --path-ignore-patterns='**/token-refresh-retry.test.ts' \
+  && bun test tests/token-file-removal.test.ts tests/token-refresh-retry.test.ts
+                         # Run tests, split as in CI (module mocks leak across files in one process)
 bun run test:ui          # Dashboard UI tests (Vitest + jsdom)
+bun run smoke:packaged   # Selfcheck the packaged CLI under Bun and Node (after bun run build; needs node and npm on PATH; no upstream quota)
 bun run matrix:live      # Real Copilot upstream compatibility matrix
 bun run matrix:live --vision-only --all-responses-models --json
 bun run matrix:live --stateful-only --json --model=gpt-5.2-codex
 ```
 
-> **Note:** `bun run matrix:live` uses your configured GitHub/Copilot credentials and spends real upstream requests. Use it when you want end-to-end verification against the current Copilot service, not for every local edit.
+> **Note:** `bun run matrix:live` uses your configured GitHub/Copilot credentials and spends real upstream requests. Use it when you want end-to-end verification against the current Copilot service, not for every local edit; for a no-quota sanity check, use the test commands above or `bun run smoke:packaged`.
 >
 > Useful flags:
 > - `--json`: emit machine-readable JSON only
@@ -791,7 +838,9 @@ bun run matrix:live --stateful-only --json --model=gpt-5.2-codex
 
 Answers whether a tool **works**, not merely whether upstream returns `200` when you mention it. For each (model × tool) it declares the tool, then — unless `--accept-only` — sends a prompt that cannot be answered without it and looks in the response for proof it ran.
 
-Verdicts: `supported` (the tool ran or was called), `inert` (accepted but never invoked), `unsupported` (upstream rejected it), `unmeasured` (capacity/gateway fault — no verdict, re-run before publishing).
+Verdicts: `supported` (the tool ran or was called), `inert` (accepted but never invoked), `unsupported` (upstream rejected it), `accepted` (`--accept-only` only: declaration accepted, functional pass skipped). Two labels mark cells with no verdict: `unmeasured` (capacity/gateway fault) and `error` (transport failure); re-run those cells before publishing.
+
+> **Note:** like `matrix:live`, this probe uses your configured GitHub/Copilot credentials and spends real Copilot quota: up to two requests per (model × tool), or one with `--accept-only`, sent sequentially; each request is retried up to twice on capacity/gateway faults.
 
 ```bash
 bun scripts/probes/tool-support.ts                       # both boundaries
@@ -804,9 +853,10 @@ bun scripts/probes/tool-support.ts --names               # also probe client too
 
 Latest results: [docs/research/builtin-tool-support.md](docs/research/builtin-tool-support.md).
 
-The JSON output is designed for weekly diffing — `generatedAt` is the only volatile field:
+The JSON output is designed for weekly diffing. Besides `generatedAt`, the per-cell `evidence` quote (the model's own text) changes between runs, so strip both:
 
 ```bash
 # Compare two weekly snapshots
-diff <(jq -S 'del(.generatedAt)' week1.json) <(jq -S 'del(.generatedAt)' week2.json)
+strip='del(.generatedAt) | walk(if type == "object" then del(.evidence) else . end)'
+diff <(jq -S "$strip" week1.json) <(jq -S "$strip" week2.json)
 ```
