@@ -78,62 +78,72 @@ describe('resolveModel', () => {
   })
 })
 
-describe('getModelFallbackConfig', () => {
-  let originalOpusOverride: string | undefined
+const FALLBACK_FAMILIES: Array<{
+  family: 'opus' | 'sonnet' | 'haiku'
+  key: keyof typeof DEFAULT_FALLBACKS
+  envVar: string
+  current: string
+  legacy: string
+  older: string
+}> = [
+  { family: 'opus', key: 'claudeOpus', envVar: 'MODEL_FALLBACK_CLAUDE_OPUS', current: 'claude-opus-5.5', legacy: 'claude-opus-5', older: 'claude-opus-4.8' },
+  { family: 'sonnet', key: 'claudeSonnet', envVar: 'MODEL_FALLBACK_CLAUDE_SONNET', current: 'claude-sonnet-5.5', legacy: 'claude-sonnet-5', older: 'claude-sonnet-4.6' },
+  { family: 'haiku', key: 'claudeHaiku', envVar: 'MODEL_FALLBACK_CLAUDE_HAIKU', current: 'claude-haiku-5.5', legacy: 'claude-haiku-4.5', older: 'claude-haiku-4' },
+]
+
+describe.each(FALLBACK_FAMILIES)('getModelFallbackConfig ($family)', ({ family, key, envVar, current, legacy, older }) => {
+  let originalOverride: string | undefined
 
   beforeEach(() => {
-    originalOpusOverride = process.env.MODEL_FALLBACK_CLAUDE_OPUS
-    delete process.env.MODEL_FALLBACK_CLAUDE_OPUS
+    originalOverride = process.env[envVar]
+    delete process.env[envVar]
     clearConfig()
   })
 
   afterEach(() => {
     clearConfig()
-    if (originalOpusOverride === undefined) {
-      delete process.env.MODEL_FALLBACK_CLAUDE_OPUS
+    if (originalOverride === undefined) {
+      delete process.env[envVar]
     }
     else {
-      process.env.MODEL_FALLBACK_CLAUDE_OPUS = originalOpusOverride
+      process.env[envVar] = originalOverride
     }
   })
 
-  test('uses the advertised legacy Opus default in the resolver path when 5.5 is unavailable', () => {
-    const knownModelIds = new Set(['claude-opus-5'])
+  test('uses the advertised legacy default in the resolver path when 5.5 is unavailable', () => {
+    const knownModelIds = new Set([legacy])
     const fallbackConfig = getModelFallbackConfig(knownModelIds)
 
-    expect(DEFAULT_FALLBACKS.claudeOpus).toBe('claude-opus-5.5')
-    expect(fallbackConfig.claudeOpus).toBe('claude-opus-5')
-    expect(resolveModel('claude-opus-unadvertised', knownModelIds, fallbackConfig)).toBe('claude-opus-5')
+    expect(fallbackConfig[key]).toBe(legacy)
+    expect(resolveModel(`claude-${family}-unadvertised`, knownModelIds, fallbackConfig)).toBe(legacy)
   })
 
   test('keeps the built-in default when cache IDs are absent or advertise neither default', () => {
-    expect(getModelFallbackConfig().claudeOpus).toBe('claude-opus-5.5')
-    expect(getModelFallbackConfig(new Set(['claude-opus-4.8'])).claudeOpus).toBe('claude-opus-5.5')
+    expect(getModelFallbackConfig()[key]).toBe(current)
+    expect(getModelFallbackConfig(new Set([older]))[key]).toBe(current)
   })
 
   test('keeps 5.5 when it is advertised alongside the legacy default', () => {
-    const knownModelIds = new Set(['claude-opus-5', 'claude-opus-5.5'])
-
-    expect(getModelFallbackConfig(knownModelIds).claudeOpus).toBe('claude-opus-5.5')
+    expect(getModelFallbackConfig(new Set([legacy, current]))[key]).toBe(current)
   })
 
   test('preserves an explicit config fallback equal to the built-in default', () => {
-    getCachedConfig().modelFallback = { claudeOpus: 'claude-opus-5.5' }
+    getCachedConfig().modelFallback = { [key]: current }
 
-    expect(getModelFallbackConfig(new Set(['claude-opus-5'])).claudeOpus).toBe('claude-opus-5.5')
+    expect(getModelFallbackConfig(new Set([legacy]))[key]).toBe(current)
   })
 
   test('preserves an explicit environment fallback equal to the built-in default', () => {
-    process.env.MODEL_FALLBACK_CLAUDE_OPUS = 'claude-opus-5.5'
+    process.env[envVar] = current
 
-    expect(getModelFallbackConfig(new Set(['claude-opus-5'])).claudeOpus).toBe('claude-opus-5.5')
+    expect(getModelFallbackConfig(new Set([legacy]))[key]).toBe(current)
   })
 })
 
 describe('DEFAULT_FALLBACKS', () => {
-  test('unknown Opus models fall back to Claude Opus 5.5 by default', () => {
-    expect(DEFAULT_FALLBACKS.claudeOpus).toBe('claude-opus-5.5')
-    expect(resolveModel('claude-opus-unadvertised', new Set(), DEFAULT_FALLBACKS)).toBe('claude-opus-5.5')
+  test.each(FALLBACK_FAMILIES)('unknown $family models fall back to the 5.5 model by default', ({ family, key, current }) => {
+    expect(DEFAULT_FALLBACKS[key]).toBe(current)
+    expect(resolveModel(`claude-${family}-unadvertised`, new Set(), DEFAULT_FALLBACKS)).toBe(current)
   })
 
   test('all three tiers are defined with non-empty model IDs', () => {

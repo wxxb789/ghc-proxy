@@ -10,34 +10,44 @@ export interface ModelFallbackConfig {
 
 export const DEFAULT_FALLBACKS: ModelFallbackConfig = {
   claudeOpus: 'claude-opus-5.5',
+  claudeSonnet: 'claude-sonnet-5.5',
+  claudeHaiku: 'claude-haiku-5.5',
+}
+
+// Previous built-in defaults, used only when the cached model list advertises
+// them and omits the current default.
+const LEGACY_FALLBACKS: ModelFallbackConfig = {
+  claudeOpus: 'claude-opus-5',
   claudeSonnet: 'claude-sonnet-5',
   claudeHaiku: 'claude-haiku-4.5',
 }
 
-const LEGACY_OPUS_FALLBACK = 'claude-opus-5'
+const FALLBACK_ENV_VARS: Record<keyof ModelFallbackConfig, string> = {
+  claudeOpus: 'MODEL_FALLBACK_CLAUDE_OPUS',
+  claudeSonnet: 'MODEL_FALLBACK_CLAUDE_SONNET',
+  claudeHaiku: 'MODEL_FALLBACK_CLAUDE_HAIKU',
+}
 
 export function getModelFallbackConfig(
   knownModelIds?: ReadonlySet<string>,
 ): ModelFallbackConfig {
   const cachedConfig = getCachedConfig()
-  const configuredOpusFallback = process.env.MODEL_FALLBACK_CLAUDE_OPUS
-    || cachedConfig.modelFallback?.claudeOpus
-  const defaultOpusFallback = knownModelIds
-    && !knownModelIds.has(DEFAULT_FALLBACKS.claudeOpus)
-    && knownModelIds.has(LEGACY_OPUS_FALLBACK)
-    ? LEGACY_OPUS_FALLBACK
-    : DEFAULT_FALLBACKS.claudeOpus
+  const resolveFamily = (family: keyof ModelFallbackConfig): string => {
+    const configured = process.env[FALLBACK_ENV_VARS[family]]
+      || cachedConfig.modelFallback?.[family]
+    if (configured)
+      return configured
+    const current = DEFAULT_FALLBACKS[family]
+    const legacy = LEGACY_FALLBACKS[family]
+    return knownModelIds && !knownModelIds.has(current) && knownModelIds.has(legacy)
+      ? legacy
+      : current
+  }
 
   return {
-    claudeOpus: configuredOpusFallback || defaultOpusFallback,
-    claudeSonnet:
-      process.env.MODEL_FALLBACK_CLAUDE_SONNET
-      || cachedConfig.modelFallback?.claudeSonnet
-      || DEFAULT_FALLBACKS.claudeSonnet,
-    claudeHaiku:
-      process.env.MODEL_FALLBACK_CLAUDE_HAIKU
-      || cachedConfig.modelFallback?.claudeHaiku
-      || DEFAULT_FALLBACKS.claudeHaiku,
+    claudeOpus: resolveFamily('claudeOpus'),
+    claudeSonnet: resolveFamily('claudeSonnet'),
+    claudeHaiku: resolveFamily('claudeHaiku'),
   }
 }
 

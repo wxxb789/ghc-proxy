@@ -72,8 +72,8 @@ Create or edit `~/.claude/settings.json` (this applies globally to all projects)
     "ANTHROPIC_BASE_URL": "http://localhost:4141",
     "ANTHROPIC_AUTH_TOKEN": "dummy-token",
     "ANTHROPIC_MODEL": "claude-opus-5.5",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5.5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5.5",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   },
   "permissions": {
@@ -347,8 +347,8 @@ All fields are optional. The full schema:
 | `modelRewrites` | `{ from, to }[]` | `[]` | Glob-pattern model substitution rules (see [Model Rewrites](#model-rewrites)) |
 | `modelFallback` | `object` | built-in family defaults | Override default model fallbacks (see [Customizing Fallbacks](#customizing-fallbacks)) |
 | `modelFallback.claudeOpus` | `string` | `claude-opus-5.5` | Fallback for `claude-opus-*` models |
-| `modelFallback.claudeSonnet` | `string` | `claude-sonnet-5` | Fallback for `claude-sonnet-*` models |
-| `modelFallback.claudeHaiku` | `string` | `claude-haiku-4.5` | Fallback for `claude-haiku-*` models |
+| `modelFallback.claudeSonnet` | `string` | `claude-sonnet-5.5` | Fallback for `claude-sonnet-*` models |
+| `modelFallback.claudeHaiku` | `string` | `claude-haiku-5.5` | Fallback for `claude-haiku-*` models |
 | `smallModel` | `string` | unset | Target model for compact request routing (see [Small-Model Routing](#small-model-routing)) |
 | `compactUseSmallModel` | `boolean` | `false` | Route compact/summarization requests to `smallModel` |
 | `useFunctionApplyPatch` | `boolean` | `true` | Rewrite `apply_patch` custom tool as function tool on Responses path |
@@ -381,7 +381,7 @@ Example:
   ],
   "modelFallback": {
     "claudeOpus": "claude-opus-5.5",
-    "claudeSonnet": "claude-sonnet-5"
+    "claudeSonnet": "claude-sonnet-5.5"
   },
   "smallModel": "gpt-4.1-mini",
   "compactUseSmallModel": true,
@@ -417,8 +417,8 @@ When Claude Code sends a request for a model like `claude-sonnet-4.6`, the proxy
 | Prefix | Default Fallback |
 |--------|-----------------|
 | `claude-opus-*` | `claude-opus-5.5` |
-| `claude-sonnet-*` | `claude-sonnet-5` |
-| `claude-haiku-*` | `claude-haiku-4.5` |
+| `claude-sonnet-*` | `claude-sonnet-5.5` |
+| `claude-haiku-*` | `claude-haiku-5.5` |
 
 ### Customizing Fallbacks
 
@@ -426,8 +426,8 @@ You can override the defaults with **environment variables**:
 
 ```bash
 MODEL_FALLBACK_CLAUDE_OPUS=claude-opus-5.5
-MODEL_FALLBACK_CLAUDE_SONNET=claude-sonnet-5
-MODEL_FALLBACK_CLAUDE_HAIKU=claude-haiku-4.5
+MODEL_FALLBACK_CLAUDE_SONNET=claude-sonnet-5.5
+MODEL_FALLBACK_CLAUDE_HAIKU=claude-haiku-5.5
 ```
 
 Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
@@ -436,13 +436,13 @@ Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
 {
   "modelFallback": {
     "claudeOpus": "claude-opus-5.5",
-    "claudeSonnet": "claude-sonnet-5",
-    "claudeHaiku": "claude-haiku-4.5"
+    "claudeSonnet": "claude-sonnet-5.5",
+    "claudeHaiku": "claude-haiku-5.5"
   }
 }
 ```
 
-> **Note:** Model fallbacks apply only inside the **Chat Completions adapter** used by the Messages fallback path and by `/v1/messages/count_tokens`; native Messages and Responses strategies pass the model ID through to Copilot unchanged. With no Opus override, `claude-opus-5` is selected only when cached models advertise it but omit `claude-opus-5.5`.
+> **Note:** Model fallbacks apply only inside the **Chat Completions adapter** used by the Messages fallback path and by `/v1/messages/count_tokens`; native Messages and Responses strategies pass the model ID through to Copilot unchanged. With no override for a family, its previous default (`claude-opus-5`, `claude-sonnet-5`, or `claude-haiku-4.5`) is selected only when cached models advertise it but omit the 5.5 default.
 >
 > The M365 target is an exception: when no `modelRewrites` rule matches, unadvertised `claude-opus-*`, `claude-sonnet-*`, and `claude-haiku-*` IDs are mapped to `claude-opus-5.5`, `claude-sonnet-5.5`, and `claude-haiku-5.5` before strategy selection, and `MODEL_FALLBACK_*` / `modelFallback` are ignored (see [M365 family fallbacks](./docs/design/m365-upstream.md#family-fallbacks)).
 
