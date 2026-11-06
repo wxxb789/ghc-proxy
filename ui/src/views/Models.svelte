@@ -10,11 +10,12 @@
   import Skeleton from '../components/Skeleton.svelte'
   import Tag from '../components/Tag.svelte'
   import ViewHeader from '../components/ViewHeader.svelte'
+  import { clientBaseUrl } from '../lib/account-actions.svelte.ts'
   import { rovingGrid } from '../lib/actions/rovingGrid.ts'
   import { selectValue } from '../lib/actions/selectValue.ts'
   import { copyInto } from '../lib/clipboard.ts'
   import { formatClock, formatNumber, modelCapabilities, modelCompatibilityLines, modelsTsv, plural } from '../lib/format.ts'
-  import { refreshMetadata } from '../lib/poller.svelte.ts'
+  import { refreshMetadata, refreshSelectedView } from '../lib/poller.svelte.ts'
   import { focusHeading, replaceParams, router } from '../lib/router.svelte.ts'
   import { app, faults, metadataUnavailableReason } from '../lib/store.svelte.ts'
 
@@ -23,7 +24,17 @@
   const NEGATIVE_RE = /\b(?:unavailable|no|none|passthrough)$/
 
   const selection = app.selection.models
-  const all = $derived(app.data.models?.models)
+  const catalog = $derived(app.data.models)
+  const all = $derived(catalog?.models)
+  const targets = $derived(catalog?.targets ?? [])
+  /**
+   * Base URL that reaches the loaded catalog's target, read from the response rather than the picker so a
+   * copy during a target switch never pairs one target's models with another's host: the page's own origin
+   * for its own target, else the target's hostname on this page's protocol and port (as Targets shows it).
+   */
+  const catalogOrigin = $derived(catalog && !catalog.target.current && catalog.target.hostname
+    ? clientBaseUrl(catalog.target.hostname)
+    : location.origin)
   const query = $derived(router.params.q ?? '')
   const grouped = $derived(router.params.group !== '0')
   const descending = $derived(router.params.sort === 'desc')
@@ -101,6 +112,13 @@
 
   const toggle = (id: string) => select([id], !selection.includes(id))
 
+  /** A selection belongs to one target's catalog, so switching targets clears it. */
+  function selectTarget(name: string) {
+    select([...selection], false)
+    replaceParams({ target: name })
+    void refreshSelectedView('models')
+  }
+
   function rowKeydown(event: KeyboardEvent, id: string) {
     if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault()
@@ -109,7 +127,7 @@
   }
 
   const copy = (text: string, done: string) => copyInto(status, text, done)
-  const copySelected = () => copy(modelsTsv(selected, location.origin), `Copied ${selected.length} model${selected.length === 1 ? '' : 's'}`)
+  const copySelected = () => copy(modelsTsv(selected, catalogOrigin), `Copied ${selected.length} model${selected.length === 1 ? '' : 's'}`)
 
   const setQuery = (value: string) => replaceParams({ q: value || undefined })
 
@@ -142,6 +160,16 @@
   </ViewHeader>
 
   <div class='toolbar'>
+    {#if catalog && targets.length > 1}
+      <span class='select'>
+        <select id='model-target' aria-label='Route target' title={catalogOrigin}
+                {@attach selectValue(router.params.target ?? catalog.target.name, targets)} onchange={event => selectTarget(event.currentTarget.value)}>
+          {#each targets as target (target.name)}
+            <option value={target.name}>{target.name} · {target.upstream === 'm365' ? 'M365' : 'GitHub'} · {target.hostname}</option>
+          {/each}
+        </select>
+      </span>
+    {/if}
     <div class='search'>
       <input bind:this={filterInput} id='model-filter' type='search' placeholder='Filter models' aria-label='Filter models' value={query}
              oninput={event => setQuery(event.currentTarget.value)} onkeydown={filterKeydown} />

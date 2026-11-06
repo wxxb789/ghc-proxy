@@ -4,6 +4,7 @@ import type * as Contract from '~/routes/dashboard/contract'
 import type {
   getDashboardAccount,
   getDashboardBehavior,
+  getDashboardModelCatalog,
   getDashboardModels,
   getDashboardOverview,
   getDashboardRequests,
@@ -27,6 +28,7 @@ type Payload<T> = Omit<T, keyof Contract.DashboardEnvelope>
 
 expectAssignable<Assignable<Awaited<ReturnType<typeof getDashboardOverview>>, Payload<Contract.OverviewResponse>>>()
 expectAssignable<Assignable<ReturnType<typeof getDashboardModels>[number], Contract.DashboardModel>>()
+expectAssignable<Assignable<NonNullable<ReturnType<typeof getDashboardModelCatalog>>, Payload<Contract.ModelsResponse>>>()
 expectAssignable<Assignable<ReturnType<typeof getDashboardBehavior>, Payload<Contract.BehaviorResponse>>>()
 expectAssignable<Assignable<ReturnType<typeof getDashboardRequests> & { capacity: number }, Payload<Contract.RequestsResponse>>>()
 expectAssignable<Assignable<Awaited<ReturnType<typeof getDashboardAccount>>, Contract.DashboardAccount>>()

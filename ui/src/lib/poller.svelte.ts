@@ -6,7 +6,7 @@ import type { DataScope } from './store.svelte.ts'
 import { api, ApiError } from './api.ts'
 import { formatClock } from './format.ts'
 import { loadM365 } from './m365-load.svelte.ts'
-import { router } from './router.svelte.ts'
+import { replaceParams, router } from './router.svelte.ts'
 import { isRestart, pushSample, sampleFrom } from './samples.ts'
 import { announce, app, clearFault, effectsBaseline, faultMessage, metadataUnavailableReason, raiseFault, samples, timers } from './store.svelte.ts'
 
@@ -145,8 +145,25 @@ export async function loadAccounts(): Promise<void> {
   }
 }
 
+/**
+ * The Models view's `target` param picks the catalog; off that view a loaded
+ * catalog of another target keeps its target. A target that no longer exists
+ * (404) drops the param and falls back to the page's own target.
+ */
 async function loadModels(): Promise<void> {
-  app.data.models = await api.models()
+  const loaded = app.data.models?.target
+  const target = router.view === 'models' ? router.params.target : loaded && !loaded.current ? loaded.name : undefined
+  try {
+    app.data.models = await api.models(target)
+  }
+  catch (error) {
+    if (!target || !(error instanceof ApiError) || error.status !== 404)
+      throw error
+    // Only while the hash still names it: a newer choice made during the request stays and is loaded next.
+    if (router.view === 'models' && router.params.target === target)
+      replaceParams({ target: undefined })
+    app.data.models = await api.models()
+  }
   app.loadedAt.models = new Date()
 }
 

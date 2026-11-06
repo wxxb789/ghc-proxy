@@ -1,7 +1,7 @@
 import type { RouteHandler } from '../test/fake-fetch.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFakeFetch, jsonError } from '../test/fake-fetch.ts'
-import { accountsLegacy, dashboardRoutes, m365Absent, overview, refreshResult } from '../test/fixtures.ts'
+import { accountsLegacy, dashboardRoutes, m365Absent, models, overview, refreshResult } from '../test/fixtures.ts'
 
 let stopRouter: (() => void) | undefined
 
@@ -152,7 +152,7 @@ describe('faults (T:262-282)', () => {
   it('keeps a scope fault until that scope succeeds, through other successes', async () => {
     let fail = true
     const { poller, store, health } = await setup('#/overview', {
-      '/dashboard/api/models': () => fail ? jsonError(500, 'Models exploded') : { schemaVersion: 1, generatedAt: '', models: [] },
+      '/dashboard/api/models': () => fail ? jsonError(500, 'Models exploded') : models(),
     })
     await poller.loadAllViews()
     expect(store.faults.models?.message).toBe('Models exploded')
@@ -248,5 +248,57 @@ describe('stopAll', () => {
     await Promise.resolve()
     expect(fake.count('GET')).toBe(6)
     expect(poller.isRefreshing()).toBe(false)
+  })
+})
+
+describe('models target', () => {
+  const m365Catalog = () => models([], { target: { name: 'm365', hostname: 'm365.localhost', upstream: 'm365', current: false } })
+
+  it('loads the target named in the hash, and keeps it off the Models view', async () => {
+    const { fake, poller, router, idle } = await setup('#/models?target=m365', { '/dashboard/api/models?target=m365': m365Catalog })
+    await poller.loadAllViews()
+    expect(fake.calls()).toContain('GET /dashboard/api/models?target=m365')
+    router.navigate('accounts')
+    await vi.waitUntil(() => router.router.view === 'accounts')
+    await idle()
+    fake.clear()
+    await poller.loadAllViews()
+    expect(fake.calls()).toContain('GET /dashboard/api/models?target=m365')
+  })
+
+  it('drops a removed target from the hash and falls back to the page\'s own catalog', async () => {
+    const { fake, poller, store } = await setup('#/models?target=gone', { '/dashboard/api/models?target=gone': () => jsonError(404, 'Unknown target "gone".') })
+    await poller.loadAllViews()
+    expect(fake.calls().filter(call => call.includes('/models'))).toEqual(['GET /dashboard/api/models?target=gone', 'GET /dashboard/api/models'])
+    expect(location.hash).toBe('#/models')
+    expect(store.app.data.models?.target.name).toBe('default')
+    expect(store.faults).not.toHaveProperty('models')
+  })
+})
+
+describe('models target regressions', () => {
+  const m365Catalog = () => models([], { target: { name: 'm365', hostname: 'm365.localhost', upstream: 'm365', current: false } })
+
+  it('reloads the catalog when only the hash target changes (Back/Forward, edited hash)', async () => {
+    const { fake, poller, store, idle } = await setup('#/models', { '/dashboard/api/models?target=m365': m365Catalog })
+    await poller.loadAllViews()
+    location.hash = '#/models?target=m365'
+    await vi.waitUntil(() => store.app.data.models?.target.name === 'm365')
+    await idle()
+    expect(fake.calls()).toContain('GET /dashboard/api/models?target=m365')
+  })
+
+  it('keeps a target chosen while a removed target\'s request is failing', async () => {
+    const { fake, poller, router, store, idle } = await setup('#/models?target=gone', { '/dashboard/api/models?target=m365': m365Catalog })
+    const gone = fake.hold('GET /dashboard/api/models?target=gone')
+    const load = poller.loadAllViews()
+    await vi.waitUntil(() => fake.calls().includes('GET /dashboard/api/models?target=gone'))
+    location.hash = '#/models?target=m365'
+    await vi.waitUntil(() => router.router.params.target === 'm365')
+    gone.release(jsonError(404, 'Unknown target "gone".'))
+    await load
+    await idle()
+    expect(location.hash).toBe('#/models?target=m365')
+    expect(store.app.data.models?.target.name).toBe('m365')
   })
 })

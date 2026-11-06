@@ -22,7 +22,7 @@ const PARAM_RULES: Record<View, Record<string, (value: string) => boolean>> = {
   overview: { section: value => value === 'quota' },
   requests: { id: nonEmpty, state: value => REQUEST_STATE_RE.test(value), q: nonEmpty },
   accounts: { section: value => value === 'add' || value === 'm365' },
-  models: { q: nonEmpty, group: value => value === '0', sort: value => value === 'desc' },
+  models: { q: nonEmpty, group: value => value === '0', sort: value => value === 'desc', target: nonEmpty },
   behavior: {},
 }
 
@@ -121,6 +121,7 @@ export function startRouter(onViewEnter: (view: View) => void): () => void {
   setTitle(router.view)
   const onHashChange = () => {
     const previous = router.view
+    const previousTarget = router.params.target
     readLocation()
     const section = router.params.section
     if (router.view !== previous) {
@@ -133,8 +134,12 @@ export function startRouter(onViewEnter: (view: View) => void): () => void {
       void (section ? focusSection(section) : focusHeading('view-h1'))
       onViewEnter(router.view)
     }
-    else if (section) {
-      void focusSection(section)
+    else {
+      if (section)
+        void focusSection(section)
+      // Models' `target` picks which catalog loads, so Back/Forward or an edited hash reloads it.
+      if (router.params.target !== previousTarget)
+        onViewEnter(router.view)
     }
   }
   addEventListener('hashchange', onHashChange)

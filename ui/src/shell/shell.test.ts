@@ -8,7 +8,7 @@ import { loadAllViews } from '../lib/poller.svelte.ts'
 import { startRouter } from '../lib/router.svelte.ts'
 import { app } from '../lib/store.svelte.ts'
 import { createFakeFetch, jsonError } from '../test/fake-fetch.ts'
-import { account, accountsLegacy, accountsRouting, clearFaults, dashboardRoutes } from '../test/fixtures.ts'
+import { account, accountsLegacy, accountsRouting, clearFaults, dashboardRoutes, models } from '../test/fixtures.ts'
 
 let fake: FakeFetch
 let stopRouter: () => void
@@ -29,7 +29,7 @@ beforeEach(() => {
     '/dashboard/api/accounts': () => accountsLegacyMode
       ? accountsLegacy()
       : accountsRouting(accountsAttention ? { accounts: [account({ name: 'work' }), account({ name: 'personal', copilot: { status: 'missing', modelsLoaded: false } })] } : {}),
-    '/dashboard/api/models': () => modelsFail ? jsonError(500, 'Models exploded') : { schemaVersion: 1, generatedAt: '', models: [] },
+    '/dashboard/api/models': () => modelsFail ? jsonError(500, 'Models exploded') : models(),
   }))
   vi.stubGlobal('fetch', fake.fetch)
   stopRouter = startRouter(() => {})
