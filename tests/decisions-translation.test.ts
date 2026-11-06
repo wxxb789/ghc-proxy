@@ -5,7 +5,7 @@ import { HTTPError } from '~/lib/error'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { normalizeDecisionsUpstreamError } from '~/translator/decisions/errors'
 import { translateDecisionsRequest } from '~/translator/decisions/openai-to-systemone'
-import { assertDecisionsRequestSupported } from '~/translator/decisions/policy'
+import { assertSystemOneRequestSupported } from '~/translator/decisions/policy'
 import { translateDecisionsResponse } from '~/translator/decisions/systemone-to-openai'
 
 function decisionsRequest(overrides: Record<string, unknown> = {}) {
@@ -20,7 +20,7 @@ function decisionsRequest(overrides: Record<string, unknown> = {}) {
 function expectUnsupported(payload: unknown, kind: string) {
   const parsed = parseDecisionsRequest(payload)
   try {
-    assertDecisionsRequestSupported(parsed)
+    assertSystemOneRequestSupported(parsed)
   }
   catch (error) {
     expect(error).toBeInstanceOf(TranslationFailure)
@@ -444,6 +444,26 @@ describe('Decisions response translation', () => {
     expect(structuredError.body.error.type).toBe('rate_limit_error')
     expect(structuredError.headers.get('retry-after')).toBe('3')
   })
+
+  test('maps the internal question key in a live System One detail string', async () => {
+    const questions = translateDecisionsRequest(parseDecisionsRequest(decisionsRequest({
+      questions: [
+        { type: 'predicate', instructions: 'First?' },
+        { type: 'predicate', instructions: 'Second?' },
+      ],
+    }))).questions
+    const error = await normalizeDecisionsUpstreamError('fallback', new Response(
+      JSON.stringify({ detail: 'invalid TypeSafe request: invalid instructions for question "q1": value must not be empty' }),
+      { status: 422 },
+    ), questions)
+
+    expect(error.status).toBe(422)
+    expect(error.body.error).toEqual({
+      message: 'invalid decisions request: invalid instructions for questions[1]: value must not be empty',
+      type: 'invalid_request_error',
+      param: 'questions[1]',
+    })
+  })
 })
 
 describe('Decisions field policy', () => {
@@ -451,6 +471,17 @@ describe('Decisions field policy', () => {
     expectUnsupported(decisionsRequest({ safety_identifier: 'user-1' }), 'unsupported_decisions_safety_identifier')
     expectUnsupported(decisionsRequest({ prompt_cache_key: 'key' }), 'unsupported_decisions_prompt_cache_key')
     expectUnsupported(decisionsRequest({ prompt_cache_options: { mode: 'explicit' } }), 'unsupported_decisions_prompt_cache_options')
+  })
+
+  test('rejects more questions than System One accepts', () => {
+    const question = { type: 'predicate', instructions: 'Is it?' }
+    expectUnsupported(
+      decisionsRequest({ questions: Array.from({ length: 256 }).fill(question) }),
+      'unsupported_decisions_question_count',
+    )
+    expect(() => assertSystemOneRequestSupported(parseDecisionsRequest(
+      decisionsRequest({ questions: Array.from({ length: 255 }).fill(question) }),
+    ))).not.toThrow()
   })
 
   test('rejects image parts in messages and question instructions', () => {
@@ -534,7 +565,7 @@ describe('Decisions field policy', () => {
       ],
     }))
 
-    expect(() => assertDecisionsRequestSupported(parsed)).not.toThrow()
+    expect(() => assertSystemOneRequestSupported(parsed)).not.toThrow()
   })
 
   test('accepts empty evidence and unnamed questions', () => {
@@ -543,6 +574,6 @@ describe('Decisions field policy', () => {
       questions: [{ type: 'predicate', name: '', instructions: '' }],
     }))
 
-    expect(() => assertDecisionsRequestSupported(parsed)).not.toThrow()
+    expect(() => assertSystemOneRequestSupported(parsed)).not.toThrow()
   })
 })

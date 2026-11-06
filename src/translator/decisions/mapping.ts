@@ -42,10 +42,10 @@ function isMessage(item: DecisionsInputItem): item is DecisionsMessage {
 
 function normalizePart(part: DecisionsInputPart): unknown {
   if (part.type === 'input_image') {
-    unsupportedInput('Image input is not supported by this proxy.')
+    unsupportedInput('Image input is not supported by System One models.')
   }
   if (part.type === 'refusal') {
-    unsupportedInput('Refusal evidence is not supported by this proxy.')
+    unsupportedInput('Refusal evidence is not supported by System One models.')
   }
   if (part.type === 'input_json') {
     return { type: 'input_json', data: part.data }
@@ -55,7 +55,7 @@ function normalizePart(part: DecisionsInputPart): unknown {
 
 function normalizeInputItem(item: DecisionsInputItem): unknown {
   if (!isMessage(item)) {
-    unsupportedInput('Tool-call evidence is not supported by this proxy.')
+    unsupportedInput('Tool-call evidence is not supported by System One models.')
   }
 
   return {
@@ -84,7 +84,7 @@ function renderInstructions(
       if (part.type === 'input_json')
         return JSON.stringify(part.data)
       if (part.type === 'input_image')
-        unsupportedInput('Image input is not supported by this proxy.')
+        unsupportedInput('Image input is not supported by System One models.')
       return part.text
     })
     .join('\n\n')

@@ -36,6 +36,7 @@ const originalCreateChatCompletions = CopilotClient.prototype.createChatCompleti
 const originalCreateEmbeddings = CopilotClient.prototype.createEmbeddings
 const originalCreateResponses = CopilotClient.prototype.createResponses
 const originalCreateSystemOne = CopilotClient.prototype.createSystemOne
+const originalCreateDecisions = CopilotClient.prototype.createDecisions
 const originalState = saveStateSnapshot()
 const originalConfig = structuredClone(getCachedConfig())
 
@@ -49,6 +50,7 @@ afterEach(() => {
   CopilotClient.prototype.createEmbeddings = originalCreateEmbeddings
   CopilotClient.prototype.createResponses = originalCreateResponses
   CopilotClient.prototype.createSystemOne = originalCreateSystemOne
+  CopilotClient.prototype.createDecisions = originalCreateDecisions
   runtimeStore.requests.reset()
   restoreStateSnapshot(originalState)
 
@@ -884,10 +886,48 @@ describe('API smoke', () => {
       error: {
         type: 'translation_error',
         code: 'unsupported_decisions_image',
-        message: 'Image input is not supported by this proxy.',
+        message: 'Image input is not supported by System One models.',
       },
     })
     expect(calls).toHaveLength(1)
+  })
+
+  test('Decisions passes a native model public body and response through', async () => {
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-6-luna-decisions', {
+      supported_endpoints: ['/v1/decisions'],
+    })))
+    const payloads: Array<unknown> = []
+    const upstream = {
+      model: 'gpt-6-luna',
+      answers: [{ type: 'predicate', name: 'refund', probability: 0.82 }],
+      usage: {
+        input_tokens: 3,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+        output_tokens: 0,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 3,
+      },
+    }
+    CopilotClient.prototype.createDecisions = (async (payload) => {
+      payloads.push(payload)
+      return upstream
+    }) as typeof CopilotClient.prototype.createDecisions
+    const body = {
+      model: 'gpt-6-luna-decisions',
+      input: [{ role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }] }],
+      questions: [{ type: 'predicate', name: 'refund', instructions: 'Is the customer asking for a refund?' }],
+      safety_identifier: 'user-1',
+    }
+
+    const response = await createApp('decisions').handle(new Request('http://localhost/v1/decisions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(upstream)
+    expect(payloads).toEqual([body])
   })
 })
 

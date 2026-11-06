@@ -10,6 +10,10 @@ const MAX_ERROR_DETAILS = 20
 const MAX_ERROR_BODY = 64_000
 const SAFE_TOKEN_RE = /^[\w.:-]{1,64}$/
 const NUMERIC_RE = /^\d+$/
+// System One reports some validation failures as a plain `detail` string that
+// names the internal question key and the upstream validator.
+const DETAIL_QUESTION_RE = /question "(q\d+)"/
+const DETAIL_VALIDATOR_PREFIX_RE = /^invalid TypeSafe request: /
 
 function boundedMessage(value: unknown, fallback: string): string {
   if (typeof value !== 'string' || value.trim().length === 0)
@@ -92,6 +96,22 @@ function mapQuestionPath(
   }
 
   return `questions[${mappingIndex}]`
+}
+
+/**
+ * Rewrite a string `detail` so it names the public question index instead of
+ * the internal `qN` key, and report that index as the error param.
+ */
+function mapDetailString(
+  detail: string,
+  questions: Array<DecisionsQuestionMapping> | undefined,
+): { message: string, param?: string } {
+  const key = DETAIL_QUESTION_RE.exec(detail)?.[1]
+  const param = key ? mapQuestionPath(['questions', key], questions) : undefined
+  let message = detail.replace(DETAIL_VALIDATOR_PREFIX_RE, 'invalid decisions request: ')
+  if (key && param)
+    message = message.replace(`question "${key}"`, param)
+  return { message, ...(param ? { param } : {}) }
 }
 
 interface DetailInput {
@@ -181,7 +201,9 @@ export async function normalizeDecisionsUpstreamError(
         code = error.code
     }
     else if (typeof body.detail === 'string') {
-      errorMessage = boundedMessage(body.detail, message)
+      const mapped = mapDetailString(body.detail, questions)
+      errorMessage = boundedMessage(mapped.message, message)
+      param = mapped.param
     }
     else if (Array.isArray(body.detail)) {
       const mapped = readValidationDetails(body.detail, questions, message)

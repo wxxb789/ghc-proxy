@@ -8,6 +8,7 @@ import type {
 } from '~/core/capi'
 import type { AnthropicMessagesPayload } from '~/translator'
 import type {
+  DecisionsRequest,
   EmbeddingRequest,
   EmbeddingResponse,
   ModelsResponse,
@@ -302,6 +303,27 @@ export class CopilotClient {
         effectiveModel: payload.model,
         retryable: 'capacity',
         errorMapper: options?.errorMapper,
+      },
+    )
+  }
+
+  /**
+   * Native OpenAI Decisions endpoint. Errors take the shared upstream path:
+   * the gateway already answers in the public envelope with public params.
+   */
+  async createDecisions(
+    payload: DecisionsRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown> {
+    return this.requestJson<unknown>(
+      '/v1/decisions',
+      'Failed to create decisions response',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        signal: options?.signal,
+        effectiveModel: payload.model,
+        retryable: 'capacity',
       },
     )
   }

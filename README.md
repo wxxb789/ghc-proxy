@@ -537,7 +537,7 @@ For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-op
 `ghc-proxy` does not force every request through one protocol. The current routing rules are:
 
 - `POST /v1/chat/completions`: OpenAI Chat Completions -> shared planning pipeline -> Copilot `/chat/completions`
-- `POST /v1/decisions`: OpenAI Decisions -> direct JSON translation -> Copilot `/v1/systemone` for models advertising that endpoint; no streaming, strategy, or overload fallback
+- `POST /v1/decisions`: OpenAI Decisions -> Copilot `/v1/decisions` passthrough for models advertising it (e.g. `gpt-6-luna-decisions`), or direct JSON translation to `/v1/systemone` for System One models (e.g. `microsoft-decision-1`); no streaming, strategy, or overload fallback
 - `POST /v1/responses`: OpenAI Responses create -> native Responses handler -> Copilot `/responses`, or (with `responsesChatCompletionsFallback: true`) Responses-to-Chat translation -> Copilot `/chat/completions` for Chat-only models
 - `POST /v1/responses/input_tokens`: Responses input-token counting passthrough by default, or local estimation in official emulator mode
 - `GET /v1/responses/:responseId`: Responses retrieve passthrough by default, or local retrieval in official emulator mode
@@ -557,7 +557,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming) |
-| `POST` | `/v1/decisions` | OpenAI Decisions subset translated to System One for models advertising `/v1/systemone` |
+| `POST` | `/v1/decisions` | OpenAI Decisions, passed through to `/v1/decisions` or translated to System One (`/v1/systemone`), per model |
 | `POST` | `/v1/responses` | Create a Responses API response |
 | `POST` | `/v1/responses/input_tokens` | Count Responses input tokens via upstream passthrough or the local official emulator |
 | `GET` | `/v1/responses/:responseId` | Retrieve one response via upstream passthrough or the local official emulator |

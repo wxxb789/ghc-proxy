@@ -1579,3 +1579,83 @@ describe('decisions error-body transport', () => {
     expect(requestQueue.snapshot().active).toBe(0)
   })
 })
+
+describe('native decisions transport', () => {
+  const originalConsolaError = consola.error
+
+  afterEach(() => {
+    consola.error = originalConsolaError
+  })
+
+  function buildClient(responses: Array<() => Response>, captured: Array<{ url: string, init?: RequestInit }>) {
+    let now = 1_000
+    const requestQueue = new UpstreamRequestQueue(
+      { concurrency: 1, maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1 },
+      {
+        now: () => now,
+        sleep: (ms) => {
+          now += ms
+          return Promise.resolve()
+        },
+        logger: { warn: () => {} },
+        setTimeout: ((_cb: () => void) => undefined as unknown as ReturnType<typeof setTimeout>) as typeof setTimeout,
+        clearTimeout: (() => {}) as typeof clearTimeout,
+      },
+    )
+    return new CopilotClient(
+      { copilotToken: 'test-token' },
+      { accountType: 'individual', vsCodeVersion: '1.99.0' },
+      {
+        requestQueue,
+        fetch: ((async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          captured.push({ url: String(input), init })
+          return responses[captured.length - 1]!()
+        }) as unknown) as typeof fetch,
+      },
+    )
+  }
+
+  const payload = {
+    model: 'gpt-6-luna-decisions',
+    input: 'evidence',
+    questions: [{ type: 'predicate' as const, name: 'q', instructions: 'Is it?' }],
+  }
+
+  test('posts the public payload to /v1/decisions and replays capacity failures', async () => {
+    const captured: Array<{ url: string, init?: RequestInit }> = []
+    const result = { model: 'gpt-6-luna', answers: [], usage: {} }
+    const client = buildClient([
+      () => new Response('busy', { status: 429 }),
+      () => Response.json(result),
+    ], captured)
+
+    expect(await client.createDecisions(payload)).toEqual(result)
+    expect(captured).toHaveLength(2)
+    expect(captured[1]?.url.endsWith('/v1/decisions')).toBe(true)
+    expect(JSON.parse(String(captured[1]?.init?.body))).toEqual(payload)
+  })
+
+  test('passes public error envelopes through and wraps plain-text gateway errors', async () => {
+    consola.error = ((..._args: unknown[]) => {}) as typeof consola.error
+    const envelope = {
+      error: {
+        message: 'Choice values must be unique within the question.',
+        type: 'invalid_request_error',
+        param: 'questions[0].choices[1].value',
+        code: null,
+      },
+    }
+    const captured: Array<{ url: string, init?: RequestInit }> = []
+    const client = buildClient([
+      () => Response.json(envelope, { status: 400 }),
+      () => new Response('Bad Request', { status: 400, headers: { 'content-type': 'text/plain' } }),
+    ], captured)
+
+    await expect(client.createDecisions(payload)).rejects.toMatchObject({ status: 400, body: envelope })
+    await expect(client.createDecisions(payload)).rejects.toMatchObject({
+      status: 400,
+      body: { error: { message: 'Bad Request' } },
+    })
+    expect(captured).toHaveLength(2)
+  })
+})

@@ -217,6 +217,29 @@ async function probeHttpErrorResponseContract(): Promise<void> {
 async function probeHttpErrorTransportContract(): Promise<void> {
   const runtime = createAccountRuntime('default')
   runtime.auth.copilotToken = 'selfcheck-http-error-token'
+  // System One admission happens after the catalog lookup, so the Decisions
+  // rejection probe needs a cached System One model to stay offline.
+  runtime.models.cacheModels({
+    object: 'list',
+    data: [{
+      id: 'microsoft-decision-1',
+      model_picker_enabled: false,
+      name: 'microsoft-decision-1',
+      object: 'model',
+      preview: true,
+      vendor: 'Experimental',
+      version: 'microsoft-decision-1',
+      capabilities: {
+        family: 'microsoft-decision-1',
+        limits: {},
+        object: 'model_capabilities',
+        supports: {},
+        tokenizer: 'o200k_base',
+        type: 'decisions',
+      },
+      supported_endpoints: ['/v1/systemone'],
+    } satisfies Model],
+  })
   const routing = compileAccountRouting({
     baseHostname: 'localhost',
     defaultAccount: 'default',
@@ -313,7 +336,7 @@ async function probeHttpErrorTransportContract(): Promise<void> {
       body: {
         error: {
           code: 'unsupported_decisions_image',
-          message: 'Image input is not supported by this proxy.',
+          message: 'Image input is not supported by System One models.',
           type: 'translation_error',
         },
       },
