@@ -24,6 +24,7 @@
     signInM365,
   } from '../../lib/m365-actions.svelte.ts'
   import { m365StatusText, probeM365 } from '../../lib/m365-load.svelte.ts'
+  import { buildHash } from '../../lib/router.svelte.ts'
   import { app } from '../../lib/store.svelte.ts'
 
   const m365 = app.m365
@@ -135,6 +136,15 @@
                   {:else}
                     <p id='m365-routing' class='muted'>No targets registered yet.</p>
                   {/if}
+                </div>
+              {/if}
+
+              {#if view.models.length}
+                <div>
+                  <h3 class='label'>Models</h3>
+                  <!-- Index keys: the gateway catalog does not guarantee unique ids. -->
+                  <p id='m365-models' class='m365-models'>{#each view.models as id, index (index)}<Tag kind='mono' value={id} />{/each}</p>
+                  <a class='hint' href={buildHash('models', { target: 'm365' })}>View details in Models</a>
                 </div>
               {/if}
 
@@ -258,6 +268,7 @@
   #m365-endpoint-form .field { flex-basis: 100%; }
   .label { margin-bottom: var(--s-1); font-size: 12px; line-height: 16px; font-weight: 500; color: var(--text-2); }
   .routing { display: grid; gap: var(--s-1); }
+  .m365-models { display: flex; flex-wrap: wrap; gap: var(--s-1); margin-bottom: var(--s-1); }
   .routing li, .readiness li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
   .readiness { display: grid; gap: var(--s-1); font-size: 12px; line-height: 16px; color: var(--text-2); }
   /* A toneless line keeps the lamp's 8 px slot, so every line's text starts at the same x. */

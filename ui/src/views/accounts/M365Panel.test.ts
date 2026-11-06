@@ -77,6 +77,8 @@ describe('registered target (T:452-497)', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'M365 Copilot target' })).toHaveAttribute('id', 'm365-h')
     expect(byId('m365-panel')).toHaveTextContent('ready')
     expect(screen.getByRole('combobox', { name: 'Upstream endpoint' })).toHaveAttribute('id', 'm365-endpoint')
+    expect(byId('m365-models').textContent).toBe('claude-opus-5.5gpt-5.4')
+    expect(screen.getByRole('link', { name: 'View details in Models' })).toHaveAttribute('href', '#/models?target=m365')
   })
 
   it('lists the routing rows only when Targets cannot (409)', () => {

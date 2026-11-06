@@ -12,7 +12,7 @@ import { resolveResponsesStrategyName } from '~/routes/responses/capabilities'
 import { responsesStrategyRegistry } from '~/routes/responses/strategy-registry'
 import { handleUsageCore } from '~/routes/usage/handler'
 import { authStore, configStore, getCurrentAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore, runWithAccountRuntime } from '~/state'
-import { getCurrentAccountRuntime, getTargetAvailability } from '~/state/account-runtime'
+import { getCurrentAccountRuntime, getRoutingTargets, getTargetAvailability } from '~/state/account-runtime'
 import { resolveResponsesCompactThreshold } from '~/transform/context-management'
 import { getChatCompletionsTokenParameter, resolveStrippedResponsesParams, RESPONSES_MIN_OUTPUT_TOKENS } from '~/transform/parameter-filter'
 import { RESPONSES_INPUT_POLICY } from '~/transform/responses-input'
@@ -150,6 +150,42 @@ export async function getDashboardAccount(
 
 export function getDashboardModels() {
   return (modelCache.getModels()?.data ?? []).map(projectModel)
+}
+
+/**
+ * The Models catalog of one route target: the request's own target by
+ * default, or the named one, projected inside that target's runtime so the
+ * effective columns reflect its upstream. `current` tells the browser whether
+ * the page's own origin already reaches the target. Returns `undefined` for an
+ * unknown target name.
+ */
+export function getDashboardModelCatalog(
+  targetName: string | undefined,
+  snapshot: AccountManagementSnapshot | undefined,
+) {
+  const current = getCurrentAccountRuntime()
+  const views = snapshot?.accounts ?? getRoutingTargets()
+  const runtime = targetName === undefined || targetName === current.name
+    ? current
+    : views.find(view => view.name === targetName)?.runtime
+  if (!runtime)
+    return undefined
+  const upstreamOf = (target: AccountRuntime) => target.auth.upstream === 'm365' ? 'm365' as const : 'github' as const
+  return {
+    target: {
+      name: runtime.name,
+      hostname: views.find(view => view.name === runtime.name)?.hostname,
+      upstream: upstreamOf(runtime),
+      current: runtime.name === current.name,
+    },
+    targets: views.map(view => ({
+      name: view.name,
+      hostname: view.hostname,
+      upstream: upstreamOf(view.runtime),
+      isDefault: view.isDefault,
+    })),
+    models: runWithAccountRuntime(runtime, getDashboardModels),
+  }
 }
 
 export function getDashboardBehavior() {

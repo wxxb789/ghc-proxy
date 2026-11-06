@@ -137,7 +137,18 @@ export interface DashboardModel {
   }
 }
 
+export interface DashboardModelTarget {
+  name: string
+  hostname: string
+  upstream: Upstream
+  isDefault: boolean
+}
+
 export interface ModelsResponse extends DashboardEnvelope {
+  /** The target whose catalog `models` holds; `current` when the page's own origin reaches it. */
+  target: { name: string, hostname?: string, upstream: Upstream, current: boolean }
+  /** Every route target, for the target picker; empty without hostname routing. */
+  targets: DashboardModelTarget[]
   models: DashboardModel[]
 }
 

@@ -21,7 +21,7 @@ import {
   dashboardQuotaCache,
   getDashboardAccount,
   getDashboardBehavior,
-  getDashboardModels,
+  getDashboardModelCatalog,
   getDashboardOverview,
   getDashboardRequests,
 } from './handler'
@@ -127,8 +127,13 @@ export function createDashboardRoutes(options: DashboardRouteOptions = {}) {
         quotaCache,
         accountManager?.getAccountSnapshot(),
       )))
-    .get('/dashboard/api/models', () =>
-      apiResponse({ models: getDashboardModels() }))
+    .get('/dashboard/api/models', ({ query }) => {
+      const target = typeof query.target === 'string' && query.target ? query.target : undefined
+      const catalog = getDashboardModelCatalog(target, accountManager?.getAccountSnapshot())
+      return catalog
+        ? apiResponse(catalog)
+        : apiError(`Unknown target ${JSON.stringify(target)}.`, 404)
+    })
     .get('/dashboard/api/behavior', () =>
       apiResponse(getDashboardBehavior()))
     .get('/dashboard/api/requests', () =>

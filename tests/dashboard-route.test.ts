@@ -848,6 +848,59 @@ describe('M365 target projection', () => {
     })
   })
 
+  test('serves any target\'s model catalog with the hostname that reaches it', async () => {
+    const github = createAccountRuntime('default')
+    github.models.cacheModels({
+      object: 'list',
+      data: [{ id: 'gpt-5.4', name: 'GPT-5.4', supported_endpoints: ['/chat/completions'] }],
+    } as never)
+    const m365 = createTargetRuntime('m365', 'm365', {})
+    m365.models.cacheModels({
+      object: 'list',
+      data: [{ id: 'claude-opus-5.5', name: 'Claude Opus 5.5', supported_endpoints: ['/v1/messages'] }],
+    } as never)
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: { 'default.localhost': 'default', 'm365.localhost': 'm365' },
+    }, ['default'])
+    configureAccountRuntimes(routing, [github, m365])
+    const server = createServer({ accountManager: {
+      ...accountManagerFixture(),
+      getAccountSnapshot: () => ({
+        routing: { baseHostname: 'localhost', defaultAccount: 'default', routingEnabled: true },
+        accounts: [
+          { name: 'default', hostname: 'default.localhost', isDefault: true, runtime: github },
+          { name: 'm365', hostname: 'm365.localhost', isDefault: false, runtime: m365 },
+        ],
+      }),
+    } })
+    const catalog = async (url: string) => {
+      const response = await server.handle(new Request(url))
+      return { status: response.status, body: await response.json() as Record<string, any> }
+    }
+
+    const own = await catalog('http://localhost/dashboard/api/models')
+    expect(own.status).toBe(200)
+    expect(own.body.target).toEqual({ name: 'default', hostname: 'default.localhost', upstream: 'github', current: true })
+    expect(own.body.targets).toEqual([
+      { name: 'default', hostname: 'default.localhost', upstream: 'github', isDefault: true },
+      { name: 'm365', hostname: 'm365.localhost', upstream: 'm365', isDefault: false },
+    ])
+    expect(own.body.models.map((model: { id: string }) => model.id)).toEqual(['gpt-5.4'])
+
+    const other = await catalog('http://localhost/dashboard/api/models?target=m365')
+    expect(other.body.target).toEqual({ name: 'm365', hostname: 'm365.localhost', upstream: 'm365', current: false })
+    expect(other.body.models).toMatchObject([{ id: 'claude-opus-5.5', effective: { defaultMessagesStrategy: 'native-messages' } }])
+
+    const routed = await catalog('http://m365.localhost/dashboard/api/models')
+    expect(routed.body.target).toMatchObject({ name: 'm365', current: true })
+
+    const unknown = await catalog('http://localhost/dashboard/api/models?target=gone')
+    expect(unknown.status).toBe(404)
+    expect(unknown.body).toMatchObject({ error: { message: 'Unknown target "gone".' } })
+  })
+
   test('reports onboarding unavailable without account management', () => {
     const state = getM365DashboardState()
     expect(state.onboarding).toMatchObject({ status: 'unavailable' })

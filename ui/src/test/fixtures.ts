@@ -179,8 +179,14 @@ export function model(overrides: Partial<DashboardModel> & { id: string }): Dash
   }
 }
 
-export function models(list: DashboardModel[] = []): ModelsResponse {
-  return { ...envelope, models: list }
+export function models(list: DashboardModel[] = [], overrides: Partial<ModelsResponse> = {}): ModelsResponse {
+  return {
+    ...envelope,
+    target: { name: 'default', hostname: 'default.localhost', upstream: 'github', current: true },
+    targets: [],
+    models: list,
+    ...overrides,
+  }
 }
 
 export function behavior(overrides: Partial<BehaviorResponse> = {}): BehaviorResponse {

@@ -59,7 +59,7 @@ export function createApi(fetchImpl: Fetch = (input, init) => fetch(input, init)
   const post = <T>(path: string, body?: object) => request<T>(fetchImpl, path, 'POST', body)
   return {
     overview: () => get<OverviewResponse>('/dashboard/api/overview'),
-    models: () => get<ModelsResponse>('/dashboard/api/models'),
+    models: (target?: string) => get<ModelsResponse>(`/dashboard/api/models${target ? `?target=${encodeURIComponent(target)}` : ''}`),
     behavior: () => get<BehaviorResponse>('/dashboard/api/behavior'),
     requests: () => get<RequestsResponse>('/dashboard/api/requests'),
     accounts: () => get<AccountsResponse>('/dashboard/api/accounts'),

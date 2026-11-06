@@ -32,7 +32,14 @@ Configure:
   projection reads committed routing and target availability, independent of
   the hostname used to open the Dashboard.
 - Models: cached upstream model metadata plus ghc-proxy's effective routing
-  and compatibility decisions.
+  and compatibility decisions. The catalog defaults to the target the page's
+  hostname routes to; with several targets a picker (`#/models?target=<name>`,
+  `GET /dashboard/api/models?target=<name>`) shows another target's catalog,
+  projected inside that target's runtime. An unknown target answers `404`, and
+  the page falls back to its own target. Copy selected writes the `Endpoint`
+  line for the catalog's target: the page origin for its own target, else the
+  target's hostname on the page's protocol and port. The M365 panel lists the
+  target's model ids and links to its catalog.
 - Behavior: current configuration, strategy order, and process-local effect
   counters.
 

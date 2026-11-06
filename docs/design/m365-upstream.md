@@ -7,9 +7,10 @@ default endpoint is `https://loki.delve.office.com/api/v1/llmapi`;
 It speaks the Anthropic Messages protocol directly, so the request path reuses
 `native-messages` without translation.
 
-The dated live catalog, model, and limit observations below were measured on
-`msit.loki`; they do not establish connectivity or access on `loki`, `df.loki`,
-or a custom gateway.
+Every built-in gateway serves the model catalog at `<endpoint>/models`, so
+catalog discovery works the same way whichever endpoint is selected; the listed
+models can differ between gateways. The dated model and limit observations
+below were measured on `msit.loki`.
 
 M365 is a **route target** beside the GitHub accounts, not a process-wide mode.
 A hostname mapping registers it (`accountRouting.hostnames`), a request's
