@@ -13,7 +13,17 @@ function rule(selector: string): string {
   return match?.[1] ?? ''
 }
 
+const requestList = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../views/requests/RequestList.svelte'), 'utf8')
+
 describe('shared layout rules', () => {
+  // Chromium stops vertical wheel chaining at a sideways-scrolling table whose `overscroll-behavior` contains
+  // both axes, so a wide Models catalog froze the page. Only the Requests list scrolls vertically inside itself.
+  it('contains table overscroll sideways only, so a wide table never traps the page scroll', () => {
+    expect(rule('.table-scroll')).toMatch(/overscroll-behavior-x: contain;/)
+    expect(rule('.table-scroll')).not.toMatch(/overscroll-behavior(?:-y)?:/)
+    expect(requestList).toMatch(/\.req-scroll \{[^}]*overscroll-behavior-y: contain;/)
+  })
+
   it('lets empty-state text wrap inside nowrap table cells', () => {
     expect(rule('.empty')).toMatch(/white-space: normal;/)
     expect(rule('.empty')).toMatch(/overflow-wrap: anywhere;/)

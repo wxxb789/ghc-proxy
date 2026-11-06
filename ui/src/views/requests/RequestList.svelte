@@ -132,7 +132,7 @@
 <style>
   .req-list { position: relative; }
   /* max-height comes from fitViewport. */
-  .req-scroll { overflow-anchor: auto; container-type: inline-size; }
+  .req-scroll { overflow-anchor: auto; overscroll-behavior-y: contain; container-type: inline-size; }
   .req-new { position: absolute; top: 40px; left: 50%; z-index: 2; transform: translateX(-50%); box-shadow: var(--shadow-pop); }
   tr[data-row] > td { white-space: nowrap; }
   /* Model ids wrap only after a hyphen while the list is a table. */
