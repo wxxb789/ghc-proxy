@@ -41,13 +41,13 @@ bun run test:ui                      # Dashboard UI tests: Vitest + jsdom over u
 bun run start                        # Production server (NODE_ENV=production)
 bun run matrix:live                  # End-to-end Copilot upstream check (uses real quota — do not use as a sanity check)
 bun run smoke:packaged               # Smoke test the packaged CLI (selfcheck under bun + node)
-bun run release:patch                # Bump patch, commit, tag, and push (bumpp 11 pushes branch + tag automatically)
+gh workflow run release.yml -f level=patch  # Release: CI bumps, gates, tags, pushes main, and publishes (or minor/major)
 ```
 
 **CI topology:** `.github/workflows/ci.yml` runs `lint`, `typecheck`, `test`,
 `build`, Node Current compatibility, Windows/Bun-floor compatibility, and a
 Docker image smoke as independent jobs. The `test` job runs `bun test` and
-then the Dashboard UI tests (`bun run test:ui`); both release workflows run
+then the Dashboard UI tests (`bun run test:ui`); all three release workflows run
 `test:ui` in their gates too. The runtime jobs build and run
 `smoke:packaged`; the Docker job builds the image and exercises its non-root CLI
 entrypoint. There is no cross-job execution order.
@@ -204,15 +204,31 @@ Single-context: `CONCEPTS.md` (glossary) + `docs/design/` (decisions) + `docs/so
 
 ## Release Automation
 
-- **Tag-triggered pipeline:** `.github/workflows/release-npm.yml` handles ordered
-  validation, package checks, changelog generation, and npm publish in one job.
-- **Docker pipeline:** `.github/workflows/release-docker.yml` independently
-  repeats the release gate, verifies the tag/version contract, and publishes a
-  multi-architecture GHCR image with provenance and SBOM attestations.
-- **Version contract:** Workflow validates `vX.Y.Z` matches `package.json` `version` before publish.
-- **Auth model:** npm Trusted Publishing (GitHub OIDC). No long-lived npm tokens.
-- **Typical flow:** `bun run release:patch` (or `:minor` / `:major`) bumps the version, commits, tags, and pushes branch + tag in one step (bumpp 11 default). The pushed tag triggers `.github/workflows/release-npm.yml`, which validates and publishes.
-- **Immutability:** npm rejects republishing an existing version. Always bump before tagging.
+- **Single entry point:** run the **Release** workflow
+  (`.github/workflows/release.yml`) on `main` with `level` = `patch`, `minor`,
+  or `major` (Actions UI, or `gh workflow run release.yml -f level=minor`).
+  Do not bump `package.json` or push `v*` tags by hand; there are no local
+  release scripts.
+- **Release jobs:** a read-only `gate` job requires a green `ci.yml` push run
+  for the commit, checks the Node LTS baseline, bumps with `bumpp` (no commit),
+  and runs the full release gate on the bumped tree. A separate `tag` job, the
+  only one holding a write token and installing no dependencies, applies the
+  same version, commits `chore: release vX.Y.Z`, creates the annotated tag, and
+  pushes `main` + tag with `git push --atomic`. A failed gate or a `main` that
+  moved during the run leaves origin untouched. The bot's release commit gets
+  no CI run, so the next release needs a newer human commit on `main`.
+- **Publishing:** the `tag` job dispatches `release-npm.yml` and
+  `release-docker.yml` on the new tag (tags pushed with `GITHUB_TOKEN` do not
+  fire push triggers). Running on the tag ref keeps npm/Docker provenance,
+  changelog generation, and semver image tags pointed at the release commit.
+  Both publishing workflows refuse non-tag refs; re-run a failed one from its
+  run page or with `gh workflow run release-npm.yml --ref vX.Y.Z`. A re-run
+  reuses the tag commit, so a deterministic failure needs a fix on `main` and
+  the next release, leaving the failed tag unpublished. Re-publishing Docker
+  for a tag older than the newest release moves `latest`/`vX`/`vX.Y` back.
+- **Version contract:** Publishing workflows validate `vX.Y.Z` matches `package.json` `version` before publish.
+- **Auth model:** npm Trusted Publishing (GitHub OIDC) bound to `release-npm.yml`. No long-lived npm tokens.
+- **Immutability:** npm rejects republishing an existing version; the release job refuses a version whose tag already exists.
 
 ## Agent Instruction File Symlink (Windows-safe recipe)
 

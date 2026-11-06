@@ -61,7 +61,7 @@ function repoFlag(name) {
     case 'knip': return u.hasKnipConfig ? 'has knip config file' : 'no knip config — relies on defaults via knip-bun script'
     case 'undici': return 'imported directly in src/ — used for HTTP client + proxy plumbing'
     case 'typescript': return `tsc --noEmit gate; strict + verbatimModuleSyntax + ESNext`
-    case 'bumpp': return 'used by release:patch/minor/major scripts (commit + tag)'
+    case 'bumpp': return 'used by .github/workflows/release.yml to bump package.json (no commit/tag)'
     case 'lint-staged': return 'wired into simple-git-hooks pre-commit'
     case 'elysia':
     case '@elysiajs/cors':
