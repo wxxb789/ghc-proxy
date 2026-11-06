@@ -89,7 +89,7 @@ export const app = $state({
     dirty: { endpoint: false, hostname: false },
   },
   /** Selected model ids; arrays (mutated in place) instead of sets keep svelte/reactivity out of the bundle. */
-  selection: { requestId: null as string | null, models: [] as string[] },
+  selection: { requestId: null as string | null, models: [] as string[], modelsTarget: null as string | null },
   ui: {
     insightsOpen: true,
     rawJsonOpen: false,

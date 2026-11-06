@@ -85,13 +85,17 @@
     updateScrollCue()
   })
 
-  // Selection survives filter and sort but is pruned to ids still on the server.
+  // Selection survives filter and sort but is pruned to ids still on the server. It belongs to one target's
+  // catalog, so any route to another target (picker, M365 panel link, hash change) clears it.
   $effect(() => {
-    if (!all)
+    if (!catalog)
       return
-    const ids = new Set(all.map(model => model.id))
+    const ids = new Set(catalog.models.map(model => model.id))
+    const target = catalog.target.name
     untrack(() => {
-      const kept = selection.filter(id => ids.has(id))
+      const sameTarget = app.selection.modelsTarget === null || app.selection.modelsTarget === target
+      app.selection.modelsTarget = target
+      const kept = sameTarget ? selection.filter(id => ids.has(id)) : []
       if (kept.length < selection.length)
         selection.splice(0, selection.length, ...kept)
     })

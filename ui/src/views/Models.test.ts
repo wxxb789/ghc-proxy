@@ -47,6 +47,7 @@ function setup() {
 
 beforeEach(() => {
   app.selection.models.length = 0
+  app.selection.modelsTarget = null
   clearFaults()
   app.data.overview = overview()
   app.accountsMode = 'routing'
@@ -117,6 +118,18 @@ describe('models view', () => {
     await user.click(copyButton())
     expect(writeText).toHaveBeenCalledWith(modelsTsv([m365Model], 'http://m365.localhost:4141'))
     expect(writeText.mock.calls[0]![0]).toMatch(/^Endpoint: http:\/\/m365\.localhost:4141\/v1\n/)
+  })
+
+  it('clears the selection when a link or hash change loads another target\'s catalog', async () => {
+    const user = setup()
+    renderModels()
+    await user.click(row('claude-opus-5.5'))
+    expect(copyButton()).toHaveTextContent('Copy selected (1)')
+    // The M365 panel link loads the M365 catalog without the picker; it shares this model id.
+    app.data.models = models([CATALOG[1]!], { target: { name: 'm365', hostname: 'm365.localhost', upstream: 'm365', current: false } })
+    flushSync()
+    expect(copyButton()).toHaveTextContent('Copy selected (0)')
+    expect(row('claude-opus-5.5')).toHaveAttribute('aria-selected', 'false')
   })
 
   it('hides the target picker with a single target', () => {
