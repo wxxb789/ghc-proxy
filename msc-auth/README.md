@@ -213,8 +213,9 @@ build; helper preparation is not deferred to pack time. Constraints:
   prebuilt payload on any packaging host, including Linux. Unlike source-start
   overrides, `GHC_MSC_AUTH_EXE` and `--msc-auth-exe` never replace the packaged
   payload. Without `MSC_AUTH_DIR`, non-Windows builds explicitly skip the helper.
-  The release workflow must provide a Windows-built artifact before
-  `npm publish`; otherwise the directory is absent from the tarball.
+  The npm publishing workflow (`release-npm.yml`) must provide a Windows-built
+  artifact through `MSC_AUTH_DIR` before `npm publish`; otherwise the directory
+  is absent from the tarball.
 - `msalruntime.dll` is a Microsoft redistributable. Its license terms and the
   `THIRD_PARTY_NOTICES.md` entry have to be checked before publishing it.
 - Every platform downloads the win-x64 payload (~12 MB). Accept that, or move the
