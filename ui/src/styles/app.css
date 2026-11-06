@@ -329,7 +329,7 @@ input[type='checkbox'] { width: 16px; height: 16px; margin: 0; accent-color: var
 main > .fault-strip { border-radius: var(--r-2); }
 
 /* ---------- table (§4.4) ---------- */
-.table-scroll { overflow: auto; overscroll-behavior: contain; }
+.table-scroll { overflow: auto; overscroll-behavior-x: contain; }
 .table { width: 100%; border-collapse: collapse; }
 .table th {
   position: sticky; top: 0; z-index: 1; height: 32px; padding: 0 12px; background: var(--bg-1); border-bottom: 1px solid var(--line-strong);
