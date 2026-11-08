@@ -59,6 +59,11 @@ routes/<endpoint>/
 Small routes such as token, usage, models, and embeddings intentionally use
 only the files they need. Responses resource operations and the Dashboard also
 bypass `runPipeline()` because they are not model-generation dispatches.
+Direct routes that call upstream (models on a cache miss, embeddings, Decisions,
+and the Responses resource operations) wrap that call in `withUpstreamSignal()`
+(`src/lib/upstream-signal.ts`), which refuses a caller that has already
+aborted, links the caller signal to the upstream deadline, and releases both
+afterwards.
 
 The messages route is more complex because it has three execution strategies:
 

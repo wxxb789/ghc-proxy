@@ -9,7 +9,7 @@ import type {
 import { readCapiRequestContext } from '~/core/capi/request-context'
 import { protocolRegistry } from '~/ingest'
 import { throwInvalidRequestError } from '~/lib/error'
-import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
+import { withUpstreamSignal } from '~/lib/upstream-signal'
 import { createResourceDispatcher } from './resource-dispatcher'
 
 // --- Core request parameter interfaces ---
@@ -95,24 +95,6 @@ export async function handleDeleteResponseCore(
 }
 
 // --- Shared helpers ---
-
-async function withUpstreamSignal<T>(
-  clientSignal: AbortSignal,
-  onClientAbort: (() => void) | undefined,
-  dispatch: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const upstreamSignal = createUpstreamSignalFromConfig(
-    clientSignal,
-    undefined,
-    onClientAbort,
-  )
-  try {
-    return await dispatch(upstreamSignal.signal)
-  }
-  finally {
-    upstreamSignal.cleanup()
-  }
-}
 
 function requireResponseId(responseId: string | undefined): string {
   if (!responseId) {

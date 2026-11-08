@@ -2,9 +2,15 @@ import type { CapturedEmbeddingCall } from './helpers'
 import type { EmbeddingRequest, EmbeddingResponse } from '~/types'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { CopilotClient } from '~/clients'
+import { isClientAbortError } from '~/lib/upstream-signal'
 import { handleEmbeddingsCore } from '~/routes/embeddings/handler'
 import { handleModelsCore } from '~/routes/models/handler'
-import { handleRetrieveResponseCore } from '~/routes/responses/resource-handler'
+import {
+  handleCreateResponseInputTokensCore,
+  handleDeleteResponseCore,
+  handleListResponseInputItemsCore,
+  handleRetrieveResponseCore,
+} from '~/routes/responses/resource-handler'
 import { modelCache } from '~/state'
 
 import {
@@ -197,4 +203,108 @@ describe('client injection for non-pipeline handlers', () => {
     expect(calls).toEqual(['resp_injected'])
     expect(result).toMatchObject({ id: 'resp_injected' })
   })
+})
+
+// `createUpstreamSignal` deliberately ignores a client signal that is already
+// aborted when it is created, so a route that bypasses runPipeline must refuse
+// dispatch itself. Embeddings, the `/responses/{id}` resource handlers and the
+// models cache miss used to skip that check and spend an upstream call on a
+// caller that was already gone.
+
+describe('direct routes refuse a caller that already aborted', () => {
+  interface DirectRouteCase {
+    name: string
+    run: (client: CopilotClient, signal: AbortSignal, onClientAbort: () => void) => Promise<unknown>
+  }
+
+  const headers = () => new Headers({ 'content-type': 'application/json' })
+  const cases: Array<DirectRouteCase> = [
+    {
+      name: 'embeddings',
+      run: (client, signal, onClientAbort) => handleEmbeddingsCore(
+        { model: 'text-embedding-3-small', input: 'hello' },
+        headers(),
+        client,
+        signal,
+        undefined,
+        onClientAbort,
+      ),
+    },
+    {
+      name: 'retrieve response',
+      run: (client, signal, onClientAbort) => handleRetrieveResponseCore({
+        params: { responseId: 'resp_1' },
+        url: 'http://localhost/v1/responses/resp_1',
+        headers: headers(),
+        signal,
+        client,
+        onClientAbort,
+      }),
+    },
+    {
+      name: 'list response input items',
+      run: (client, signal, onClientAbort) => handleListResponseInputItemsCore({
+        params: { responseId: 'resp_1' },
+        url: 'http://localhost/v1/responses/resp_1/input_items',
+        headers: headers(),
+        signal,
+        client,
+        onClientAbort,
+      }),
+    },
+    {
+      name: 'response input tokens',
+      run: (client, signal, onClientAbort) => handleCreateResponseInputTokensCore({
+        body: { model: 'gpt-5', input: 'hello' },
+        headers: headers(),
+        signal,
+        client,
+        onClientAbort,
+      }),
+    },
+    {
+      name: 'delete response',
+      run: (client, signal, onClientAbort) => handleDeleteResponseCore({
+        params: { responseId: 'resp_1' },
+        headers: headers(),
+        signal,
+        client,
+        onClientAbort,
+      }),
+    },
+    {
+      name: 'models cache miss',
+      run: (client, signal, onClientAbort) => {
+        modelCache.clearModels()
+        return handleModelsCore(client, undefined, signal, onClientAbort)
+      },
+    },
+  ]
+
+  for (const { name, run } of cases) {
+    test(`${name} does not call upstream`, async () => {
+      const upstreamCalls: Array<string> = []
+      const client = new Proxy({}, {
+        get: (_target, method) => () => {
+          upstreamCalls.push(String(method))
+          return Promise.resolve({})
+        },
+      }) as CopilotClient
+      const controller = new AbortController()
+      controller.abort()
+      let clientAborts = 0
+
+      let error: unknown
+      try {
+        await run(client, controller.signal, () => clientAborts++)
+      }
+      catch (caught) {
+        error = caught
+      }
+
+      expect(isClientAbortError(error)).toBe(true)
+      expect(upstreamCalls).toEqual([])
+      expect(clientAborts).toBe(1)
+    })
+  }
 })

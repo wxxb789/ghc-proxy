@@ -86,6 +86,40 @@ export function createUpstreamSignalFromConfig(
   return { ...upstreamSignal, deadlineMonotonicMs }
 }
 
+/**
+ * Run one upstream call for a route that bypasses `runPipeline`.
+ *
+ * `createUpstreamSignal` deliberately ignores a client signal that was already
+ * aborted when it was created, so this is where a direct route refuses to
+ * dispatch for a caller that is already gone: it reports the abort through
+ * `onClientAbort` and throws the tagged `ClientAbortError`, so the shared
+ * client-abort path records the request as aborted. Otherwise it links the
+ * caller signal to the configured upstream deadline for the duration of
+ * `dispatch` and always releases the listener and timer afterwards.
+ */
+export async function withUpstreamSignal<T>(
+  clientSignal: AbortSignal,
+  onClientAbort: (() => void) | undefined,
+  dispatch: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (clientSignal.aborted) {
+    onClientAbort?.()
+    throw new ClientAbortError()
+  }
+  const upstreamSignal = createUpstreamSignalFromConfig(
+    clientSignal,
+    undefined,
+    onClientAbort,
+  )
+  try {
+    upstreamSignal.signal.throwIfAborted()
+    return await dispatch(upstreamSignal.signal)
+  }
+  finally {
+    upstreamSignal.cleanup()
+  }
+}
+
 function createExpiredUpstreamSignal(
   clientSignal: AbortSignal,
   onClientAbort?: () => void,

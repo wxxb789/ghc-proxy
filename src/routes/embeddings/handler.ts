@@ -4,7 +4,7 @@ import type { EmbeddingRequest } from '~/types'
 
 import { createCopilotClient } from '~/clients/factory'
 import { protocolRegistry } from '~/ingest'
-import { createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
+import { withUpstreamSignal } from '~/lib/upstream-signal'
 
 function normalizeEmbeddingRequest(payload: EmbeddingRequest): EmbeddingRequest {
   return {
@@ -35,17 +35,10 @@ export async function handleEmbeddingsCore(
     headers,
   )
   const copilotClient = client ?? createCopilotClient(recovery)
-  const upstreamSignal = signal
-    ? createUpstreamSignalFromConfig(signal, undefined, onClientAbort)
-    : undefined
+  const request = normalizeEmbeddingRequest(payload)
+  if (!signal)
+    return copilotClient.createEmbeddings(request, {})
 
-  try {
-    return await copilotClient.createEmbeddings(
-      normalizeEmbeddingRequest(payload),
-      { signal: upstreamSignal?.signal },
-    )
-  }
-  finally {
-    upstreamSignal?.cleanup()
-  }
+  return withUpstreamSignal(signal, onClientAbort, upstreamSignal =>
+    copilotClient.createEmbeddings(request, { signal: upstreamSignal }))
 }
