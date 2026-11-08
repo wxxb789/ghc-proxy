@@ -15,13 +15,13 @@ export function createCompletionRoutes() {
         disableIdleTimeout(server, request)
       }
 
-      const { result, modelMapping } = await handleCompletionCore({
+      const { result } = await handleCompletionCore({
         body,
         signal: request.signal,
         headers: request.headers,
         ...getOrCreateRequestCorrelation(request),
       })
-      const delivery = deliverResult(request, result, modelMapping)
+      const delivery = deliverResult(request, result)
       if (!delivery.streaming)
         return delivery.data
       yield* delivery.stream

@@ -302,10 +302,16 @@ export class RequestActivityStore {
     }
   }
 
-  complete(requestId: string, status: number): boolean {
+  /**
+   * Move an active request into the recent ring and return its terminal
+   * record, or `undefined` when the request was never started. The access log
+   * reads its model mapping from this record, so it cannot disagree with the
+   * Dashboard.
+   */
+  complete(requestId: string, status: number): ObservedRequest | undefined {
     const request = this.active.get(requestId)
     if (!request)
-      return false
+      return undefined
 
     this.active.delete(requestId)
     this.effectBuffers.delete(requestId)
@@ -324,7 +330,7 @@ export class RequestActivityStore {
       this.completed++
     if (failed)
       this.failed++
-    return true
+    return completedRequest
   }
 
   snapshot(): RequestActivitySnapshot {

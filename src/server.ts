@@ -3,7 +3,7 @@ import type { DashboardAccountManagement } from './routes/dashboard/route'
 import { cors } from '@elysiajs/cors'
 import { enforceTargetGates } from '~/lib/target-gates'
 import { HTTPError } from './lib/error'
-import { formatElapsed, getOrCreateRequestCorrelation, getRequestModelMapping, getRequestStart, logRequest, markRequestStart, setRequestModelMapping } from './lib/request-logger'
+import { formatElapsed, getOrCreateRequestCorrelation, getRequestStart, logRequest, markRequestStart } from './lib/request-logger'
 import { createRuntimeApp } from './lib/server-runtime'
 import { isTimeoutLikeError } from './lib/timeout-error'
 import { isClientAbortError } from './lib/upstream-signal'
@@ -231,7 +231,6 @@ export function createServer(options?: ServerOptions) {
         ? (body as Record<string, unknown>).model
         : undefined
       if (typeof model === 'string') {
-        setRequestModelMapping(request, { originalModel: model, steps: [] })
         runtimeStore.requests.recordRequestedModel(
           getOrCreateRequestCorrelation(request).requestId,
           model,
@@ -242,20 +241,20 @@ export function createServer(options?: ServerOptions) {
       const correlation = getOrCreateRequestCorrelation(request)
       const internalRequestId = requestId ?? correlation.requestId
       const status = typeof set.status === 'number' ? set.status : 200
-      if (!runtimeStore.requests.complete(internalRequestId, status))
+      const completed = runtimeStore.requests.complete(internalRequestId, status)
+      if (!completed)
         return
       if (options?.logRequests === false)
         return
 
       const elapsed = formatElapsed(getRequestStart(request))
       const externalRequestId = callerRequestId ?? correlation.callerRequestId
-      const modelMapping = getRequestModelMapping(request)
       logRequest(
         request.method,
         request.url,
         status,
         elapsed,
-        modelMapping,
+        { originalModel: completed.requestedModel, steps: completed.modelTransforms },
         internalRequestId,
         externalRequestId,
         getRequestAccountName(request),

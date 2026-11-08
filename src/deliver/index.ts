@@ -1,7 +1,6 @@
 import type { ExecutionResult } from '~/lib/execution-strategy'
-import type { ModelMappingInfo } from '~/lib/request-logger'
 
-import { getOrCreateRequestCorrelation, setRequestModelMapping } from '~/lib/request-logger'
+import { getOrCreateRequestCorrelation } from '~/lib/request-logger'
 import { sseAdapter } from '~/lib/sse-adapter'
 import { runtimeStore } from '~/state'
 
@@ -12,9 +11,7 @@ export type DeliveryResult
 export function deliverResult(
   request: Request,
   result: ExecutionResult,
-  modelMapping: ModelMappingInfo,
 ): DeliveryResult {
-  setRequestModelMapping(request, modelMapping)
   if (result.kind === 'json') {
     return { streaming: false, data: result.data }
   }

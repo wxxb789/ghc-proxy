@@ -133,6 +133,13 @@ reclassifies a failed request. The store can reclassify a just-completed entry
 as aborted when framework callback ordering reports the client disconnect
 after HTTP completion.
 
+Completion returns the terminal record, and the access log reads its model
+mapping (requested model plus transform steps) from that record rather than
+from a separate per-request copy. The log line and the Dashboard therefore
+show the same mapping for every outcome, including requests that failed after
+a rewrite or an overload fallback. Model IDs in the log are the store's
+sanitized values.
+
 Each request stores only allowlisted metadata:
 
 - Internal request ID

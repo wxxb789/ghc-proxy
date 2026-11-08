@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import consola from 'consola'
 
 import { CopilotClient } from '~/clients'
+import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
 import { createServer, toErrorResponse } from '~/server'
+import { modelCache, runtimeStore } from '~/state'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
-import { createApp } from './helpers'
+import { buildModel, buildModelsResponse, createApp, restoreStateSnapshot, saveStateSnapshot } from './helpers'
 
 // ── retryWithBackoff: mock the sleep module before importing retry so backoff
 //    delays are observed without real waiting. ──
@@ -690,6 +692,52 @@ describe('Access-log status code matches the client response', () => {
 
     expect(line).toContain('callerRid=caller_request/id')
     expect(line).toMatch(/\brid=[\da-f]{8}\b/)
+  })
+})
+
+// ── Access-log model mapping ──
+//
+// The access log used to keep its own copy of the model mapping, refreshed
+// only when a result was delivered. A rewritten request that then failed
+// upstream logged the requested model with no steps while the Dashboard
+// recorded the rewrite, so the two disagreed on exactly the requests an
+// operator debugs.
+
+describe('Access-log model mapping matches the request record', () => {
+  useCreateChatCompletionsSnapshot()
+
+  let state: ReturnType<typeof saveStateSnapshot>
+  let originalRewrites: unknown
+
+  beforeEach(() => {
+    state = saveStateSnapshot()
+    const config = getCachedConfig() as Record<string, unknown>
+    originalRewrites = config.modelRewrites
+    config.modelRewrites = [{ from: 'claude-haiku-4.5', to: 'claude-sonnet-4.5' }]
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('claude-haiku-4.5'),
+      buildModel('claude-sonnet-4.5'),
+    ))
+  })
+
+  afterEach(() => {
+    const config = getCachedConfig() as Record<string, unknown>
+    config.modelRewrites = originalRewrites
+    restoreStateSnapshot(state)
+  })
+
+  test('a rewritten request that fails upstream logs the rewrite the Dashboard records', async () => {
+    const line = await captureAccessLogLine({
+      reject: () => Promise.reject(
+        new HTTPError(400, { error: { message: 'Bad request', type: 'invalid_request_error' } }),
+      ),
+    })
+
+    expect(accessLogStatus(line)).toBe('400')
+    expect(line).toContain('model=claude-haiku-4.5 -[CONFIG_REWRITE]-> claude-sonnet-4.5')
+    const record = runtimeStore.requests.snapshot().recent[0]
+    expect(record?.requestedModel).toBe('claude-haiku-4.5')
+    expect(record?.effectiveModel).toBe('claude-sonnet-4.5')
   })
 })
 

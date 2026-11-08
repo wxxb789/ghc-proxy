@@ -5,7 +5,6 @@ import type { DecisionsRequest, DecisionsResponse } from '~/types'
 import { cacheModels, createCopilotClient, createRequestRecoveryRecord } from '~/clients/factory'
 import { protocolRegistry } from '~/ingest'
 import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
-import { setRequestModelMapping } from '~/lib/request-logger'
 import { ClientAbortError, createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
 import { DECISIONS_ENDPOINT, modelCache, runtimeStore, SYSTEMONE_ENDPOINT } from '~/state'
 import { resolveRequestModel } from '~/transform/resolve-model'
@@ -64,7 +63,6 @@ export async function handleDecisionsCore(
       applyPolicy: false,
     })
     runtimeStore.requests.recordModelMapping(requestId, resolved.modelMapping)
-    setRequestModelMapping(request, resolved.modelMapping)
 
     if (!resolved.resolvedModel)
       throwInvalidRequestError('The selected model could not be resolved.', 'model')

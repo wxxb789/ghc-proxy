@@ -146,8 +146,8 @@ the queue lease. An already-aborted caller enters the shared tagged client-abort
 path, which records the request as aborted rather than failed or timed out.
 
 Both paths are classified in the request store, and the handler records the
-original and effective model mapping for the access log and Dashboard request
-history. The Dashboard model row shape and DTO are unchanged.
+original and effective model mapping there; the access log and Dashboard request
+history both read it from the store. The Dashboard model row shape and DTO are unchanged.
 
 ## Verification Status
 
