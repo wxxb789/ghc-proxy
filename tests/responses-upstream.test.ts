@@ -140,9 +140,6 @@ const shapingCases: Array<ShapingCase> = [
     effects: { 'responses.output_tokens_raised': 1 },
   },
   {
-    // Fixed order: compaction runs before phase stripping, so the phase count
-    // covers only items that go upstream. Intentional change for /responses,
-    // which previously also counted phases on items compaction then dropped.
     name: 'counts phases only on items that survive compaction',
     config: { responsesApiAutoCompactInput: true },
     model: plainModel,
