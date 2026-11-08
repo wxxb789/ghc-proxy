@@ -10,6 +10,11 @@ Tracked items for future work. Items are roughly ordered by priority.
   - Not a plain clamp-up: `none` means "do not reason", and the nearest advertised level (`low`) is a materially different request. Options are to drop the field, to reject locally with a clear message, or to map to `low` and say so — pick deliberately rather than by default.
   - Evidence: `docs/research/grok-4.5-schema.md`. Convention amended in `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md`.
 
+- [ ] **Upstream request queues of removed or replaced route targets are never released**
+  - `src/clients/factory.ts` keys queues by runtime in a `WeakMap` (`accountQueues`) but also adds every queue to a strong module-level `Set` (`upstreamRequestQueues`), kept only so `configureUpstreamRequestQueue()` can broadcast option changes. The `Set` defeats the `WeakMap`: a runtime removed or replaced by an account mutation (for example `configureM365Target` with a changed runtime) keeps its queue alive for the process lifetime.
+  - Reproduced 2026-11-08 with a scratch test during the architecture review. Impact is bounded: one queue per admin mutation, and the only production `configureUpstreamRequestQueue()` call (`src/start.ts`) runs at startup before any queue exists.
+  - Local fix candidates: build each queue from the current options and track queues weakly, or release a runtime's queue when the account mutation disposes the runtime.
+
 ## Upstream Probe Refresh
 
 - [ ] **Re-probe `/responses` + `/chat/completions` (gpt/gemini) upstream surface**
@@ -79,3 +84,18 @@ Recorded during other work; revalidate before removing.
   - Handler: `src/routes/dashboard/route.ts` (`.post('/dashboard/api/m365/remove', …)`), calling `AccountManager.removeM365Target()`.
   - Neither the pre-Svelte Dashboard (`src/routes/dashboard/assets.ts` at `e4551e7`) nor the Svelte UI in `ui/` calls it; the Svelte UI removes the M365 target through `DELETE /dashboard/api/accounts/m365`. No test or doc references the route.
   - `removeM365Target()` itself stays in use (`src/accounts/manager.ts`, account removal path). Removal would only drop the route and must keep the Dashboard API contract tests green.
+
+- [ ] **`RequestMeta.sessionId` is written but never read**
+  - Written by `src/ingest/anthropic-messages.ts`, `src/ingest/openai-chat.ts`, and `src/ingest/responses.ts`; declared in `src/ingest/types.ts`. No reader in `src/`, `tests/`, `scripts/`, or `ui/` (verified 2026-11-08). The same value stays available as `requestContext.clientSessionId`.
+
+- [ ] **`IngestedRequest.protocol` is written but never read**
+  - Written at `src/ingest/registry.ts` (`protocol: id`); the only caller of `ProtocolRegistry.ingest()` (`src/pipeline/runner.ts`) reads `meta` and `payload` and branches on `config.protocol`. `ProtocolId` itself stays in use.
+
+- [ ] **`RESPONSES_INPUT_POLICY` negated guards are unreachable**
+  - Both flags in `src/transform/responses-input.ts` are `as const` `true`, so the `!RESPONSES_INPUT_POLICY.filtersUnresolvableItems` and `!RESPONSES_INPUT_POLICY.rejectsRemoteImageUrls` early returns in `src/routes/responses/handler.ts` never fire. The flags are still read for display by the Dashboard behavior contract (`src/routes/dashboard/handler.ts`, `contract.ts`, `ui/src/views/behavior/rows.ts`), so removal must keep or redesign that projection; only the negated halves of the guards are dead.
+
+- [ ] **Identity `upstream → kind` ternaries in the Dashboard**
+  - `upstream === 'm365' ? 'm365' : 'github'` in `src/routes/dashboard/handler.ts` (`upstreamOf`) and `src/routes/dashboard/m365.ts` returns its input, because `AuthStore.upstream` is already the `TargetKind` union (`src/state/auth.ts`, `src/lib/account-routing.ts`). Read `runtime.auth.upstream` directly.
+
+- [ ] **Over-exported symbols reported by `knip`**
+  - `M365_ANTHROPIC_VERSION` and `M365_API_VERSION` (`src/clients/m365-upstream.ts`) are used only in their own file; the `ConfigStore` and `RuntimeStore` class exports are unused outside their singletons. Dropping `export` is enough.
