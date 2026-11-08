@@ -1,4 +1,5 @@
 import type { UpstreamRecoveryRecord, UpstreamRequestQueue } from './upstream-queue'
+import type { AccountRuntime } from '~/state/account-runtime'
 
 /** Which upstream API the proxy talks to. */
 export type UpstreamKind = 'github' | 'm365'
@@ -19,12 +20,6 @@ export interface ClientConfig {
   /** Defaults to `github` when omitted. */
   upstream?: UpstreamKind
   m365Endpoint?: string
-  /** Helper path for the `m365` upstream; discovery applies when omitted. */
-  mscAuthExe?: string
-  /** Broker home account id or exact email; otherwise select an unambiguous broker account. */
-  mscAuthAccount?: string
-  /** Broker account UPN to select when no home account id is set. */
-  mscAuthUpn?: string
   vsCodeVersion?: string
   copilotApiBase?: string
   githubBaseUrl?: string
@@ -33,6 +28,11 @@ export interface ClientConfig {
 
 export interface ClientDeps {
   fetch?: typeof fetch
+  /**
+   * The route target whose `auth` the client uses. The `m365` upstream acquires
+   * its credential through it and records the target's availability on it.
+   */
+  runtime?: AccountRuntime
   requestQueue?: UpstreamRequestQueue
   recovery?: UpstreamRecoveryRecord
   offerLocalModelCooldown?: boolean | ((effectiveModel: string) => boolean)

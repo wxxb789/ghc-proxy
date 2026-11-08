@@ -64,6 +64,14 @@ repository), which obtains a delegated token from the Windows token broker (WAM)
 through MSAL. The helper is the only Windows-specific component; `src/` stays
 runtime-neutral and talks to it over stdout JSON.
 
+`src/clients/m365-credential.ts` (`acquireM365Credential`) is the only caller of
+`getMscToken`. Target initialization and each upstream request through
+`CopilotClient` use it to project the token onto the target runtime's auth or
+record the target as `unavailable` with a bounded cause. The client factory
+passes the route target's runtime to the client, so credential and
+availability writes land on the target that built the client, not on the
+ambient request runtime.
+
 | Property | Value |
 | --- | --- |
 | Client | `0ec893e0-5785-4de6-99da-4ed124e5296c` (Microsoft 365 Copilot) |

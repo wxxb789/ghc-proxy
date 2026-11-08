@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 
 import { createTargetRuntime } from '~/accounts/target-runtime'
 import { CopilotClient } from '~/clients'
+import { createCopilotClient } from '~/clients/factory'
 import { M365_MODELS } from '~/clients/m365-upstream'
 import {
   getMscToken,
@@ -17,7 +18,7 @@ import {
 } from '~/clients/msc-auth'
 import { getDashboardOverview } from '~/routes/dashboard/handler'
 
-import { getTargetAvailability, runWithAccountRuntime } from '~/state/account-runtime'
+import { createAccountRuntime, getTargetAvailability, runWithAccountRuntime } from '~/state/account-runtime'
 
 const temporaryDirs: Array<string> = []
 const originalExe = process.env.GHC_MSC_AUTH_EXE
@@ -176,17 +177,35 @@ test('a forbidden catalog refresh keeps a cached M365 target unavailable', async
   const client = new CopilotClient(runtime.auth, {
     upstream: 'm365',
     accountType: 'individual',
-    mscAuthExe: exe,
   }, {
+    runtime,
     fetch: Object.assign(
       async () => Response.json({ error: { message: 'Gateway access denied' } }, { status: 403 }),
       { preconnect: fetch.preconnect },
     ),
   })
 
-  await expect(runWithAccountRuntime(runtime, () => client.getModels())).rejects.toMatchObject({ status: 403 })
+  await expect(client.getModels()).rejects.toMatchObject({ status: 403 })
   expect(getTargetAvailability(runtime)).toMatchObject({ status: 'unavailable' })
   expect(await runWithAccountRuntime(runtime, () => getDashboardOverview())).toMatchObject({ status: 'degraded' })
+})
+
+test('an M365 client records availability on the target it was built for', async () => {
+  const exe = makeFile('unused')
+  setMscHelperRunner(fakeRunner('', 3, '[msc-auth] broker unavailable'))
+  const target = createTargetRuntime('m365', 'm365', { mscAuthExe: exe })
+  const ambient = createAccountRuntime('default')
+  const client = runWithAccountRuntime(target, () => createCopilotClient())
+
+  await expect(runWithAccountRuntime(ambient, () => client.createMessages({
+    model: 'claude-opus-5.5',
+    max_tokens: 16,
+    messages: [{ role: 'user', content: 'hello' }],
+  }))).rejects.toMatchObject({ status: 503 })
+
+  expect(getTargetAvailability(target)).toMatchObject({ status: 'unavailable' })
+  expect(target.auth.copilotTokenLastRefreshSucceeded).toBe(false)
+  expect(getTargetAvailability(ambient)).toBeUndefined()
 })
 
 describe('listMscAccounts', () => {

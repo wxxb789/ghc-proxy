@@ -99,3 +99,6 @@ Recorded during other work; revalidate before removing.
 
 - [ ] **Over-exported symbols reported by `knip`**
   - `M365_ANTHROPIC_VERSION` and `M365_API_VERSION` (`src/clients/m365-upstream.ts`) are used only in their own file; the `ConfigStore` and `RuntimeStore` class exports are unused outside their singletons. Dropping `export` is enough.
+
+- [ ] **`runWithAccountRuntime` wrappers around `initializeM365Target` are redundant**
+  - Since `acquireM365Credential()` writes to the runtime it is given and the client receives its runtime explicitly, `initializeM365Target(runtime)` no longer reads the ambient request runtime (`fetchM365Models` takes the token and endpoint as arguments). The wrappers in `AccountManager.registerM365Target` / `configureM365Target` warm-up (`src/accounts/manager.ts`) and in the M365 startup path (`src/start.ts`) can likely be dropped; revalidate that nothing else under them reads `getCurrentAccountRuntime()` first.

@@ -6,6 +6,7 @@ import type {
   CapiChatCompletionsPayload,
   CapiRequestContext,
 } from '~/core/capi'
+import type { AccountRuntime } from '~/state/account-runtime'
 import type { AnthropicMessagesPayload } from '~/translator'
 import type {
   DecisionsRequest,
@@ -26,11 +27,11 @@ import type {
 import { events } from 'fetch-event-stream'
 
 import { HTTPError, throwUpstreamError } from '~/lib/error'
-import { getCurrentAccountRuntime, setTargetAvailability } from '~/state/account-runtime'
+import { setTargetAvailability } from '~/state/account-runtime'
 
 import { copilotBaseUrl, copilotHeaders } from './api-config'
+import { acquireM365Credential, isM365CatalogAccessDenied, markM365Unavailable } from './m365-credential'
 import { normalizeM365Catalog } from './m365-upstream'
-import { getMscToken } from './msc-auth'
 import { TerminalUpstreamRecoveryError } from './upstream-queue'
 
 export type UpstreamErrorMapper = (message: string, response: Response) => Promise<HTTPError>
@@ -53,6 +54,7 @@ interface FetchParams {
 
 export class CopilotClient {
   private auth: ClientAuth
+  private runtime: AccountRuntime | undefined
   private config: ClientConfig
   private fetchImpl: typeof fetch
   private requestQueue: UpstreamRequestQueue | undefined
@@ -62,6 +64,7 @@ export class CopilotClient {
 
   constructor(auth: ClientAuth, config: ClientConfig, deps?: ClientDeps) {
     this.auth = auth
+    this.runtime = deps?.runtime
     this.config = config
     this.fetchImpl = deps?.fetch ?? fetch
     this.requestQueue = deps?.requestQueue
@@ -76,6 +79,14 @@ export class CopilotClient {
     }
   }
 
+  /** The M365 upstream records its credential and availability on the target it serves. */
+  private requireRuntime(): AccountRuntime {
+    if (!this.runtime) {
+      throw new Error('An M365 client requires its route target runtime')
+    }
+    return this.runtime
+  }
+
   /** Low-level fetch with token check, header injection, and error handling */
   private async request(
     path: string,
@@ -83,26 +94,11 @@ export class CopilotClient {
     options: RequestOptions = {},
   ): Promise<QueuedUpstreamResponse> {
     if (this.config.upstream === 'm365') {
-      try {
-        const token = await getMscToken({
-          exe: this.config.mscAuthExe,
-          account: this.config.mscAuthAccount,
-          upn: this.config.mscAuthUpn,
-        })
-        this.auth.copilotToken = token.accessToken
-        this.auth.copilotTokenExpiresAt = token.expiresOn.getTime()
-        this.auth.copilotTokenLastRefreshAt = Date.now()
-        this.auth.copilotTokenLastRefreshSucceeded = true
-        this.auth.mscAuthUsername = token.username
-        this.auth.mscAuthTenant = token.tenant
-      }
-      catch (error) {
-        this.auth.copilotTokenLastRefreshSucceeded = false
-        const cause = (error as Error).message.slice(0, 400)
-        setTargetAvailability(getCurrentAccountRuntime(), { status: 'unavailable', cause })
+      const credential = await acquireM365Credential(this.requireRuntime())
+      if (credential.status === 'unavailable') {
         throw new HTTPError(503, {
           error: {
-            message: `The Microsoft 365 target is unavailable: ${cause}`,
+            message: `The Microsoft 365 target is unavailable: ${credential.cause}`,
             type: 'invalid_request_error',
           },
         })
@@ -338,16 +334,15 @@ export class CopilotClient {
       if (this.config.upstream !== 'm365')
         return payload as ModelsResponse
       const catalog = normalizeM365Catalog(payload)
-      setTargetAvailability(getCurrentAccountRuntime(), { status: 'ready' })
+      setTargetAvailability(this.requireRuntime(), { status: 'ready' })
       return catalog
     }
     catch (error) {
-      if (this.config.upstream === 'm365' && error instanceof HTTPError && (error.status === 401 || error.status === 403)) {
-        this.auth.copilotTokenLastRefreshSucceeded = false
-        setTargetAvailability(getCurrentAccountRuntime(), {
-          status: 'unavailable',
-          cause: `M365 model catalog access denied (${error.status}); select a work account with gateway access and a Copilot subscription.`,
-        })
+      if (this.config.upstream === 'm365' && isM365CatalogAccessDenied(error)) {
+        markM365Unavailable(
+          this.requireRuntime(),
+          `M365 model catalog access denied (${error.status}); select a work account with gateway access and a Copilot subscription.`,
+        )
       }
       throw error
     }
