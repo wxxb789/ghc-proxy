@@ -38,7 +38,6 @@ export interface PipelineParams {
 
 export interface PipelineResult {
   result: ExecutionResult
-  modelMapping: ModelMappingInfo
 }
 
 export interface IngestContext<TPayload> {
@@ -138,7 +137,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
 
   try {
     const result = await sourceAttempt.execute()
-    return { result, modelMapping: sourceAttempt.modelMapping }
+    return { result }
   }
   catch (error) {
     if (!(error instanceof TerminalUpstreamRecoveryError) || error.status !== 529)
@@ -212,10 +211,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
       const result = await fallbackAttempt.execute()
       fallbackAttempt.commitObservability()
       emitFallbackEvent(error.recovery, candidate.target.id, 'succeeded')
-      return {
-        result: discloseActualModel(result, candidate.target.id),
-        modelMapping: fallbackMapping,
-      }
+      return { result: discloseActualModel(result, candidate.target.id) }
     }
     catch (fallbackError) {
       if (error.recovery.fallbackFetchStarted)

@@ -187,6 +187,7 @@ describe('runPipeline', () => {
   afterEach(() => {
     restoreStateSnapshot(originalState)
     clearConfig()
+    runtimeStore.requests.reset()
   })
 
   interface SimplePayload {
@@ -197,6 +198,20 @@ describe('runPipeline', () => {
   // Orchestration tests stub endpoint eligibility; each endpoint's own rules
   // are covered in fallback-eligibility.test.ts.
   const acceptFallbackTarget = (): FallbackEligibility => ({ ok: true })
+
+  // The request record is the one place the access log and the Dashboard read
+  // a request's model mapping from, so trace assertions read it there.
+  function observeRequest() {
+    runtimeStore.requests.reset()
+    runtimeStore.requests.start({
+      requestId: 'internal-request-id',
+      method: 'POST',
+      endpoint: '/v1/chat/completions',
+    })
+    return () => runtimeStore.requests.snapshot().active.find(
+      request => request.requestId === 'internal-request-id',
+    )
+  }
 
   function makeStrategyRegistry(
     result: ExecutionResult = { kind: 'json', data: { ok: true } },
@@ -251,11 +266,12 @@ describe('runPipeline', () => {
       strategyRegistry,
     })
 
-    const { result, modelMapping } = await runPipeline(params, config)
+    const observed = observeRequest()
+    const { result } = await runPipeline(params, config)
 
     expect(result.kind).toBe('json')
     expect((result as { kind: 'json', data: unknown }).data).toEqual(expectedData)
-    expect(modelMapping.originalModel).toBe('claude-sonnet-4.5')
+    expect(observed()?.requestedModel).toBe('claude-sonnet-4.5')
   })
 
   test('model rewrite is reflected in model mapping trace', async () => {
@@ -282,11 +298,13 @@ describe('runPipeline', () => {
       strategyRegistry,
     })
 
-    const { modelMapping } = await runPipeline(params, config)
+    const observed = observeRequest()
+    await runPipeline(params, config)
 
-    expect(modelMapping.originalModel).toBe('old-model')
-    expect(modelMapping.steps).toHaveLength(1)
-    expect(modelMapping.steps[0]).toEqual({ tag: 'CONFIG_REWRITE', from: 'old-model', to: 'new-model' })
+    expect(observed()?.requestedModel).toBe('old-model')
+    expect(observed()?.modelTransforms).toEqual([
+      { tag: 'CONFIG_REWRITE', from: 'old-model', to: 'new-model' },
+    ])
     // The strategy should receive the rewritten model in the payload
     expect(executedPayloads[0]?.model).toBe('new-model')
   })
@@ -565,10 +583,11 @@ describe('runPipeline', () => {
     const params = makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'hi' }] })
     const config = makeConfig()
 
-    const { modelMapping } = await runPipeline(params, config)
+    const observed = observeRequest()
+    await runPipeline(params, config)
 
-    expect(modelMapping.originalModel).toBe('claude-sonnet-4.5')
-    expect(modelMapping.steps).toHaveLength(0)
+    expect(observed()?.requestedModel).toBe('claude-sonnet-4.5')
+    expect(observed()?.modelTransforms).toHaveLength(0)
   })
 
   test('stream result kind is propagated', async () => {
@@ -690,7 +709,8 @@ describe('runPipeline', () => {
       },
     })
 
-    const { result, modelMapping } = await runPipeline<SimplePayload, Context>(
+    const observed = observeRequest()
+    const { result } = await runPipeline<SimplePayload, Context>(
       makeParams({ model: 'source', messages: [{ role: 'user', content: 'original' }] }),
       {
         protocol: 'openai-chat',
@@ -708,7 +728,7 @@ describe('runPipeline', () => {
       'original|prepared',
       'original|prepared',
     ])
-    expect(modelMapping.steps.at(-1)).toEqual({
+    expect(observed()?.modelTransforms.at(-1)).toEqual({
       tag: 'OVERLOAD_FALLBACK',
       from: 'source',
       to: 'target',
