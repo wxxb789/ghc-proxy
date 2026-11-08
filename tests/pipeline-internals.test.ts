@@ -1,9 +1,10 @@
 import type { StateSnapshot } from './helpers'
 import type { StrategyEntry } from '~/dispatch'
 import type { ExecutionResult } from '~/lib/execution-strategy'
+import type { FallbackEligibility } from '~/pipeline/fallback-eligibility'
 import type { IngestContext, PipelineConfig, TransformContext } from '~/pipeline/runner'
 
-import type { ChatCompletionsPayload, Model, ResponsesPayload } from '~/types'
+import type { Model } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import consola from 'consola'
@@ -193,6 +194,10 @@ describe('runPipeline', () => {
     messages: Array<{ role: string, content: string }>
   }
 
+  // Orchestration tests stub endpoint eligibility; each endpoint's own rules
+  // are covered in fallback-eligibility.test.ts.
+  const acceptFallbackTarget = (): FallbackEligibility => ({ ok: true })
+
   function makeStrategyRegistry(
     result: ExecutionResult = { kind: 'json', data: { ok: true } },
   ): StrategyRegistry<{ payload: SimplePayload }> {
@@ -225,6 +230,7 @@ describe('runPipeline', () => {
   ): PipelineConfig<SimplePayload, { payload: SimplePayload }> {
     return {
       protocol: 'openai-chat',
+      checkFallbackTarget: acceptFallbackTarget,
       strategyRegistry: makeStrategyRegistry(),
       buildStrategyContext: ({ payload }) => ({ payload }),
       ...overrides,
@@ -442,6 +448,7 @@ describe('runPipeline', () => {
           },
           {
             protocol: 'anthropic-messages',
+            checkFallbackTarget: acceptFallbackTarget,
             strategyRegistry: registry,
             afterIngest({ payload }) {
               ingestedPayload = payload
@@ -599,6 +606,7 @@ describe('runPipeline', () => {
     const params = makeParams({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'hi' }] })
     const config: PipelineConfig<SimplePayload, Record<string, unknown>> = {
       protocol: 'openai-chat',
+      checkFallbackTarget: acceptFallbackTarget,
       strategyRegistry,
       buildStrategyContext: (ctx) => {
         capturedCtx = ctx as Record<string, unknown>
@@ -686,6 +694,7 @@ describe('runPipeline', () => {
       makeParams({ model: 'source', messages: [{ role: 'user', content: 'original' }] }),
       {
         protocol: 'openai-chat',
+        checkFallbackTarget: acceptFallbackTarget,
         strategyRegistry: registry,
         afterTransform({ payload }) {
           payload.messages[0]!.content += '|prepared'
@@ -705,48 +714,6 @@ describe('runPipeline', () => {
       to: 'target',
     })
     expect(result).toEqual({ kind: 'json', data: { model: 'target', ok: true } })
-  })
-
-  test('allows Responses JSON mode on a Chat-only fallback without structured outputs', async () => {
-    getCachedConfig().responsesChatCompletionsFallback = true
-    getCachedConfig().overloadFallbacks = { source: 'target' }
-    const target = buildModel('target', { supported_endpoints: ['/chat/completions'] })
-    target.capabilities.supports.structured_outputs = false
-    modelCache.cacheModels(buildModelsResponse(
-      buildModel('source', { supported_endpoints: ['/responses'] }),
-      target,
-    ))
-    interface Context {
-      model: string
-      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-    }
-    const attempts: string[] = []
-    const registry = new StrategyRegistry<Context>()
-    registry.register({
-      name: 'json-mode-fallback',
-      canHandle: () => true,
-      execute: async ({ model, recovery }) => {
-        attempts.push(model)
-        if (model === 'source') {
-          recovery.sourceModel = model
-          throw new TerminalUpstreamRecoveryError(
-            new HTTPError(529, { error: { message: 'source overloaded', type: 'overloaded_error' } }),
-            recovery,
-          )
-        }
-        return { kind: 'json', data: { model } }
-      },
-    })
-    const result = await runPipeline<ResponsesPayload, Context>({
-      ...makeParams({ model: 'source', messages: [] }),
-      body: { model: 'source', input: 'Return JSON.', text: { format: { type: 'json_object' } } },
-    }, {
-      protocol: 'responses',
-      strategyRegistry: registry,
-      buildStrategyContext: ({ payload, recovery }) => ({ model: payload.model, recovery }),
-    })
-    expect(attempts).toEqual(['source', 'target'])
-    expect(result.result).toEqual({ kind: 'json', data: { model: 'target' } })
   })
 
   test('shares one absolute upstream timeout across source and fallback attempts', async () => {
@@ -793,6 +760,7 @@ describe('runPipeline', () => {
       makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
       {
         protocol: 'openai-chat',
+        checkFallbackTarget: acceptFallbackTarget,
         strategyRegistry: registry,
         buildStrategyContext: ({ payload, recovery, upstreamSignal }) => ({
           model: payload.model,
@@ -861,6 +829,7 @@ describe('runPipeline', () => {
       makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
       {
         protocol: 'openai-chat',
+        checkFallbackTarget: acceptFallbackTarget,
         strategyRegistry: registry,
         buildStrategyContext: ({ payload, recovery, upstreamSignal }) => ({
           model: payload.model,
@@ -912,6 +881,7 @@ describe('runPipeline', () => {
         makeParams({ model: 'source', messages: [{ role: 'user', content: 'original' }] }),
         {
           protocol: 'openai-chat',
+          checkFallbackTarget: acceptFallbackTarget,
           strategyRegistry: registry,
           buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
         },
@@ -949,6 +919,7 @@ describe('runPipeline', () => {
       makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
       {
         protocol: 'openai-chat',
+        checkFallbackTarget: acceptFallbackTarget,
         strategyRegistry: registry,
         buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
       },
@@ -1013,6 +984,7 @@ describe('runPipeline', () => {
       makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
       {
         protocol: 'openai-chat',
+        checkFallbackTarget: acceptFallbackTarget,
         strategyRegistry: registry,
         buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
       },
@@ -1056,6 +1028,7 @@ describe('runPipeline', () => {
       makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
       {
         protocol: 'openai-chat',
+        checkFallbackTarget: acceptFallbackTarget,
         strategyRegistry: registry,
         buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
       },
@@ -1108,6 +1081,7 @@ describe('runPipeline', () => {
         makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
         {
           protocol: 'openai-chat',
+          checkFallbackTarget: acceptFallbackTarget,
           strategyRegistry: registry,
           afterTransform({ selectedModel }) {
             if (selectedModel?.id === 'target') {
@@ -1204,6 +1178,7 @@ describe('runPipeline', () => {
         makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
         {
           protocol: 'openai-chat',
+          checkFallbackTarget: acceptFallbackTarget,
           strategyRegistry: registry,
           afterTransform({ selectedModel }) {
             if (selectedModel?.id === 'target') {
@@ -1328,6 +1303,7 @@ describe('runPipeline', () => {
       },
       {
         protocol: 'openai-chat',
+        checkFallbackTarget: acceptFallbackTarget,
         strategyRegistry: registry,
         buildStrategyContext: ({ payload, upstreamSignal }) => ({
           model: payload.model,
@@ -1436,6 +1412,7 @@ describe('runPipeline', () => {
           makeParams({ model: 'source', messages: [{ role: 'user', content: 'hi' }] }),
           {
             protocol: 'openai-chat',
+            checkFallbackTarget: acceptFallbackTarget,
             strategyRegistry: registry,
             buildStrategyContext: ({ payload, recovery, upstreamSignal }) => ({
               model: payload.model,
@@ -1468,222 +1445,69 @@ describe('runPipeline', () => {
     }
   })
 
-  test('rejects fallback targets missing an explicitly requested capability', async () => {
-    const target = buildModel('target')
-    target.capabilities.supports.tool_calls = false
-    target.capabilities.supports.vision = false
-    target.capabilities.supports.adaptive_thinking = false
-    target.capabilities.supports.reasoning_effort = undefined
-    target.capabilities.supports.structured_outputs = false
-    modelCache.cacheModels(buildModelsResponse(buildModel('source'), target))
+  test('asks the endpoint about the target with the pristine post-ingest payload', async () => {
+    const originalInfo = consola.info
+    const events: string[] = []
+    consola.info = ((message: unknown) => {
+      if (typeof message === 'string' && message.startsWith('Upstream '))
+        events.push(message)
+    }) as unknown as typeof consola.info
     const config_ = getCachedConfig() as Record<string, unknown>
     config_.overloadFallbacks = { source: 'target' }
+    modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
 
-    const base: ChatCompletionsPayload = {
-      model: 'source',
-      messages: [{ role: 'user', content: 'hi' }],
+    interface Context {
+      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
     }
-    const cases: Array<{ name: string, payload: ChatCompletionsPayload }> = [
-      {
-        name: 'tools',
-        payload: {
-          ...base,
-          tools: [{ type: 'function', function: { name: 'lookup', parameters: {} } }],
-        },
+    const sourceError = new HTTPError(529, {
+      error: { message: 'source overloaded', type: 'overloaded_error' },
+    })
+    const checks: Array<{ payload: SimplePayload, target: string }> = []
+    let attempts = 0
+    const registry = new StrategyRegistry<Context>()
+    registry.register({
+      name: 'eligibility-test',
+      canHandle: () => true,
+      execute: async ({ recovery }) => {
+        attempts++
+        recovery.sourceModel = 'source'
+        throw new TerminalUpstreamRecoveryError(sourceError, recovery)
       },
-      {
-        name: 'vision',
-        payload: {
-          ...base,
-          messages: [{
-            role: 'user',
-            content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }],
-          }],
-        },
-      },
-      { name: 'reasoning', payload: { ...base, reasoning_effort: 'high' } },
-      { name: 'structured output', payload: { ...base, response_format: { type: 'json_object' } } },
-    ]
+    })
 
-    for (const scenario of cases) {
-      let attempts = 0
-      const sourceError = new HTTPError(529, {
-        error: { message: scenario.name, type: 'overloaded_error' },
-      })
-      const registry = new StrategyRegistry<{
-        payload: ChatCompletionsPayload
-        recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-      }>()
-      registry.register({
-        name: 'capability-test',
-        canHandle: () => true,
-        execute: async ({ recovery }) => {
-          attempts++
-          recovery.sourceModel = 'source'
-          throw new TerminalUpstreamRecoveryError(sourceError, recovery)
-        },
-      })
-
-      await expect(runPipeline<ChatCompletionsPayload, {
-        payload: ChatCompletionsPayload
-        recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-      }>(
-        makeParams(scenario.payload as unknown as SimplePayload),
+    try {
+      await expect(runPipeline<SimplePayload, Context>(
+        makeParams({ model: 'source', messages: [{ role: 'user', content: 'ingested' }] }),
         {
           protocol: 'openai-chat',
           strategyRegistry: registry,
-          buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
+          afterIngest: ({ payload }) => ({
+            ...payload,
+            messages: [{ role: 'user', content: 'replaced' }],
+          }),
+          afterTransform({ payload }) {
+            payload.messages[0]!.content += '|prepared'
+          },
+          checkFallbackTarget(payload, target) {
+            checks.push({ payload: structuredClone(payload), target: target.id })
+            return { ok: false, reason: 'endpoint-rejected' }
+          },
+          buildStrategyContext: ({ recovery }) => ({ recovery }),
         },
       )).rejects.toMatchObject({ status: 529, body: sourceError.body })
+
       expect(attempts).toBe(1)
+      expect(checks).toEqual([{
+        payload: { model: 'source', messages: [{ role: 'user', content: 'replaced' }] },
+        target: 'target',
+      }])
+      expect(events).toHaveLength(1)
+      expect(events[0]).toContain(' endpoint-rejected ')
+      expect(events[0]).toContain('model=source')
     }
-  })
-
-  test('does not require capabilities that the request explicitly disables', async () => {
-    const target = buildModel('target')
-    target.capabilities.supports.reasoning_effort = undefined
-    target.capabilities.supports.structured_outputs = false
-    modelCache.cacheModels(buildModelsResponse(buildModel('source'), target))
-    const config_ = getCachedConfig() as Record<string, unknown>
-    config_.overloadFallbacks = { source: 'target' }
-    const cases: Array<ChatCompletionsPayload> = [{
-      model: 'source',
-      messages: [{ role: 'user', content: 'hi' }],
-      reasoning_effort: 'none',
-    }]
-
-    for (const payload of cases) {
-      let attempts = 0
-      const registry = new StrategyRegistry<{
-        payload: ChatCompletionsPayload
-        recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-      }>()
-      registry.register({
-        name: 'disabled-capability-test',
-        canHandle: () => true,
-        execute: async ({ recovery }) => {
-          attempts++
-          if (attempts === 1) {
-            recovery.sourceModel = 'source'
-            throw new TerminalUpstreamRecoveryError(
-              new HTTPError(529, {
-                error: { message: 'source overloaded', type: 'overloaded_error' },
-              }),
-              recovery,
-            )
-          }
-          return { kind: 'json', data: { model: 'target' } }
-        },
-      })
-
-      await expect(runPipeline<ChatCompletionsPayload, {
-        payload: ChatCompletionsPayload
-        recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-      }>(
-        makeParams(payload as unknown as SimplePayload),
-        {
-          protocol: 'openai-chat',
-          strategyRegistry: registry,
-          buildStrategyContext: ({ payload: attemptPayload, recovery }) => ({
-            payload: attemptPayload,
-            recovery,
-          }),
-        },
-      )).resolves.toMatchObject({
-        result: { kind: 'json', data: { model: 'target' } },
-      })
-      expect(attempts).toBe(2)
+    finally {
+      consola.info = originalInfo
     }
-  })
-
-  test('rejects a target that cannot preserve requested parallel tool calls', async () => {
-    const target = buildModel('target')
-    target.capabilities.supports.tool_calls = true
-    target.capabilities.supports.parallel_tool_calls = false
-    modelCache.cacheModels(buildModelsResponse(buildModel('source'), target))
-    const config_ = getCachedConfig() as Record<string, unknown>
-    config_.overloadFallbacks = { source: 'target' }
-    let attempts = 0
-    const registry = new StrategyRegistry<{
-      payload: ChatCompletionsPayload
-      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-    }>()
-    registry.register({
-      name: 'parallel-tools-test',
-      canHandle: () => true,
-      execute: async ({ recovery }) => {
-        attempts++
-        recovery.sourceModel = 'source'
-        throw new TerminalUpstreamRecoveryError(
-          new HTTPError(529, {
-            error: { message: 'source overloaded', type: 'overloaded_error' },
-          }),
-          recovery,
-        )
-      },
-    })
-
-    await expect(runPipeline<ChatCompletionsPayload, {
-      payload: ChatCompletionsPayload
-      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-    }>(
-      makeParams({
-        model: 'source',
-        messages: [{ role: 'user', content: 'hi' }],
-        tools: [{ type: 'function', function: { name: 'lookup', parameters: {} } }],
-        parallel_tool_calls: true,
-      } as unknown as SimplePayload),
-      {
-        protocol: 'openai-chat',
-        strategyRegistry: registry,
-        buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
-      },
-    )).rejects.toMatchObject({ status: 529 })
-    expect(attempts).toBe(1)
-  })
-
-  test('rejects a target that explicitly does not support streaming', async () => {
-    const target = buildModel('target')
-    target.capabilities.supports.streaming = false
-    modelCache.cacheModels(buildModelsResponse(buildModel('source'), target))
-    const config_ = getCachedConfig() as Record<string, unknown>
-    config_.overloadFallbacks = { source: 'target' }
-    let attempts = 0
-    const registry = new StrategyRegistry<{
-      payload: ChatCompletionsPayload
-      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-    }>()
-    registry.register({
-      name: 'streaming-capability-test',
-      canHandle: () => true,
-      execute: async ({ recovery }) => {
-        attempts++
-        recovery.sourceModel = 'source'
-        throw new TerminalUpstreamRecoveryError(
-          new HTTPError(529, {
-            error: { message: 'source overloaded', type: 'overloaded_error' },
-          }),
-          recovery,
-        )
-      },
-    })
-
-    await expect(runPipeline<ChatCompletionsPayload, {
-      payload: ChatCompletionsPayload
-      recovery: ConstructorParameters<typeof TerminalUpstreamRecoveryError>[1]
-    }>(
-      makeParams({
-        model: 'source',
-        messages: [{ role: 'user', content: 'hi' }],
-        stream: true,
-      } as unknown as SimplePayload),
-      {
-        protocol: 'openai-chat',
-        strategyRegistry: registry,
-        buildStrategyContext: ({ payload, recovery }) => ({ payload, recovery }),
-      },
-    )).rejects.toMatchObject({ status: 529 })
-    expect(attempts).toBe(1)
   })
 
   test('does not execute fallback after caller aborts during target preparation', async () => {
@@ -1723,6 +1547,7 @@ describe('runPipeline', () => {
       params,
       {
         protocol: 'openai-chat',
+        checkFallbackTarget: acceptFallbackTarget,
         strategyRegistry: registry,
         afterTransform() {
           transforms++

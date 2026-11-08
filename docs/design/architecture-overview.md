@@ -176,6 +176,7 @@ Route handlers delegate to `runPipeline()` (`src/pipeline/runner.ts`), a generic
 - **Protocol, transform chain, and strategy registry** — which protocol to parse, which model transforms to apply, and which execution strategies to select from.
 - **Lifecycle hooks** — `afterIngest()` runs immediately after protocol parsing and validation (e.g., to extract beta headers, or to swap in a replacement payload by returning one), and `afterTransform()` runs after the model transform chain (e.g., to apply tool/input policies and context management on the final payload).
 - **Strategy context builder** — a `buildStrategyContext()` callback that constructs the strategy-specific context from the parsed payload, request metadata, resolved model, Copilot client, upstream signal, the full `ModelMappingInfo`, and the shared `UpstreamRecoveryRecord`. The recovery record carries correlation and recovery state across a source attempt and any overload fallback; it is not reduced to only a request ID.
+- **Overload-fallback eligibility** — a `checkFallbackTarget()` callback that decides, from the pristine post-ingest payload, whether a configured fallback target can serve the request. The endpoint owns this rule; the runner owns the fallback orchestration around it.
 
 Route handlers like messages and chat-completions supply their own config objects and call `runPipeline()`, keeping handler code focused on route-specific concerns rather than pipeline plumbing.
 

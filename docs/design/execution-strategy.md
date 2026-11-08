@@ -217,7 +217,7 @@ The two type parameters let each route keep its own payload and strategy context
 4. **afterTransform hook** (optional) -- runs after model transformation. Chat applies output-token default/rename handling without local prompt tokenization; Responses applies its tool/input policies and the shared upstream tail.
 5. **Dispatch** -- creates a `CopilotClient` and upstream signal, builds the strategy context via `buildStrategyContext()`, selects the strategy from the `StrategyRegistry`, records authoritative observability, and executes it. The source attempt is recorded immediately; fallback-attempt mapping, strategy, and effects are deferred until that target becomes authoritative.
 
-`runPipeline()` also owns the only overload-fallback branch. It preserves pristine post-ingest input before the source attempt. After a terminal source-model `529` (or a pre-existing local source cooldown), it looks up one exact `overloadFallbacks` target, validates advertised capabilities, and calls the same preparation boundary again with that target. This reruns transforms, capability checks, strategy-context construction, and registry selection without reapplying source model resolution. The target dispatch receives no new retry allowance and cannot trigger another fallback.
+`runPipeline()` also owns the only overload-fallback branch. It preserves pristine post-ingest input before the source attempt. After a terminal source-model `529` (or a pre-existing local source cooldown), it looks up one exact `overloadFallbacks` target, checks that it is distinct and advertised, asks the endpoint's `checkFallbackTarget()` whether that target can serve the pristine payload, and calls the same preparation boundary again with that target. This reruns transforms, capability checks, strategy-context construction, and registry selection without reapplying source model resolution. The target dispatch receives no new retry allowance and cannot trigger another fallback.
 
 Fallback preflight and pre-fetch failures preserve the source `529` and its
 model/strategy observability. Once target fetch begins, the fallback attempt
@@ -251,10 +251,25 @@ interface PipelineConfig<TPayload, TStrategyCtx> {
   }) => TStrategyCtx
   afterIngest?: (ctx: IngestContext<TPayload>) => TPayload
   afterTransform?: (ctx: TransformContext<TPayload>) => void | Promise<void>
+  checkFallbackTarget: (payload: TPayload, target: Model) => FallbackEligibility
 }
 ```
 
 Each route provides its own protocol ID, strategy registry, and a `buildStrategyContext` function that maps the generic pipeline state into the route-specific strategy context type. Model resolution is shared: every route runs the same `resolveRequestModel()`, and `applyModelPolicy` selects whether compact small-model routing participates (only `/v1/messages` sends the Anthropic-shaped payload the policy inspects). The lifecycle hooks let routes inject route-specific logic at well-defined points without forking the pipeline. `afterIngest` resolves the payload that flows into transform/dispatch and its return is required: side-effect-only callers end with `return ctx.payload` to forward the ingested payload unchanged, while replacement callers (e.g. `/responses`) return a different payload to swap in the emulator's upstream payload. The required return makes a forgotten replacement a compile error rather than a silent fallback.
+
+`checkFallbackTarget` is the endpoint's overload-fallback eligibility rule. It
+receives the pristine post-`afterIngest` payload and the advertised target and
+returns `{ ok: true }` or `{ ok: false, reason }`; the reason becomes the
+`fallback` recovery-event decision. Each endpoint keeps its rule beside its
+handler (`src/routes/<endpoint>/fallback-eligibility.ts`) and derives the
+request's tool, parallel-tool, streaming, vision, reasoning, and thinking needs
+from its own payload shape; `src/pipeline/fallback-eligibility.ts` matches those
+needs against advertised capabilities. Structured output and endpoint support
+reuse the endpoint's own strategy decision: Messages asks
+`resolveMessagesStrategyName()` and rejects a format that would land on Chat
+Completions Fallback, and Responses asks `resolveResponsesStrategyName()` and
+exempts JSON mode on the Chat bridge. The runner keeps no protocol-specific
+eligibility knowledge.
 
 `buildStrategyContext` receives the full mutable `ModelMappingInfo` and shared
 `UpstreamRecoveryRecord`, not a standalone `requestId`. Route contexts commonly
@@ -276,6 +291,7 @@ export async function handleMessagesCore({ body, signal, headers, requestId, cal
       protocol: 'anthropic-messages',
       applyModelPolicy: true,
       strategyRegistry: defaultStrategyRegistry,
+      checkFallbackTarget: checkMessagesFallbackTarget,
       afterIngest({ payload, headers }) {
         /* normalize anthropic-beta */
         return payload

@@ -15,6 +15,7 @@ import { normalizeFunctionParametersSchemaForCopilotWithChangeMetadata } from '~
 import { translateResponsesToChat } from '~/translator/responses/responses-to-chat'
 import { resolveResponsesStrategyName } from './capabilities'
 import { decorateStoredResponse, persistEmulatorResponse, prepareEmulatorRequest } from './emulator'
+import { checkResponsesFallbackTarget } from './fallback-eligibility'
 import { responsesStrategyRegistry } from './strategy-registry'
 
 const HTTP_URL_RE = /^https?:\/\//i
@@ -48,6 +49,7 @@ export async function handleResponsesCore(
     {
       protocol: 'responses',
       strategyRegistry: responsesStrategyRegistry,
+      checkFallbackTarget: checkResponsesFallbackTarget,
       afterIngest({ payload }) {
         originalPayload = payload
         emulatorPrepared = emulatorMode ? prepareEmulatorRequest(payload) : undefined

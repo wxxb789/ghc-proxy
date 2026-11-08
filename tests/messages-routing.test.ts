@@ -3,6 +3,7 @@ import type { AnthropicResponse } from '~/translator'
 import type { ResponseStreamEvent } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
+import consola from 'consola'
 
 import { CopilotClient } from '~/clients'
 import { LocalModelCooldownError, TerminalUpstreamRecoveryError } from '~/clients/upstream-queue'
@@ -1354,6 +1355,82 @@ describe('messages routing', () => {
       type: 'json_schema',
       schema,
     })
+  })
+
+  test('structured output fallback rejects a native-only target that cannot keep strict or description', async () => {
+    const app = createApp()
+    // The source serves the annotated format through Responses Translation.
+    const source = buildModel('messages-source', { supported_endpoints: ['/v1/messages', '/responses'] })
+    source.capabilities.supports.structured_outputs = true
+    // Native Messages would have to drop `strict`/`description`, and without a
+    // Responses endpoint the registry lands on Chat Completions Fallback, which
+    // rejects structured output. The target is therefore ineligible.
+    const target = buildModel('messages-target', { supported_endpoints: ['/v1/messages'] })
+    target.capabilities.supports.structured_outputs = true
+    modelCache.cacheModels(buildModelsResponse(source, target))
+    const config = getCachedConfig() as Record<string, unknown>
+    config.overloadFallbacks = { 'messages-source': 'messages-target' }
+
+    const originalInfo = consola.info
+    const fallbackEvents: string[] = []
+    consola.info = ((message: unknown) => {
+      if (typeof message === 'string' && message.startsWith('Upstream '))
+        fallbackEvents.push(message)
+    }) as unknown as typeof consola.info
+
+    const sourceError = new HTTPError(529, {
+      error: { message: 'source overloaded', type: 'overloaded_error' },
+    })
+    const models: string[] = []
+    CopilotClient.prototype.createResponses = (async (payload) => {
+      models.push(payload.model)
+      throw new TerminalUpstreamRecoveryError(sourceError, {
+        requestId: 'structured-output-native-only-fallback',
+        retryCount: 1,
+        sourceModel: 'messages-source',
+      })
+    }) as typeof CopilotClient.prototype.createResponses
+    CopilotClient.prototype.createMessages = (async (payload) => {
+      models.push(payload.model)
+      throw new Error('unexpected native Messages call')
+    }) as CreateMessages
+    CopilotClient.prototype.createChatCompletions = (async (payload) => {
+      models.push(payload.model)
+      throw new Error('unexpected Chat Completions call')
+    }) as typeof CopilotClient.prototype.createChatCompletions
+
+    try {
+      for (const annotation of [{ strict: true }, { description: 'An answer.' }]) {
+        models.length = 0
+        fallbackEvents.length = 0
+        const response = await app.handle(new Request('http://localhost/v1/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model: 'messages-source',
+            max_tokens: 256,
+            output_config: {
+              format: {
+                type: 'json_schema',
+                schema: { type: 'object', properties: {} },
+                ...annotation,
+              },
+            },
+            messages: [{ role: 'user', content: 'hello' }],
+          }),
+        }))
+
+        expect(response.status).toBe(529)
+        expect(await response.json()).toEqual({ type: 'error', ...sourceError.body })
+        expect(models).toEqual(['messages-source'])
+        expect(fallbackEvents).toHaveLength(1)
+        expect(fallbackEvents[0]).toContain(' unsupported-structured-output ')
+        expect(fallbackEvents[0]).toContain('model=messages-source')
+      }
+    }
+    finally {
+      consola.info = originalInfo
+    }
   })
 
   test('/v1/messages preserves source 529 when target lacks parallel tool calls', async () => {
