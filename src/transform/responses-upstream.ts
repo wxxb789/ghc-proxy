@@ -11,9 +11,11 @@ import { stripPhaseFromInputMessages } from '~/transform/responses-input'
  *
  * Both Responses dispatch paths call this — `POST /responses` passthrough and
  * the `/v1/messages` → Responses translation — so the steps and their order
- * live here once rather than in each caller. Caller-specific work (tool
- * transforms, the store / item_reference / remote-image input policy, model
- * validation, effort clamping) stays with the caller and runs before this.
+ * live here once rather than in each caller. Caller-specific work stays with
+ * the caller: tool transforms, the store / item_reference / remote-image input
+ * policy, and model validation run before this; the `/responses` passthrough
+ * clamps reasoning effort after it (the Messages translation limits effort
+ * inside the translator).
  *
  * The order is fixed:
  * 1. Compaction runs first, so later effect counts describe only items that

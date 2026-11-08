@@ -56,7 +56,8 @@ The 400 `invalid_request_body` was likely caused by the `phase` field (`commenta
 
 ## Resolution: Input Sanitization Safety Net
 
-Applied in `src/routes/responses/handler.ts` (`applyResponsesInputPolicies`):
+Steps 1 and 2 are applied in `src/routes/responses/handler.ts`
+(`applyResponsesInputPolicies`); step 3 runs later, in the shared upstream tail:
 
 1. **`store = false`** — Force the explicitly supported stateless mode. Current
    GPT Responses models reject `store=true`; successful stateless responses can
@@ -67,7 +68,7 @@ Applied in `src/routes/responses/handler.ts` (`applyResponsesInputPolicies`):
      IDs on a later request
    - Strip orphaned `function_call_output` items (no matching `function_call` in input)
 
-3. **`stripPhaseFromInputMessages`** — Strip `phase` from input messages (output-only annotation). The reusable implementation now lives in `src/transform/responses-input.ts` and is also used by the Messages-to-Responses strategy.
+3. **`stripPhaseFromInputMessages`** — Strip `phase` from input messages (output-only annotation). It lives in `src/transform/responses-input.ts` and runs inside `shapeResponsesUpstreamPayload()` (`src/transform/responses-upstream.ts`), after compaction, on both Responses dispatch paths (`POST /responses` and the Messages-to-Responses strategy).
 
 When the optional official Responses emulator is enabled, it keeps the caller's original `store` intent for local retrieve/delete/continuation semantics while still sending `store=false` upstream. Without the emulator, resource semantics are not supplied locally.
 
