@@ -7,6 +7,7 @@ import { HTTPError } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
 
 import { processAnthropicBetaHeader } from '~/transform'
+import { checkMessagesFallbackTarget } from './fallback-eligibility'
 import { defaultStrategyRegistry } from './strategy-registry'
 
 export interface MessagesCoreParams {
@@ -31,6 +32,7 @@ export async function handleMessagesCore(
         protocol: 'anthropic-messages',
         applyModelPolicy: true,
         strategyRegistry: defaultStrategyRegistry,
+        checkFallbackTarget: checkMessagesFallbackTarget,
         afterIngest({ payload, headers: reqHeaders }) {
           if (consola.level >= 4)
             consola.debug('Anthropic request payload:', JSON.stringify(payload))

@@ -85,7 +85,7 @@ Overload fallback is not the missing-model fallback above. It starts only after 
 }
 ```
 
-There is no default mapping. A target must differ from the source, exist in the cached advertised model list, not be behind an account or target-model cooldown, and satisfy the request's endpoint, tool, parallel-tool, streaming, vision, reasoning/thinking, and structured-output requirements. `/responses` targets must advertise `/responses`; Messages re-runs its normal strategy registry for the selected target.
+There is no default mapping. A target must differ from the source, exist in the cached advertised model list, not be behind an account or target-model cooldown, and satisfy the request's endpoint, tool, parallel-tool, streaming, vision, reasoning/thinking, and structured-output requirements. Each endpoint owns that check (`checkFallbackTarget` in `PipelineConfig`): `/responses` targets need a Responses strategy from `resolveResponsesStrategyName()` (native, or the opt-in Chat bridge), and Messages accepts an `output_config.format` request only when its strategy registry would serve the target natively or through Responses rather than Chat Completions Fallback. Messages then re-runs its normal strategy registry for the selected target.
 
 The pipeline rebuilds the fallback attempt from pristine post-ingest input, reapplies target-dependent transforms and capability checks, and appends `OVERLOAD_FALLBACK` as the last model trace step. It dispatches once without a new retry allowance. Successful JSON/SSE output and persisted Responses emulator records disclose the actual target model. Preflight rejection preserves the source `529`; once target fetch starts, any target failure is final.
 

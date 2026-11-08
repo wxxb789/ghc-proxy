@@ -3,6 +3,7 @@ import type { ModelsResponse } from '~/types'
 import { afterAll, describe, expect, test } from 'bun:test'
 
 import { createTargetRuntime, initializeM365Target } from '~/accounts/target-runtime'
+import { acquireM365Credential } from '~/clients/m365-credential'
 import { M365_MODELS } from '~/clients/m365-upstream'
 import { compileAccountRouting } from '~/lib/account-routing'
 import { HTTPError } from '~/lib/error'
@@ -178,6 +179,42 @@ describe('target runtime factory', () => {
     expect(state.models).toEqual(['claude-opus-5.5'])
     expect(state.availability?.status).toBe('ready')
     expect(state.onboarding.status).toBe('unavailable')
+  })
+})
+
+describe('acquireM365Credential', () => {
+  test('projects the broker token onto the target it is given', async () => {
+    const runtime = createTargetRuntime('m365', 'm365', { mscAuthAccount: 'home-account-id' })
+    const expiresOn = new Date(Date.now() + 60_000)
+
+    const result = await acquireM365Credential(runtime, async () => ({
+      accessToken: 'gateway-token',
+      expiresOn,
+      tenant: 'tenant-id',
+      username: 'operator@example.com',
+    }))
+
+    expect(result).toEqual({ status: 'ready', accessToken: 'gateway-token' })
+    expect(runtime.auth).toMatchObject({
+      copilotToken: 'gateway-token',
+      copilotTokenExpiresAt: expiresOn.getTime(),
+      copilotTokenLastRefreshSucceeded: true,
+      mscAuthUsername: 'operator@example.com',
+      mscAuthTenant: 'tenant-id',
+    })
+    expect(runtime.auth.copilotTokenLastRefreshAt).toBeNumber()
+  })
+
+  test('records a bounded cause on failure and returns it', async () => {
+    const runtime = createTargetRuntime('m365', 'm365')
+
+    const result = await acquireM365Credential(runtime, async () => {
+      throw new Error('x'.repeat(500))
+    })
+
+    expect(result).toEqual({ status: 'unavailable', cause: 'x'.repeat(400) })
+    expect(runtime.auth.copilotTokenLastRefreshSucceeded).toBe(false)
+    expect(getTargetAvailability(runtime)).toMatchObject({ status: 'unavailable', cause: 'x'.repeat(400) })
   })
 })
 

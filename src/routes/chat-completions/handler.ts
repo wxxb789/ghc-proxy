@@ -7,6 +7,7 @@ import { runPipeline } from '~/pipeline/runner'
 import { runtimeStore } from '~/state'
 import { applyChatCompletionsTokenParam } from '~/transform/parameter-filter'
 
+import { checkChatCompletionsFallbackTarget } from './fallback-eligibility'
 import { chatCompletionsStrategyRegistry } from './strategy-registry'
 
 export interface CompletionCoreParams {
@@ -27,6 +28,7 @@ export async function handleCompletionCore(
     {
       protocol: 'openai-chat',
       strategyRegistry: chatCompletionsStrategyRegistry,
+      checkFallbackTarget: checkChatCompletionsFallbackTarget,
       afterIngest({ payload }) {
         consola.debug('Request payload:', JSON.stringify(payload).slice(-400))
         // Side-effect-only hook: forward the ingested payload unchanged (the

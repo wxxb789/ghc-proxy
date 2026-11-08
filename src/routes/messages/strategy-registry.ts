@@ -12,9 +12,9 @@ import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
 import { runStrategy } from '~/lib/execution-strategy'
 import { appendModelStepInPlace } from '~/lib/request-logger'
 import { configStore, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
-import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
-import { applyResponsesParameterFilters, clampMessagesOutputTokens, clampResponsesOutputTokens } from '~/transform/parameter-filter'
-import { stripPhaseFromInputMessages } from '~/transform/responses-input'
+import { getResponsesRequestOptions } from '~/transform/context-management'
+import { clampMessagesOutputTokens } from '~/transform/parameter-filter'
+import { createResponsesTerminalObservers, shapeResponsesUpstreamPayload } from '~/transform/responses-upstream'
 import { canReduceOutputFormatForNativeMessages, convertEnabledThinkingToAdaptive, filterThinkingBlocksForNativeMessages, hasOutputConfigFormat, reduceOutputFormatForNativeMessages, sanitizeCacheControl, sanitizeExclusiveSamplingParams, sanitizeOutputConfig } from '~/transform/sanitize'
 
 import { translateAnthropicToResponsesPayload } from '~/translator/responses/anthropic-to-responses'
@@ -120,46 +120,7 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
       }),
     )
 
-    const contextThreshold = applyContextManagement(
-      responsesPayload,
-      ctx.selectedModel?.capabilities.limits.max_prompt_tokens,
-    )
-    if (contextThreshold !== undefined)
-      runtimeStore.requests.recordEffect(ctx.requestId, 'responses.context_management')
-    const compactedItems = compactInputByLatestCompaction(responsesPayload)
-    if (compactedItems > 0) {
-      runtimeStore.requests.recordEffect(
-        ctx.requestId,
-        'responses.input_compacted',
-        compactedItems,
-      )
-    }
-
-    // The translator emits `phase` on assistant messages, and some models
-    // reject it as input with a 400. Strip it here for the same reason
-    // /responses does — this path generates the field rather than receiving
-    // it, so it is if anything more exposed.
-    const strippedPhases = stripPhaseFromInputMessages(responsesPayload)
-    if (strippedPhases > 0) {
-      runtimeStore.requests.recordEffect(
-        ctx.requestId,
-        'responses.phase_filtered',
-        strippedPhases,
-      )
-    }
-
-    // Runs last so it can strip any request parameter — including fields
-    // injected above (e.g. context_management) — that the model rejects.
-    const removedParams = applyResponsesParameterFilters(responsesPayload, ctx.selectedModel)
-    if (removedParams.length > 0) {
-      runtimeStore.requests.recordEffect(
-        ctx.requestId,
-        'responses.parameter_filter',
-        removedParams.length,
-      )
-    }
-    if (clampResponsesOutputTokens(responsesPayload))
-      runtimeStore.requests.recordEffect(ctx.requestId, 'responses.output_tokens_raised')
+    shapeResponsesUpstreamPayload(responsesPayload, ctx.selectedModel, ctx.requestId)
 
     const { vision, initiator } = getResponsesRequestOptions(responsesPayload)
     const strategy = createMessagesViaResponsesStrategy(
@@ -170,22 +131,7 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
         initiator,
         signal: ctx.upstreamSignal.signal,
         requestContext: ctx.requestContext,
-        onTerminalResponse(response) {
-          if (response.status === 'failed' || response.error) {
-            runtimeStore.requests.recordError(
-              ctx.requestId,
-              'Upstream HTTP 200 (response_failed)',
-            )
-          }
-        },
-        onStreamEndWithoutTerminal() {
-          if (ctx.upstreamSignal.clientSignal?.aborted)
-            return
-          runtimeStore.requests.recordError(
-            ctx.requestId,
-            'Upstream HTTP 200 (response_stream_eof)',
-          )
-        },
+        ...createResponsesTerminalObservers(ctx.requestId, ctx.upstreamSignal),
       },
     )
     return await runStrategy(strategy, ctx.upstreamSignal, {

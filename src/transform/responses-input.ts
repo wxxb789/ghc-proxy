@@ -15,10 +15,12 @@ export const RESPONSES_INPUT_POLICY = {
  * upstream `400 invalid_request_body` to exactly that (see
  * `docs/investigation-responses-404.md`).
  *
- * Both Responses dispatch paths must call this. `POST /responses` receives the
- * field from clients replaying prior output; the `/v1/messages` → Responses
- * strategy has the translator *generate* it (see `resolveAssistantPhase` in
- * `translator/responses/response-items.ts`), so neither path is exempt.
+ * Neither Responses dispatch path is exempt, so this runs inside the shared
+ * upstream tail (`shapeResponsesUpstreamPayload` in `responses-upstream.ts`)
+ * rather than being called by each path. `POST /responses` receives the field
+ * from clients replaying prior output; the `/v1/messages` → Responses strategy
+ * has the translator *generate* it (see `resolveAssistantPhase` in
+ * `translator/responses/response-items.ts`).
  */
 export function stripPhaseFromInputMessages(payload: ResponsesPayload): number {
   if (!Array.isArray(payload.input)) {

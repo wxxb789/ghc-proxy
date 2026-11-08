@@ -5,8 +5,7 @@ import type { DecisionsRequest, DecisionsResponse } from '~/types'
 import { cacheModels, createCopilotClient, createRequestRecoveryRecord } from '~/clients/factory'
 import { protocolRegistry } from '~/ingest'
 import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
-import { setRequestModelMapping } from '~/lib/request-logger'
-import { ClientAbortError, createUpstreamSignalFromConfig } from '~/lib/upstream-signal'
+import { ClientAbortError, withUpstreamSignal } from '~/lib/upstream-signal'
 import { DECISIONS_ENDPOINT, modelCache, runtimeStore, SYSTEMONE_ENDPOINT } from '~/state'
 import { resolveRequestModel } from '~/transform/resolve-model'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
@@ -33,30 +32,13 @@ export async function handleDecisionsCore(
     body,
     headers,
   )
-  const upstreamSignal = createUpstreamSignalFromConfig(
-    signal,
-    undefined,
-    () => runtimeStore.requests.markAborted(requestId),
-  )
-
-  try {
-    // The shared helper intentionally ignores a client signal that was already
-    // aborted when it was created (a historical Bun platform workaround). This
-    // route still must refuse dispatch, so check the caller signal after the
-    // helper has wired cleanup and record the cancellation explicitly.
-    if (signal.aborted) {
-      upstreamSignal.cleanup()
-      runtimeStore.requests.markAborted(requestId)
-      throw new ClientAbortError()
-    }
-    upstreamSignal.signal.throwIfAborted()
-
+  return withUpstreamSignal(signal, () => runtimeStore.requests.markAborted(requestId), async (upstreamSignal) => {
     const copilotClient = client ?? createCopilotClient(
       recovery ?? createRequestRecoveryRecord(request),
     )
 
     if (!modelCache.getModels())
-      await cacheModels(copilotClient, { signal: upstreamSignal.signal })
+      await cacheModels(copilotClient, { signal: upstreamSignal })
 
     const resolved = resolveRequestModel({
       payload,
@@ -64,7 +46,6 @@ export async function handleDecisionsCore(
       applyPolicy: false,
     })
     runtimeStore.requests.recordModelMapping(requestId, resolved.modelMapping)
-    setRequestModelMapping(request, resolved.modelMapping)
 
     if (!resolved.resolvedModel)
       throwInvalidRequestError('The selected model could not be resolved.', 'model')
@@ -81,7 +62,7 @@ export async function handleDecisionsCore(
         if (
           error instanceof DOMException
           && error.name === 'AbortError'
-          && upstreamSignal.clientSignal?.aborted
+          && signal.aborted
         ) {
           throw new ClientAbortError()
         }
@@ -102,7 +83,7 @@ export async function handleDecisionsCore(
     if (modelCache.supportsEndpoint(resolved.resolvedModel, DECISIONS_ENDPOINT)) {
       const native = buildNativeDecisionsRequest(payload, resolved.resolvedModel.id)
       const raw = await callUpstream(() => copilotClient.createDecisions(native.upstream, {
-        signal: upstreamSignal.signal,
+        signal: upstreamSignal,
       }))
       return restoreNativeDecisionsNames(raw, native.placeholders)
     }
@@ -115,14 +96,11 @@ export async function handleDecisionsCore(
 
     const translation = withTranslationErrors(() => translateDecisionsRequest(payload))
     const raw = await callUpstream(() => copilotClient.createSystemOne(translation.upstream, {
-      signal: upstreamSignal.signal,
+      signal: upstreamSignal,
       errorMapper: (message, response) =>
         normalizeDecisionsUpstreamError(message, response, translation.questions),
     }))
 
     return withTranslationErrors(() => translateDecisionsResponse(raw, translation))
-  }
-  finally {
-    upstreamSignal.cleanup()
-  }
+  })
 }

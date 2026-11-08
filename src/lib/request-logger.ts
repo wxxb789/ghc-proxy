@@ -23,13 +23,6 @@ export interface ModelMappingInfo {
   steps: ModelTransformStep[]
 }
 
-/**
- * Per-request model mapping store.
- * Route handlers write to this; the after-response hook reads from it.
- * Uses WeakMap so entries are GC'd when the Request is collected.
- */
-const requestModelMapping = new WeakMap<Request, ModelMappingInfo>()
-
 export interface RequestCorrelation {
   requestId: string
   callerRequestId?: string
@@ -233,14 +226,6 @@ export function logRecoveryEvent(
     return
   }
   logger.info('Upstream recovery', fields)
-}
-
-export function setRequestModelMapping(request: Request, info: ModelMappingInfo): void {
-  requestModelMapping.set(request, info)
-}
-
-export function getRequestModelMapping(request: Request): ModelMappingInfo | undefined {
-  return requestModelMapping.get(request)
 }
 
 /**

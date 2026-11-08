@@ -291,14 +291,10 @@ export class AccountManager {
   }
 
   async bootstrapAccountRouting(rawHostname: string): Promise<void> {
-    if (this.stopped) {
-      throw new AccountManagementError('Account management is shutting down.', 503)
-    }
+    this.assertRunning()
     const hostname = parseHostname(rawHostname)
     await this.runMutation(async () => {
-      if (this.stopped) {
-        throw new AccountManagementError('Account management is shutting down.', 503)
-      }
+      this.assertRunning()
       if (this.routingEnabled) {
         throw new AccountManagementError('Named-account routing is already enabled.', 409)
       }
@@ -315,28 +311,12 @@ export class AccountManager {
         hostnames: { [hostname]: this.routing.defaultAccount },
       }
       const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
-      let runtimeApplied = false
-      try {
-        await this.dependencies.persistence.persistRouting(nextConfig, () => {
-          configureAccountRuntimes(nextRouting, this.runtimes.values())
-          runtimeApplied = true
-        })
-        this.routing = nextRouting
-        this.routingEnabled = true
-      }
-      catch (error) {
-        if (runtimeApplied) {
-          disableAccountRouting()
-        }
-        if (error instanceof AccountManagementError) {
-          throw error
-        }
-        throw new AccountManagementError(
-          'Could not enable named-account routing.',
-          500,
-          { cause: error },
-        )
-      }
+      await this.commitTable(
+        { routing: nextRouting, runtimes: this.runtimes },
+        applyRuntime => this.dependencies.persistence.persistRouting(nextConfig, applyRuntime),
+        { publish: 'in-journal', failureMessage: 'Could not enable named-account routing.' },
+      )
+      this.routingEnabled = true
     })
   }
 
@@ -353,9 +333,7 @@ export class AccountManager {
   private async startAccountAuthentication(
     input: AddAccountInput,
   ): Promise<AccountAuthenticationSession> {
-    if (this.stopped) {
-      throw new AccountManagementError('Account management is shutting down.', 503)
-    }
+    this.assertRunning()
     if (!this.routingEnabled) {
       throw new AccountManagementError(
         'Enable named-account routing before adding another account.',
@@ -401,9 +379,7 @@ export class AccountManager {
     catch (error) {
       this.authenticationControllers.delete(abortController)
       this.releaseReservation(accountName, hostname)
-      if (this.stopped) {
-        throw new AccountManagementError('Account management is shutting down.', 503)
-      }
+      this.assertRunning()
       throw new AccountManagementError(
         'Could not start account authentication.',
         502,
@@ -418,7 +394,7 @@ export class AccountManager {
       ).catch(() => {})
       this.authenticationControllers.delete(abortController)
       this.releaseReservation(accountName, hostname)
-      throw new AccountManagementError('Account management is shutting down.', 503)
+      throw shuttingDownError()
     }
 
     const session: InternalAuthenticationSession = {
@@ -453,9 +429,7 @@ export class AccountManager {
   }
 
   async setDefaultAccount(rawAccountName: string): Promise<void> {
-    if (this.stopped) {
-      throw new AccountManagementError('Account management is shutting down.', 503)
-    }
+    this.assertRunning()
     if (!this.routingEnabled) {
       throw new AccountManagementError(
         'Enable named-account routing before changing the default account.',
@@ -464,9 +438,7 @@ export class AccountManager {
     }
     const accountName = parseAccountName(rawAccountName)
     await this.runMutation(async () => {
-      if (this.stopped) {
-        throw new AccountManagementError('Account management is shutting down.', 503)
-      }
+      this.assertRunning()
       if (!this.runtimes.has(accountName)) {
         throw new AccountManagementError(
           `Account ${JSON.stringify(accountName)} does not exist.`,
@@ -477,50 +449,29 @@ export class AccountManager {
         return
       }
 
-      const previousRouting = this.routing
       const nextConfig = routingConfig({
         ...this.routing,
         defaultAccount: accountName,
       })
       const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
-      let runtimeApplied = false
-      try {
-        await this.dependencies.persistence.persistRouting(nextConfig, () => {
-          configureAccountRuntimes(nextRouting, this.runtimes.values())
-          runtimeApplied = true
-        })
-        this.routing = nextRouting
-      }
-      catch (error) {
-        if (runtimeApplied) {
-          configureAccountRuntimes(previousRouting, this.runtimes.values())
-        }
-        if (error instanceof AccountManagementError) {
-          throw error
-        }
-        throw new AccountManagementError(
-          'Could not switch the default account.',
-          500,
-          { cause: error },
-        )
-      }
+      await this.commitTable(
+        { routing: nextRouting, runtimes: this.runtimes },
+        applyRuntime => this.dependencies.persistence.persistRouting(nextConfig, applyRuntime),
+        { publish: 'in-journal', failureMessage: 'Could not switch the default account.' },
+      )
     })
   }
 
   /** Removes a routed account without changing ownership of in-flight requests. */
   async removeAccount(rawAccountName: string): Promise<void> {
-    if (this.stopped) {
-      throw new AccountManagementError('Account management is shutting down.', 503)
-    }
+    this.assertRunning()
     const accountName = parseAccountName(rawAccountName)
     if (accountName === RESERVED_M365_TARGET) {
       await this.removeM365Target()
       return
     }
     await this.runMutation(async () => {
-      if (this.stopped) {
-        throw new AccountManagementError('Account management is shutting down.', 503)
-      }
+      this.assertRunning()
       if (this.reservedAccountNames.has(accountName)) {
         throw new AccountManagementError(
           `Account ${JSON.stringify(accountName)} is being authenticated.`,
@@ -550,25 +501,12 @@ export class AccountManager {
       const nextRuntimes = new Map(this.runtimes)
       nextRuntimes.delete(accountName)
       const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
-      let runtimeApplied = false
-      try {
-        await this.dependencies.persistence.removeAccount(accountName, nextConfig, () => {
-          configureAccountRuntimes(nextRouting, nextRuntimes.values())
-          runtimeApplied = true
-        })
-      }
-      catch (error) {
-        if (runtimeApplied) {
-          configureAccountRuntimes(this.routing, this.runtimes.values())
-        }
-        if (error instanceof AccountManagementError) {
-          throw error
-        }
-        throw new AccountManagementError('Could not remove the account.', 500, { cause: error })
-      }
+      await this.commitTable(
+        { routing: nextRouting, runtimes: nextRuntimes },
+        applyRuntime => this.dependencies.persistence.removeAccount(accountName, nextConfig, applyRuntime),
+        { publish: 'in-journal', failureMessage: 'Could not remove the account.' },
+      )
 
-      this.routing = nextRouting
-      this.runtimes = nextRuntimes
       this.knownAccountNames.delete(accountName)
       const cleanup = this.refreshCleanups.get(accountName)
       this.refreshCleanups.delete(accountName)
@@ -584,9 +522,7 @@ export class AccountManager {
   async registerM365Target(
     input: M365TargetInput = {},
   ): Promise<void> {
-    if (this.stopped) {
-      throw new AccountManagementError('Account management is shutting down.', 503)
-    }
+    this.assertRunning()
     const parsedInput = parseM365TargetInput(input)
     await this.runMutation(async () => {
       if (this.runtimes.has(RESERVED_M365_TARGET)) {
@@ -620,41 +556,28 @@ export class AccountManager {
       const nextRuntimes = new Map(this.runtimes)
       nextRuntimes.set(RESERVED_M365_TARGET, runtime)
 
-      try {
-        await persist({
+      await this.commitTable(
+        { routing: nextRouting, runtimes: nextRuntimes },
+        applyRuntime => persist({
           routing: nextConfig,
           account: parsedInput.account,
           endpoint: parsedInput.endpoint,
           endpoints: parsedInput.endpoints,
-        }, () => {})
-      }
-      catch (error) {
-        if (error instanceof AccountManagementError) {
-          throw error
-        }
-        throw new AccountManagementError(
-          'Could not register the M365 target.',
-          500,
-          { cause: error },
-        )
-      }
-
-      await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
-      configureAccountRuntimes(nextRouting, nextRuntimes.values())
-      this.routing = nextRouting
-      this.runtimes = nextRuntimes
+        }, applyRuntime),
+        {
+          publish: 'after-commit',
+          failureMessage: 'Could not register the M365 target.',
+          warmUp: () => runWithAccountRuntime(runtime, () => initializeM365Target(runtime)),
+        },
+      )
     })
   }
 
   /** Removes the M365 target; in-flight requests finish on the old runtime. */
   async removeM365Target(): Promise<void> {
-    if (this.stopped) {
-      throw new AccountManagementError('Account management is shutting down.', 503)
-    }
+    this.assertRunning()
     await this.runMutation(async () => {
-      if (this.stopped) {
-        throw new AccountManagementError('Account management is shutting down.', 503)
-      }
+      this.assertRunning()
       if (!this.runtimes.has(RESERVED_M365_TARGET)) {
         throw new AccountManagementError('The M365 target is not registered.', 404)
       }
@@ -687,23 +610,11 @@ export class AccountManager {
       nextRuntimes.delete(RESERVED_M365_TARGET)
       const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
 
-      try {
-        await persist({ routing: nextConfig }, () => {})
-      }
-      catch (error) {
-        if (error instanceof AccountManagementError) {
-          throw error
-        }
-        throw new AccountManagementError(
-          'Could not remove the M365 target.',
-          500,
-          { cause: error },
-        )
-      }
-
-      configureAccountRuntimes(nextRouting, nextRuntimes.values())
-      this.routing = nextRouting
-      this.runtimes = nextRuntimes
+      await this.commitTable(
+        { routing: nextRouting, runtimes: nextRuntimes },
+        applyRuntime => persist({ routing: nextConfig }, applyRuntime),
+        { publish: 'after-commit', failureMessage: 'Could not remove the M365 target.' },
+      )
 
       const cleanup = this.refreshCleanups.get(RESERVED_M365_TARGET)
       this.refreshCleanups.delete(RESERVED_M365_TARGET)
@@ -714,9 +625,7 @@ export class AccountManager {
   async configureM365Target(
     input: M365TargetInput,
   ): Promise<void> {
-    if (this.stopped) {
-      throw new AccountManagementError('Account management is shutting down.', 503)
-    }
+    this.assertRunning()
     const parsedInput = parseM365TargetInput(input)
     await this.runMutation(async () => {
       const currentRuntime = this.runtimes.get(RESERVED_M365_TARGET)
@@ -732,17 +641,10 @@ export class AccountManager {
           || (parsedInput.endpoint === undefined && parsedInput.endpoints === undefined)) {
           throw new AccountManagementError('The M365 target is not registered.', 404)
         }
-        try {
-          await persist({
-            endpoint: parsedInput.endpoint,
-            endpoints: parsedInput.endpoints,
-          }, () => {})
-        }
-        catch (error) {
-          if (error instanceof AccountManagementError)
-            throw error
-          throw new AccountManagementError('Could not update the M365 target.', 500, { cause: error })
-        }
+        await persistOrFail('Could not update the M365 target.', () => persist({
+          endpoint: parsedInput.endpoint,
+          endpoints: parsedInput.endpoints,
+        }, () => {}))
         return
       }
 
@@ -778,33 +680,26 @@ export class AccountManager {
       nextRuntimes.set(RESERVED_M365_TARGET, runtime)
       const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
 
-      try {
-        await persist({
+      await this.commitTable(
+        { routing: nextRouting, runtimes: nextRuntimes },
+        applyRuntime => persist({
           routing: nextConfig,
           account: parsedInput.account,
           endpoint: parsedInput.endpoint,
           endpoints: parsedInput.endpoints,
-        }, () => {})
-      }
-      catch (error) {
-        if (error instanceof AccountManagementError) {
-          throw error
-        }
-        throw new AccountManagementError(
-          'Could not update the M365 target.',
-          500,
-          { cause: error },
-        )
-      }
-
-      if (accountChanged)
-        resetMscTokenCache()
-      if (runtimeChanged) {
-        await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
-      }
-      configureAccountRuntimes(nextRouting, nextRuntimes.values())
-      this.routing = nextRouting
-      this.runtimes = nextRuntimes
+        }, applyRuntime),
+        {
+          publish: 'after-commit',
+          failureMessage: 'Could not update the M365 target.',
+          warmUp: async () => {
+            if (accountChanged)
+              resetMscTokenCache()
+            if (runtimeChanged) {
+              await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
+            }
+          },
+        },
+      )
     })
   }
 
@@ -836,43 +731,37 @@ export class AccountManager {
       const authenticated = await completion
       if (this.stopped) {
         authenticated.stopRefresh()
-        throw new AccountManagementError('Account management is shutting down.', 503)
+        throw shuttingDownError()
       }
       await this.runMutation(async () => {
         if (this.stopped) {
           authenticated.stopRefresh()
-          throw new AccountManagementError('Account management is shutting down.', 503)
+          throw shuttingDownError()
         }
         const nextRuntimes = new Map(this.runtimes)
         nextRuntimes.set(session.accountName, authenticated.runtime)
         const nextConfig = routingConfig(this.routing)
         nextConfig.hostnames[session.hostname] = session.accountName
         const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
-        const previousRouting = this.routing
-        let runtimeApplied = false
         try {
-          await this.dependencies.persistence.addAccount({
-            accountName: session.accountName,
-            hostname: session.hostname,
-            gheDomain,
-            githubToken: authenticated.githubToken,
-            routing: nextConfig,
-          }, () => {
-            configureAccountRuntimes(nextRouting, nextRuntimes.values())
-            runtimeApplied = true
-          })
-          this.runtimes = nextRuntimes
-          this.routing = nextRouting
-          this.knownAccountNames.add(session.accountName)
-          this.refreshCleanups.set(session.accountName, authenticated.stopRefresh)
+          await this.commitTable(
+            { routing: nextRouting, runtimes: nextRuntimes },
+            applyRuntime => this.dependencies.persistence.addAccount({
+              accountName: session.accountName,
+              hostname: session.hostname,
+              gheDomain,
+              githubToken: authenticated.githubToken,
+              routing: nextConfig,
+            }, applyRuntime),
+            { publish: 'in-journal' },
+          )
         }
         catch (error) {
-          if (runtimeApplied) {
-            configureAccountRuntimes(previousRouting, this.runtimes.values())
-          }
           authenticated.stopRefresh()
           throw error
         }
+        this.knownAccountNames.add(session.accountName)
+        this.refreshCleanups.set(session.accountName, authenticated.stopRefresh)
       })
       session.state = 'succeeded'
     }
@@ -918,6 +807,68 @@ export class AccountManager {
     )
   }
 
+  /**
+   * The one commit path for routing-table mutations. It persists the next
+   * table, publishes it to the process-wide routing state, and only then adopts
+   * it as the manager's committed table, so the two stay in step. A failure
+   * leaves both on the previous table.
+   *
+   * `in-journal` (GitHub mutations) installs the prevalidated table inside the
+   * persistence journal, before the journal is removed; a commit failure
+   * republishes the previous table. `after-commit` (M365 mutations) persists
+   * with a no-op apply, then awaits the warm-up and publishes, so a reader
+   * never sees an uncommitted or cold target.
+   */
+  private async commitTable(
+    next: { routing: CompiledAccountRouting, runtimes: Map<string, AccountRuntime> },
+    persist: (applyRuntime: () => void) => Promise<void>,
+    options: TableCommitOptions,
+  ): Promise<void> {
+    const publishNext = () => configureAccountRuntimes(next.routing, next.runtimes.values())
+    if (options.publish === 'in-journal') {
+      let runtimeApplied = false
+      await persistOrFail(options.failureMessage, async () => {
+        try {
+          await persist(() => {
+            publishNext()
+            runtimeApplied = true
+          })
+        }
+        catch (error) {
+          if (runtimeApplied) {
+            this.republishCommittedTable()
+          }
+          throw error
+        }
+      })
+    }
+    else {
+      await persistOrFail(options.failureMessage, () => persist(() => {}))
+      await options.warmUp?.()
+      publishNext()
+    }
+    this.routing = next.routing
+    this.runtimes = next.runtimes
+  }
+
+  /** Restores the process-wide routing state the manager last committed. */
+  private republishCommittedTable(): void {
+    // Until legacy bootstrap commits, the process serves the legacy runtime
+    // without a routing table, so that is the state to restore.
+    if (this.routingEnabled) {
+      configureAccountRuntimes(this.routing, this.runtimes.values())
+    }
+    else {
+      disableAccountRouting()
+    }
+  }
+
+  private assertRunning(): void {
+    if (this.stopped) {
+      throw shuttingDownError()
+    }
+  }
+
   private runMutation<T>(mutation: () => Promise<T>): Promise<T> {
     const result = this.mutationTail.then(mutation, mutation)
     this.mutationTail = result.then(() => {}, () => {})
@@ -937,6 +888,33 @@ export class AccountManager {
         )
       }
     }
+  }
+}
+
+function shuttingDownError(): AccountManagementError {
+  return new AccountManagementError('Account management is shutting down.', 503)
+}
+
+type TableCommitOptions
+  = | { publish: 'in-journal', failureMessage?: string }
+    | { publish: 'after-commit', failureMessage: string, warmUp?: () => Promise<void> }
+
+/**
+ * Runs a persistence step. With a failure message, an unexpected failure
+ * surfaces as a 500 management error; without one it propagates unchanged.
+ */
+async function persistOrFail(
+  failureMessage: string | undefined,
+  persist: () => Promise<void>,
+): Promise<void> {
+  try {
+    await persist()
+  }
+  catch (error) {
+    if (failureMessage === undefined || error instanceof AccountManagementError) {
+      throw error
+    }
+    throw new AccountManagementError(failureMessage, 500, { cause: error })
   }
 }
 

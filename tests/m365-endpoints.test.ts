@@ -190,6 +190,7 @@ describe('M365 endpoint transport', () => {
     const requests: Array<{ url: string, method: string, authorization: string | null }> = []
     await runWithAccountRuntime(runtime, async () => {
       const client = new CopilotClient(runtime.auth, getClientConfig(), {
+        runtime,
         fetch: Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
           requests.push({ url: String(input), method: init?.method ?? 'GET', authorization: new Headers(init?.headers).get('authorization') })
           return Response.json(String(input).endsWith('/models')

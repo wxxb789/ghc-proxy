@@ -7,14 +7,14 @@
  * escaping into the caller; only the M365 target degrades this way, because
  * GitHub targets keep the fail-fast startup they have always had.
  */
+import type { getMscToken } from '~/clients/msc-auth'
 import type { TargetKind } from '~/lib/account-routing'
 import type { AccountRuntime } from '~/state/account-runtime'
 import type { AuthStore } from '~/state/auth'
 
+import { acquireM365Credential, isM365CatalogAccessDenied, markM365Unavailable } from '~/clients/m365-credential'
 import { fetchM365Models, M365_MODELS } from '~/clients/m365-upstream'
-import { getMscToken } from '~/clients/msc-auth'
 import { getCachedConfig } from '~/lib/config'
-import { HTTPError } from '~/lib/error'
 import { M365_DEFAULT_ENDPOINT } from '~/lib/m365-endpoints'
 import { createAccountRuntime, setTargetAvailability } from '~/state/account-runtime'
 
@@ -58,23 +58,15 @@ export async function initializeM365Target(
   runtime: AccountRuntime,
   deps: M365InitializationDeps = {},
 ): Promise<void> {
-  const acquireToken = deps.acquireToken ?? getMscToken
   const fetchCatalog = deps.fetchCatalog ?? fetchM365Models
 
+  const credential = await acquireM365Credential(runtime, deps.acquireToken)
+  if (credential.status === 'unavailable')
+    return
+
   try {
-    const credential = await acquireToken({
-      exe: runtime.auth.mscAuthExe,
-      account: runtime.auth.mscAuthAccount,
-      upn: runtime.auth.mscAuthUpn,
-    })
-    runtime.auth.copilotToken = credential.accessToken
-    runtime.auth.copilotTokenExpiresAt = credential.expiresOn.getTime()
-    runtime.auth.copilotTokenLastRefreshAt = Date.now()
-    runtime.auth.copilotTokenLastRefreshSucceeded = true
-    runtime.auth.mscAuthUsername = credential.username
-    runtime.auth.mscAuthTenant = credential.tenant
     const catalog = await fetchCatalog(credential.accessToken, runtime.auth.m365Endpoint).catch((error: unknown) => {
-      if (error instanceof HTTPError && (error.status === 401 || error.status === 403))
+      if (isM365CatalogAccessDenied(error))
         throw error
       return M365_MODELS
     })
@@ -82,10 +74,6 @@ export async function initializeM365Target(
     setTargetAvailability(runtime, { status: 'ready' })
   }
   catch (error) {
-    runtime.auth.copilotTokenLastRefreshSucceeded = false
-    setTargetAvailability(runtime, {
-      status: 'unavailable',
-      cause: (error as Error).message.slice(0, 400),
-    })
+    markM365Unavailable(runtime, (error as Error).message)
   }
 }

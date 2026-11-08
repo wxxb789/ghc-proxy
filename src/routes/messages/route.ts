@@ -16,13 +16,13 @@ export function createMessageRoutes() {
         disableIdleTimeout(server, request)
       }
 
-      const { result, modelMapping } = await handleMessagesCore({
+      const { result } = await handleMessagesCore({
         body,
         signal: request.signal,
         headers: request.headers,
         ...getOrCreateRequestCorrelation(request),
       })
-      const delivery = deliverResult(request, result, modelMapping)
+      const delivery = deliverResult(request, result)
       if (!delivery.streaming)
         return delivery.data
       yield* delivery.stream

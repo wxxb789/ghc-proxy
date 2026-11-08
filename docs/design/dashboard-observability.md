@@ -133,6 +133,13 @@ reclassifies a failed request. The store can reclassify a just-completed entry
 as aborted when framework callback ordering reports the client disconnect
 after HTTP completion.
 
+Completion returns the terminal record, and the access log reads its model
+mapping (requested model plus transform steps) from that record rather than
+from a separate per-request copy. The log line and the Dashboard therefore
+show the same mapping for every outcome, including requests that failed after
+a rewrite or an overload fallback. Model IDs in the log are the store's
+sanitized values.
+
 Each request stores only allowlisted metadata:
 
 - Internal request ID
@@ -279,6 +286,14 @@ stops Live polling and any device-auth poll before leaving. It redirects only
 to `localhost`, a `*.localhost` name, a `127.x.x.x` address, or `::1`. Any
 other base hostname leaves the page in place with an Accounts fault asking the
 operator to open that hostname manually.
+
+These mutations and the M365 target's registration, reconfiguration, and
+removal share one commit path in the account manager (`commitTable`). GitHub
+mutations install the runtime inside the journal, as described above. M365
+mutations commit the journal without a runtime change, then initialize the
+target (credential and catalog) and only then publish the table, so a request
+never reaches an uncommitted or uninitialized target. Either way, the
+manager's committed table and the process-wide routing state change together.
 
 Legacy startup atomically migrates to a one-account routing table only when the
 credential store contains exactly one account. A credential created from the

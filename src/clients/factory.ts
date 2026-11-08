@@ -46,9 +46,6 @@ export function getClientConfig(): ClientConfig {
     accountType: runtime.auth.accountType,
     upstream: runtime.auth.upstream,
     m365Endpoint: runtime.auth.m365Endpoint,
-    mscAuthExe: runtime.auth.mscAuthExe,
-    mscAuthAccount: runtime.auth.mscAuthAccount,
-    mscAuthUpn: runtime.auth.mscAuthUpn,
     vsCodeVersion: runtime.models.getVSCodeVersion(),
     copilotApiBase: runtime.auth.copilotApiBase,
     githubBaseUrl: baseUrl,
@@ -65,6 +62,7 @@ export function createCopilotClient(
 ): CopilotClient {
   const runtime = getCurrentAccountRuntime()
   return new CopilotClient(runtime.auth, getClientConfig(), {
+    runtime,
     requestQueue: getUpstreamRequestQueue(),
     recovery,
     ...options,

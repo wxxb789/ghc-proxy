@@ -4,6 +4,7 @@ import type { StrategyRegistry } from '~/dispatch'
 import type { ProtocolId, RequestMeta } from '~/ingest'
 import type { ExecutionResult } from '~/lib/execution-strategy'
 import type { ModelMappingInfo } from '~/lib/request-logger'
+import type { FallbackEligibility } from '~/pipeline/fallback-eligibility'
 import type { Model } from '~/types'
 
 import { createCopilotClient } from '~/clients/factory'
@@ -23,7 +24,7 @@ import {
   createUpstreamSignalFromConfig,
 } from '~/lib/upstream-signal'
 import { effectForStrategy } from '~/observability/effects'
-import { resolveResponsesStrategyName } from '~/routes/responses/capabilities'
+import { asRecord } from '~/pipeline/fallback-eligibility'
 import { configStore, getCurrentRoutedAccountName, MESSAGES_ENDPOINT, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 import { resolveRequestModel } from '~/transform/resolve-model'
 
@@ -37,7 +38,6 @@ export interface PipelineParams {
 
 export interface PipelineResult {
   result: ExecutionResult
-  modelMapping: ModelMappingInfo
 }
 
 export interface IngestContext<TPayload> {
@@ -87,6 +87,14 @@ export interface PipelineConfig<TPayload, TStrategyCtx> {
    */
   afterIngest?: (ctx: IngestContext<TPayload>) => TPayload
   afterTransform?: (ctx: TransformContext<TPayload>) => void | Promise<void>
+  /**
+   * Decides whether an advertised overload-fallback target can serve this
+   * endpoint's request. Receives the pristine post-`afterIngest` payload, so
+   * it judges what the caller asked for rather than a prepared attempt. The
+   * runner has already checked that the target is configured, distinct from
+   * the source, and advertised.
+   */
+  checkFallbackTarget: (payload: TPayload, target: Model) => FallbackEligibility
 }
 
 export async function runPipeline<TPayload, TStrategyCtx>(
@@ -122,14 +130,14 @@ export async function runPipeline<TPayload, TStrategyCtx>(
     upstreamDeadlineMonotonicMs,
     {
       offerLocalModelCooldown: sourceModel => fallbackPossible
-        && validateFallback(config.protocol, pristinePayload, sourceModel).ok,
+        && validateFallback(config, pristinePayload, sourceModel).ok,
     },
   )
   sourceAttempt.commitObservability()
 
   try {
     const result = await sourceAttempt.execute()
-    return { result, modelMapping: sourceAttempt.modelMapping }
+    return { result }
   }
   catch (error) {
     if (!(error instanceof TerminalUpstreamRecoveryError) || error.status !== 529)
@@ -142,7 +150,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
     }
 
     const candidate = fallbackPossible
-      ? validateFallback(config.protocol, pristinePayload, sourceModel)
+      ? validateFallback(config, pristinePayload, sourceModel)
       : { ok: false, reason: 'not-configured' } as const
     if (!candidate.ok) {
       emitFallbackEvent(error.recovery, sourceModel, candidate.reason, 529)
@@ -203,10 +211,7 @@ export async function runPipeline<TPayload, TStrategyCtx>(
       const result = await fallbackAttempt.execute()
       fallbackAttempt.commitObservability()
       emitFallbackEvent(error.recovery, candidate.target.id, 'succeeded')
-      return {
-        result: discloseActualModel(result, candidate.target.id),
-        modelMapping: fallbackMapping,
-      }
+      return { result: discloseActualModel(result, candidate.target.id) }
     }
     catch (fallbackError) {
       if (error.recovery.fallbackFetchStarted)
@@ -403,9 +408,9 @@ type FallbackValidation
   = | { ok: true, target: Model }
     | { ok: false, reason: string }
 
-function validateFallback(
-  protocol: ProtocolId,
-  payload: unknown,
+function validateFallback<TPayload, TStrategyCtx>(
+  config: PipelineConfig<TPayload, TStrategyCtx>,
+  payload: TPayload,
   sourceModel: string,
 ): FallbackValidation {
   const targetId = configStore.getOverloadFallback(sourceModel)?.trim()
@@ -417,120 +422,8 @@ function validateFallback(
   const target = modelCache.findById(targetId)
   if (!target)
     return { ok: false, reason: 'unknown-target' }
-  const responsesStrategy = protocol === 'responses' ? resolveResponsesStrategyName(target) : undefined
-  if (protocol === 'responses' && !responsesStrategy)
-    return { ok: false, reason: 'unsupported-endpoint' }
-  if (requestsTools(payload) && !modelCache.supportsToolCalls(target))
-    return { ok: false, reason: 'unsupported-tools' }
-  if (
-    requestsParallelToolCalls(protocol, payload)
-    && target.capabilities.supports.parallel_tool_calls !== true
-  ) {
-    return { ok: false, reason: 'unsupported-parallel-tools' }
-  }
-  if (requestsStreaming(payload) && target.capabilities.supports.streaming === false)
-    return { ok: false, reason: 'unsupported-streaming' }
-  if (requestsVision(payload) && !modelCache.supportsVision(target))
-    return { ok: false, reason: 'unsupported-vision' }
-  if (requestsReasoningEffort(protocol, payload) && !modelCache.supportsReasoningEffort(target))
-    return { ok: false, reason: 'unsupported-reasoning' }
-  if (
-    requestsThinking(protocol, payload)
-    && !modelCache.supportsAdaptiveThinking(target)
-    && !modelCache.supportsReasoningEffort(target)
-  ) {
-    return { ok: false, reason: 'unsupported-thinking' }
-  }
-  const chatJsonMode = responsesStrategy === 'responses-chat-completions'
-    && asRecord(asRecord(asRecord(payload)?.text)?.format)?.type === 'json_object'
-  if (!chatJsonMode && requestsStructuredOutput(protocol, payload) && !supportsStructuredOutput(protocol, target))
-    return { ok: false, reason: 'unsupported-structured-output' }
-
-  return { ok: true, target }
-}
-
-function requestsTools(payload: unknown): boolean {
-  const tools = asRecord(payload)?.tools
-  return Array.isArray(tools) && tools.length > 0
-}
-
-function requestsParallelToolCalls(protocol: ProtocolId, payload: unknown): boolean {
-  if (protocol === 'anthropic-messages')
-    return requestsTools(payload)
-  return asRecord(payload)?.parallel_tool_calls === true
-}
-
-function requestsStreaming(payload: unknown): boolean {
-  return asRecord(payload)?.stream === true
-}
-
-function requestsVision(payload: unknown): boolean {
-  return containsVisionPart(asRecord(payload)?.messages)
-    || containsVisionPart(asRecord(payload)?.input)
-}
-
-function containsVisionPart(value: unknown): boolean {
-  if (Array.isArray(value))
-    return value.some(containsVisionPart)
-  const record = asRecord(value)
-  if (!record)
-    return false
-  if (record.type === 'image' || record.type === 'image_url' || record.type === 'input_image')
-    return true
-  return containsVisionPart(record.content)
-}
-
-function requestsReasoningEffort(protocol: ProtocolId, payload: unknown): boolean {
-  const record = asRecord(payload)
-  if (!record)
-    return false
-  const effort = protocol === 'anthropic-messages'
-    ? asRecord(record.output_config)?.effort
-    : protocol === 'responses'
-      ? asRecord(record.reasoning)?.effort
-      : record.reasoning_effort
-  return effort !== undefined && effort !== 'none'
-}
-
-function requestsThinking(protocol: ProtocolId, payload: unknown): boolean {
-  const record = asRecord(payload)
-  if (!record)
-    return false
-  if (protocol === 'anthropic-messages') {
-    const type = asRecord(record.thinking)?.type
-    return type === 'enabled' || type === 'adaptive'
-  }
-  if (protocol === 'openai-chat')
-    return typeof record.thinking_budget === 'number' && record.thinking_budget > 0
-  return false
-}
-
-function requestsStructuredOutput(protocol: ProtocolId, payload: unknown): boolean {
-  const record = asRecord(payload)
-  if (!record)
-    return false
-  if (protocol === 'anthropic-messages')
-    return asRecord(record.output_config)?.format !== undefined
-  if (protocol === 'responses') {
-    const type = asRecord(asRecord(record.text)?.format)?.type
-    return type !== undefined && type !== 'text'
-  }
-  const responseFormat = asRecord(record.response_format)
-  return responseFormat?.type !== undefined && responseFormat.type !== 'text'
-}
-
-function supportsStructuredOutput(protocol: ProtocolId, model: Model): boolean {
-  if (protocol === 'anthropic-messages') {
-    return modelCache.supportsStructuredOutputs(model)
-      || modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT)
-  }
-  return model.capabilities.supports.structured_outputs ?? false
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined
+  const eligibility = config.checkFallbackTarget(payload, target)
+  return eligibility.ok ? { ok: true, target } : eligibility
 }
 
 function discloseActualModel(result: ExecutionResult, model: string): ExecutionResult {

@@ -223,6 +223,75 @@ describe('dashboard request lifecycle', () => {
     })
   })
 
+  test('/responses counts phase_filtered only on items that survive compaction', async () => {
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('gpt-5.6-sol', {
+      supported_endpoints: ['/responses'],
+    })))
+    Object.assign(getCachedConfig(), { responsesApiAutoCompactInput: true })
+    CopilotClient.prototype.createResponses = mockResponses(
+      buildResponsesResult({ model: 'gpt-5.6-sol', status: 'completed' }),
+      calls,
+    )
+
+    const response = await createServer().handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.6-sol',
+        store: false,
+        input: [
+          { type: 'message', role: 'assistant', content: 'dropped', phase: 'final_answer' },
+          { type: 'compaction', id: 'cmp_1', encrypted_content: 'enc' },
+          { type: 'message', role: 'assistant', content: 'kept', phase: 'commentary' },
+        ],
+      }),
+    }))
+    await settleResponse(response)
+
+    expect(response.status).toBe(200)
+    expect(calls[0]?.payload.input).toEqual([
+      { type: 'compaction', id: 'cmp_1', encrypted_content: 'enc' },
+      { type: 'message', role: 'assistant', content: 'kept' },
+    ])
+    const effects = runtimeStore.requests.snapshot().recent[0]?.effects
+    expect(effects).toContainEqual({ id: 'responses.input_compacted', count: 1 })
+    expect(effects).toContainEqual({ id: 'responses.phase_filtered', count: 1 })
+  })
+
+  test('/responses records no shaping effects for a model rejected locally', async () => {
+    const calls: Array<CapturedResponsesCall> = []
+    modelCache.cacheModels(buildModelsResponse(buildGptModel('gpt-5.6-sol', {
+      supported_endpoints: ['/v1/messages'],
+    })))
+    Object.assign(getCachedConfig(), { responsesApiAutoCompactInput: true })
+    CopilotClient.prototype.createResponses = mockResponses(
+      buildResponsesResult({ model: 'gpt-5.6-sol', status: 'completed' }),
+      calls,
+    )
+
+    const response = await createServer().handle(new Request('http://localhost/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.6-sol',
+        input: [
+          { type: 'message', role: 'user', content: 'dropped' },
+          { type: 'compaction', id: 'cmp_1', encrypted_content: 'enc' },
+          { type: 'message', role: 'assistant', content: 'kept', phase: 'commentary' },
+        ],
+      }),
+    }))
+    await settleResponse(response)
+
+    expect(response.status).toBe(400)
+    expect(calls).toHaveLength(0)
+    const effectIds = runtimeStore.requests.snapshot().recent[0]?.effects.map(effect => effect.id)
+    expect(effectIds).toContain('responses.store_disabled')
+    expect(effectIds).not.toContain('responses.input_compacted')
+    expect(effectIds).not.toContain('responses.phase_filtered')
+  })
+
   test('counts only cache_control blocks that actually change', async () => {
     const calls: Array<CapturedMessagesCall> = []
     modelCache.cacheModels(buildModelsResponse(buildGptModel('claude-sonnet-4.5', {

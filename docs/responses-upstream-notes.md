@@ -55,7 +55,7 @@ are stripped as orphaned outputs.
 
 ### `phase` field stripping
 
-The `phase` field on input message items is an output annotation that some models reject when sent back as input. The proxy strips it from all input message items before forwarding.
+The `phase` field on input message items is an output annotation that some models reject when sent back as input. The proxy strips it from all input message items before forwarding. Unlike the policies above, this step runs in the shared upstream tail (`shapeResponsesUpstreamPayload()` in `src/transform/responses-upstream.ts`), after compaction, so the `/v1/messages` → Responses path strips the translator-generated field too.
 
 ### Remote image URL rejection
 
@@ -65,7 +65,7 @@ External `input_image.image_url` values that point at remote HTTP(S) URLs are re
 
 Reasoning models (the `gpt-5` family, o-series, codex) reject sampling parameters on `/responses`, e.g. `400 Unsupported parameter: 'temperature' is not supported with this model.` for `gpt-5.4-mini`. The proxy strips these on the Responses boundary rather than leaking the incompatibility to the client.
 
-Implemented in `applyResponsesParameterFilters()` (`src/transform/parameter-filter.ts`) and invoked from both Responses dispatch paths — the native handler (`src/routes/responses/handler.ts` `afterTransform`) and the `/v1/messages` → Responses strategy (`src/routes/messages/strategy-registry.ts`):
+Implemented in `applyResponsesParameterFilters()` (`src/transform/parameter-filter.ts`) and invoked from the shared upstream tail `shapeResponsesUpstreamPayload()` (`src/transform/responses-upstream.ts`), which both Responses dispatch paths call — the native handler (`src/routes/responses/handler.ts` `afterTransform`) and the `/v1/messages` → Responses strategy (`src/routes/messages/strategy-registry.ts`):
 
 - **Default rule:** any model advertising `reasoning_effort` has `temperature` and `top_p` stripped. Detection is capability-based (`isReasoningModel`), so new reasoning variants are covered without a hardcoded ID list.
 - **Evidence-backed exemptions:** `REASONING_PARAM_EXEMPTIONS` narrows the default where probing showed the model accepts a param anyway — currently codex models keep `top_p`. Copilot advertises no per-parameter support, so this cannot be derived from the model record. See [research/sampling-parameters.md](research/sampling-parameters.md). A user rule naming the same param still strips it.
