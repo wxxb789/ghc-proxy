@@ -1083,4 +1083,125 @@ describe('M365 target mutations', () => {
     expect(target?.hostname).toBe('copilot.localhost')
     expect(target?.runtime.auth.mscAuthAccount).toBe('second-account')
   })
+
+  test('publishes a registered target only after its commit and warm-up', async () => {
+    const helperDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ghc-proxy-m365-warm-up-'))
+    const helperExe = path.join(helperDir, 'msc-auth.exe')
+    await fs.writeFile(helperExe, 'unused')
+    const routedTarget = () => resolveRequestAccountRuntime(new Request('http://m365.localhost/v1/messages'))
+    const observed: Array<{ step: string, routed: string | undefined }> = []
+    setMscHelperRunner(async () => {
+      observed.push({ step: 'warm-up', routed: routedTarget()?.name })
+      return { stdout: '', stderr: '[msc-auth] broker unavailable', code: 2 }
+    })
+    const manager = new AccountManager(
+      { ...initialState(), authDefaults: { mscAuthExe: helperExe } },
+      m365Dependencies(async (_input, applyRuntime) => {
+        applyRuntime()
+        observed.push({ step: 'journal', routed: routedTarget()?.name })
+      }),
+    )
+    try {
+      await manager.registerM365Target({})
+
+      expect(observed).toEqual([
+        { step: 'journal', routed: undefined },
+        { step: 'warm-up', routed: undefined },
+      ])
+      expect(routedTarget()?.name).toBe('m365')
+      expect(routedTarget()?.availability?.status).toBe('unavailable')
+    }
+    finally {
+      await manager.stop()
+      await fs.rm(helperDir, { recursive: true, force: true })
+    }
+  })
+
+  describe('commit failures', () => {
+    let savedConfig: ConfigFile
+
+    beforeEach(() => {
+      savedConfig = structuredClone(getCachedConfig())
+    })
+
+    afterEach(() => {
+      const config = getCachedConfig()
+      for (const key of Object.keys(config)) {
+        Reflect.deleteProperty(config, key)
+      }
+      Object.assign(config, savedConfig)
+    })
+
+    const cases = [
+      {
+        name: 'registration',
+        registered: false,
+        message: 'Could not register the M365 target.',
+        mutate: (manager: AccountManager) => manager.registerM365Target({}),
+      },
+      {
+        name: 'reconfiguration',
+        registered: true,
+        message: 'Could not update the M365 target.',
+        mutate: (manager: AccountManager) => manager.configureM365Target({ hostname: 'copilot.localhost' }),
+      },
+      {
+        name: 'removal',
+        registered: true,
+        message: 'Could not remove the M365 target.',
+        mutate: (manager: AccountManager) => manager.removeM365Target(),
+      },
+    ]
+
+    for (const { name, registered, message, mutate } of cases) {
+      test(`a failed ${name} leaves the manager, process routing, and files unchanged`, async () => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ghc-proxy-m365-commit-'))
+        const paths = {
+          ACCOUNT_MANAGEMENT_JOURNAL_PATH: path.join(tempDir, 'account-management-transaction.json'),
+          CONFIG_PATH: path.join(tempDir, 'config.json'),
+          CONFIG_MIGRATION_BACKUP_PATH: path.join(tempDir, 'config.json.github-token-migration.bak'),
+          CREDENTIALS_PATH: path.join(tempDir, 'credentials.json'),
+        }
+        const github = runtime('default', 'alice')
+        const m365 = createTargetRuntime('m365', 'm365')
+        const routingConfig = {
+          baseHostname: 'localhost',
+          defaultAccount: 'default',
+          hostnames: {
+            'default.localhost': 'default',
+            ...(registered ? { 'm365.localhost': 'm365' } : {}),
+          },
+        }
+        const routing = compileAccountRouting(routingConfig, ['default'])
+        const runtimes = registered ? [github, m365] : [github]
+        configureAccountRuntimes(routing, runtimes)
+        await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({ accountRouting: routingConfig }))
+        const originalConfig = await fs.readFile(paths.CONFIG_PATH, 'utf8')
+        const persistence = createAccountManagerPersistence(paths)
+        const persistM365Target = persistence.persistM365Target!
+        persistence.persistM365Target = (input, applyRuntime) => persistM365Target(input, () => {
+          applyRuntime()
+          throw new Error('failure inside the journal')
+        })
+        const manager = new AccountManager({ routing, runtimes }, dependencies({ persistence }))
+        const snapshotBefore = manager.getAccountSnapshot().accounts.map(account => [account.name, account.hostname])
+        try {
+          await expect(mutate(manager)).rejects.toMatchObject({ status: 500, message })
+
+          expect(manager.getAccountSnapshot().accounts.map(account => [account.name, account.hostname]))
+            .toEqual(snapshotBefore)
+          expect(resolveRequestAccountRuntime(new Request('http://m365.localhost/v1/messages')))
+            .toBe(registered ? m365 : undefined)
+          expect(resolveRequestAccountRuntime(new Request('http://copilot.localhost/v1/messages'))).toBeUndefined()
+          expect(resolveRequestAccountRuntime(new Request('http://localhost/v1/messages'))).toBe(github)
+          expect(await fs.readFile(paths.CONFIG_PATH, 'utf8')).toBe(originalConfig)
+          await expect(fs.stat(paths.ACCOUNT_MANAGEMENT_JOURNAL_PATH)).rejects.toMatchObject({ code: 'ENOENT' })
+        }
+        finally {
+          await manager.stop()
+          await fs.rm(tempDir, { recursive: true, force: true })
+        }
+      })
+    }
+  })
 })

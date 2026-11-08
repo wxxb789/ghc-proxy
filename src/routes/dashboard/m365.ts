@@ -7,6 +7,7 @@
  * probe action rather than part of the read path, which keeps the two-second
  * Live refresh free of helper subprocesses.
  */
+import type { RoutedAccountDescriptor } from '~/accounts/descriptor'
 import type { AccountManagementSnapshot } from '~/accounts/manager'
 import type { MscAccount } from '~/clients/msc-auth'
 import type { TargetKind } from '~/lib/account-routing'
@@ -15,7 +16,7 @@ import type { TargetAvailability } from '~/state/account-runtime'
 import process from 'node:process'
 
 import { listMscAccounts, resolveMscAuthExe } from '~/clients/msc-auth'
-import { M365_DEFAULT_HOSTNAME, RESERVED_M365_TARGET } from '~/lib/account-routing'
+import { RESERVED_M365_TARGET } from '~/lib/account-routing'
 import { getCachedConfig } from '~/lib/config'
 import { M365_BUILTIN_ENDPOINTS, M365_DEFAULT_ENDPOINT } from '~/lib/m365-endpoints'
 import { getRoutingTargets, getTargetAvailability } from '~/state/account-runtime'
@@ -62,8 +63,8 @@ export interface M365DashboardOptions {
   serverPort?: number
 }
 
-function routingRows(snapshot: AccountManagementSnapshot): M365RoutingRow[] {
-  return snapshot.accounts.map(account => ({
+function routingRows(targets: readonly RoutedAccountDescriptor[]): M365RoutingRow[] {
+  return targets.map(account => ({
     target: account.name,
     hostname: account.hostname,
     kind: account.runtime.auth.upstream === 'm365' ? 'm365' : 'github',
@@ -97,53 +98,11 @@ export function getM365DashboardState(
         reason: 'This process was started without account management.',
       }
 
-  if (!manager) {
-    const committed = getRoutingTargets()
-    const rows: M365RoutingRow[] = committed.map(view => ({
-      target: view.name,
-      hostname: view.hostname,
-      kind: view.runtime.auth.upstream === 'm365' ? 'm365' : 'github',
-      isDefault: view.isDefault,
-    }))
-    const running = committed.find(view => view.name === RESERVED_M365_TARGET)
-    if (!running) {
-      return {
-        registered: false,
-        ...endpointSettings(),
-        modelCount: 0,
-        models: [],
-        routing: rows,
-        onboarding,
-      }
-    }
-    const modelIds = running.runtime.models.getModelIds()
-    return {
-      registered: true,
-      ...endpointSettings(running.runtime.auth.m365Endpoint),
-      hostname: running.hostname,
-      account: running.runtime.auth.mscAuthAccount ?? getCachedConfig().m365?.account,
-      username: running.runtime.auth.mscAuthUsername ?? running.runtime.auth.mscAuthUpn,
-      tenant: running.runtime.auth.mscAuthTenant,
-      tokenExpiresAt: running.runtime.auth.copilotTokenExpiresAt
-        ? new Date(running.runtime.auth.copilotTokenExpiresAt).toISOString()
-        : undefined,
-      modelCount: modelIds.length,
-      models: modelIds,
-      availability: getTargetAvailability(running.runtime),
-      routing: rows,
-      client: {
-        baseUrl: baseUrlFor(running.hostname, options.serverPort),
-        model: modelIds[0] ?? 'claude-opus-5.5',
-      },
-      onboarding,
-    }
-  }
-
-  const snapshot = manager.getAccountSnapshot()
-  const routing = routingRows(snapshot)
-  const target = snapshot.accounts.find(account => account.name === RESERVED_M365_TARGET)
-  const modelIds = target?.runtime.models.getModelIds() ?? []
-  const availability = target ? getTargetAvailability(target.runtime) : undefined
+  // The manager's snapshot is the committed table when one exists; otherwise
+  // the process-wide routing table is.
+  const targets = manager ? manager.getAccountSnapshot().accounts : getRoutingTargets()
+  const routing = routingRows(targets)
+  const target = targets.find(account => account.name === RESERVED_M365_TARGET)
 
   if (!target) {
     return {
@@ -151,12 +110,12 @@ export function getM365DashboardState(
       ...endpointSettings(),
       modelCount: 0,
       models: [],
-      availability,
       routing,
       onboarding,
     }
   }
 
+  const modelIds = target.runtime.models.getModelIds()
   return {
     registered: true,
     ...endpointSettings(target.runtime.auth.m365Endpoint),
@@ -169,10 +128,10 @@ export function getM365DashboardState(
       : undefined,
     modelCount: modelIds.length,
     models: modelIds,
-    availability,
+    availability: getTargetAvailability(target.runtime),
     routing,
     client: {
-      baseUrl: baseUrlFor(target.hostname ?? M365_DEFAULT_HOSTNAME, options.serverPort),
+      baseUrl: baseUrlFor(target.hostname, options.serverPort),
       model: modelIds[0] ?? 'claude-opus-5.5',
     },
     onboarding,
