@@ -208,7 +208,7 @@ retry. It does not enter `ExecutionStrategy`, the chat
 planning pipeline, streaming, or model fallback. See
 [Decisions API](decisions-api.md).
 
-`POST /responses` and `POST /v1/responses` stay close to passthrough by default. Before dispatch, the handler applies the Responses input policy, tool-schema normalization, optional context management, per-model parameter filters, and output/reasoning clamps. The strategy then stabilizes stream IDs, forwards events, and observes terminal `response.completed`, `response.incomplete`, and `response.failed` events.
+`POST /responses` and `POST /v1/responses` stay close to passthrough by default. Before dispatch, the handler applies tool-schema normalization and the Responses input policy, then the shared upstream tail that the `/v1/messages` Responses Translation strategy also runs (`shapeResponsesUpstreamPayload()`: optional compaction, `phase` stripping, optional context management, per-model parameter filters, and the output-token floor), then the reasoning-effort clamp. The strategy then stabilizes stream IDs, forwards events, and observes terminal `response.completed`, `response.incomplete`, and `response.failed` events.
 
 The optional "official emulator" state layer still uses Copilot `/responses` for creation while keeping in-memory OpenAI-style state for `previous_response_id`, `conversation`, retrieve, input item listing, delete, and local `input_tokens` estimation. Without emulator mode, those resource and token-count operations are forwarded to Copilot. Emulator state is memory-only and expires by TTL.
 

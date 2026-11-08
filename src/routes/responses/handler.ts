@@ -7,9 +7,10 @@ import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
 import { configStore, modelCache, RESPONSES_ENDPOINT, runtimeStore } from '~/state'
 
-import { applyContextManagement, compactInputByLatestCompaction, getResponsesRequestOptions } from '~/transform/context-management'
-import { applyResponsesParameterFilters, clampResponsesOutputTokens, clampResponsesReasoningEffort } from '~/transform/parameter-filter'
-import { RESPONSES_INPUT_POLICY, stripPhaseFromInputMessages } from '~/transform/responses-input'
+import { getResponsesRequestOptions } from '~/transform/context-management'
+import { clampResponsesReasoningEffort } from '~/transform/parameter-filter'
+import { RESPONSES_INPUT_POLICY } from '~/transform/responses-input'
+import { createResponsesTerminalObservers, shapeResponsesUpstreamPayload } from '~/transform/responses-upstream'
 import { normalizeFunctionParametersSchemaForCopilotWithChangeMetadata } from '~/translator/responses/function-schema'
 import { translateResponsesToChat } from '~/translator/responses/responses-to-chat'
 import { resolveResponsesStrategyName } from './capabilities'
@@ -100,23 +101,10 @@ export async function handleResponsesCore(
             inputEffects.filteredItems,
           )
         }
-        if (inputEffects.filteredPhases > 0) {
-          runtimeStore.requests.recordEffect(
-            requestId,
-            'responses.phase_filtered',
-            inputEffects.filteredPhases,
-          )
-        }
 
-        const compactedItems = compactInputByLatestCompaction(payload)
-        if (compactedItems > 0) {
-          runtimeStore.requests.recordEffect(
-            requestId,
-            'responses.input_compacted',
-            compactedItems,
-          )
-        }
-
+        // Validate the model before the shared upstream tail: a locally
+        // rejected request sends nothing upstream, so it records no shaping
+        // effects.
         if (!selectedModel) {
           throwInvalidRequestError(
             'The selected model could not be resolved.',
@@ -130,26 +118,7 @@ export async function handleResponsesCore(
           )
         }
 
-        const contextThreshold = applyContextManagement(
-          payload,
-          selectedModel.capabilities.limits.max_prompt_tokens,
-        )
-        if (contextThreshold !== undefined)
-          runtimeStore.requests.recordEffect(requestId, 'responses.context_management')
-
-        // Runs last so it can strip any request parameter — including fields
-        // this proxy injects above (e.g. context_management) — that the model
-        // rejects, per the configured filter rules.
-        const removedParams = applyResponsesParameterFilters(payload, selectedModel)
-        if (removedParams.length > 0) {
-          runtimeStore.requests.recordEffect(
-            requestId,
-            'responses.parameter_filter',
-            removedParams.length,
-          )
-        }
-        if (clampResponsesOutputTokens(payload))
-          runtimeStore.requests.recordEffect(requestId, 'responses.output_tokens_raised')
+        shapeResponsesUpstreamPayload(payload, selectedModel, requestId)
         if (clampResponsesReasoningEffort(payload, selectedModel))
           runtimeStore.requests.recordEffect(requestId, 'responses.reasoning_effort_lowered')
       },
@@ -164,6 +133,7 @@ export async function handleResponsesCore(
             : []
         }
         const strategyRequestId = recovery.requestId
+        const terminalObservers = createResponsesTerminalObservers(strategyRequestId, upstreamSignal)
         return {
           requestId: strategyRequestId,
           copilotClient,
@@ -181,12 +151,7 @@ export async function handleResponsesCore(
               )
             : undefined,
           onTerminalResponse(terminalResponse: ResponsesResult) {
-            if (terminalResponse.status === 'failed' || terminalResponse.error) {
-              runtimeStore.requests.recordError(
-                strategyRequestId,
-                'Upstream HTTP 200 (response_failed)',
-              )
-            }
+            terminalObservers.onTerminalResponse(terminalResponse)
             if (effectiveInputItems) {
               persistEmulatorResponse(
                 terminalResponse,
@@ -194,14 +159,7 @@ export async function handleResponsesCore(
               )
             }
           },
-          onStreamEndWithoutTerminal() {
-            if (upstreamSignal.clientSignal?.aborted)
-              return
-            runtimeStore.requests.recordError(
-              strategyRequestId,
-              'Upstream HTTP 200 (response_stream_eof)',
-            )
-          },
+          onStreamEndWithoutTerminal: terminalObservers.onStreamEndWithoutTerminal,
         }
       },
     },
@@ -297,7 +255,7 @@ function normalizeResponseFunctionTool(
 
 function applyResponsesInputPolicies(
   payload: ResponsesPayload,
-): { storeDisabled: boolean, filteredItems: number, filteredPhases: number } {
+): { storeDisabled: boolean, filteredItems: number } {
   // Copilot's GPT Responses boundary rejects store=true and remains stateless
   // when the field is omitted. Send the one explicitly supported mode; IDs in
   // successful responses are identities, not durable resource references.
@@ -305,9 +263,8 @@ function applyResponsesInputPolicies(
   payload.store = false
 
   const filteredItems = stripUnresolvableInputItems(payload)
-  const filteredPhases = stripPhaseFromInputMessages(payload)
   rejectUnsupportedRemoteImageUrls(payload)
-  return { storeDisabled, filteredItems, filteredPhases }
+  return { storeDisabled, filteredItems }
 }
 
 /**

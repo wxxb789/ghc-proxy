@@ -68,14 +68,16 @@ Run `bun run scripts/probes/messages/search-results.ts --json` to refresh the cu
 
 When a model supports `/responses` but not native `/v1/messages`, the proxy translates Anthropic Messages into Responses input items, executes the request, and translates the result back into Anthropic shape.
 
-The request-side sequence is: Anthropic -> Responses translation, optional
-context-management injection, optional compaction slicing, removal of
-translator-generated assistant `phase`, per-model Responses parameter
-filtering, and the Copilot `max_output_tokens >= 16` floor. JSON responses use
+The request-side sequence is: Anthropic -> Responses translation, then the
+shared upstream tail (`shapeResponsesUpstreamPayload()` in
+`src/transform/responses-upstream.ts`): optional compaction slicing, removal of
+translator-generated assistant `phase`, optional context-management injection,
+per-model Responses parameter filtering, and the Copilot
+`max_output_tokens >= 16` floor. JSON responses use
 the stateless Responses -> Anthropic mapper; SSE uses a stateful transducer that
 tracks content blocks, function-call lanes, terminal state, and protocol-level
 errors. This is separate from the native `POST /v1/responses` handler, even
-though both paths share several request transforms.
+though both paths run that same upstream tail.
 
 ### Exact or Near-Exact Mappings
 
