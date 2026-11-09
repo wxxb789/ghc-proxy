@@ -102,7 +102,10 @@ still notifies request observability for non-client-cancellation failures.
 
 ### Messages Strategies
 
-Three strategies in `routes/messages/strategies/`:
+Three strategies in `routes/messages/strategies/`. Every registry entry's
+`canHandle` delegates to `resolveMessagesStrategyName()`, so the selection
+order is defined once and the Dashboard and fallback eligibility read the same
+decision:
 
 #### 1. Native Messages (`native-messages.ts`)
 

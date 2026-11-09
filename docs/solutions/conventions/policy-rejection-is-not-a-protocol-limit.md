@@ -305,10 +305,10 @@ const nativeMessagesEntry = {
 ```
 
 After, at the current tree in `src/routes/messages/strategy-registry.ts`, with
-the evidence and its date attached to `nativeMessagesEntry`:
+the evidence and its date attached to `canUseNativeMessages`:
 
 ```ts
-export function canUseNativeMessages(
+function canUseNativeMessages(
   model: Model | undefined,
   payload?: AnthropicMessagesPayload,
 ): boolean {

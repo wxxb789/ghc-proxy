@@ -1,5 +1,8 @@
 import process from 'node:process'
 
+import { M365_FALLBACKS } from '~/clients/m365-upstream'
+import { authStore, modelCache } from '~/state'
+
 import { getCachedConfig } from './config'
 
 export interface ModelFallbackConfig {
@@ -49,6 +52,20 @@ export function getModelFallbackConfig(
     claudeSonnet: resolveFamily('claudeSonnet'),
     claudeHaiku: resolveFamily('claudeHaiku'),
   }
+}
+
+/**
+ * The family fallbacks requests on the current target actually get. The M365
+ * gateway rejects the GitHub defaults and ignores `MODEL_FALLBACK_*` and
+ * `modelFallback`, so it always maps onto its own catalog — the same table
+ * `rewriteModel` applies before strategy selection. Every reader (Messages
+ * Chat Completions translation, startup banner, Dashboard) goes through here.
+ */
+export function getEffectiveModelFallbackConfig(): ModelFallbackConfig {
+  if (authStore.upstream === 'm365')
+    return M365_FALLBACKS
+  const models = modelCache.getModels()
+  return getModelFallbackConfig(models ? new Set(models.data.map(model => model.id)) : undefined)
 }
 
 export function resolveModel(
