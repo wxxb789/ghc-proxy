@@ -3,6 +3,7 @@ import type { DashboardAccountManagement } from './routes/dashboard/route'
 import { cors } from '@elysiajs/cors'
 import { enforceTargetGates } from '~/lib/target-gates'
 import { HTTPError } from './lib/error'
+import { normalizeRequestPathname, pathRefusalResponse } from './lib/error-dialect'
 import { formatElapsed, getOrCreateRequestCorrelation, getRequestStart, logRequest, markRequestStart } from './lib/request-logger'
 import { createRuntimeApp } from './lib/server-runtime'
 import { isTimeoutLikeError } from './lib/timeout-error'
@@ -29,15 +30,7 @@ const accountRoutingWrapper: Parameters<Elysia['wrap']>[0] = (handle, request) =
     if (!runtime) {
       const { hostname, pathname } = new URL(request.url)
       const message = `No account is configured for hostname ${JSON.stringify(hostname)}.`
-      const normalizedPathname = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
-      const anthropic = normalizedPathname === '/v1/messages'
-        || normalizedPathname === '/v1/messages/count_tokens'
-      return Response.json(
-        anthropic
-          ? { type: 'error', error: { message, type: 'invalid_request_error' } }
-          : { error: { message, type: 'invalid_request_error' } },
-        { status: 421 },
-      )
+      return pathRefusalResponse(normalizeRequestPathname(pathname), 421, message)
     }
 
     return runWithAccountRuntime(runtime, () => handle(request))

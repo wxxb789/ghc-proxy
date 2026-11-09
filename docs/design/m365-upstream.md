@@ -224,17 +224,47 @@ target rather than the process:
 - When M365 is the only target (`--upstream m365`), the listener still binds
   `127.0.0.1` only.
 
-An unavailable target answers 503 with its recorded cause; dashboard paths and
-the target's own model list are not inference and continue to their own
-handlers.
+After the loopback check, `enforceTargetGates` (`src/lib/target-gates.ts`)
+applies an allow-list to the path, with one trailing slash dropped:
+
+| Path | Decision |
+|------|----------|
+| `/v1/messages`, `/v1/messages/count_tokens` | Inference: admitted while the target is available |
+| `/`, `/health`, `/models`, `/v1/models` | Not inference: continue to their handlers |
+| `/dashboard`, `/dashboard/...` | Not inference: continue to the Dashboard guard |
+| Anything else | `400` naming `/v1/messages` |
+
+"Anything else" covers Chat Completions, Responses, Embeddings, Decisions
+(`/decisions`, `/v1/decisions`), unknown paths, and the proxy-specific
+`/token` and `/usage`. On this target the stored token is the user's personal
+Microsoft delegated credential, so `/token` would hand it to any local caller,
+and `/usage` would call GitHub's quota endpoint without a GitHub credential
+(the M365 target has none). A route added to `src/server.ts` later is refused
+here until it is added to the allow-list on purpose; `tests/target-gates.test.ts`
+checks every registered route of the real server against the list.
+
+An unavailable target answers Messages requests with 503 and its recorded
+cause, after one acquisition retry so a recovered broker restores service
+without a restart.
+
+### Error dialect
+
+Refusals answered before a route handler runs pick their envelope from the
+path: the Messages family gets the Anthropic envelope
+(`{ "type": "error", "error": { … } }`), every other path the OpenAI one
+(`{ "error": { … } }`). `pathRefusalResponse` in `src/lib/error-dialect.ts`
+owns that rule; the gate's 403, 400, and 503 and the unknown-hostname 421 in
+`src/server.ts` all use it, so an OpenAI-facing path never receives an
+Anthropic envelope. The path is normalized once (one trailing slash dropped)
+before the rule applies, so `/v1/messages//` is not a Messages path.
 
 ## Known limits
 
 - GitHub account management and GHE options remain GitHub-specific; they are
   not used here.
-- Only the Messages endpoint family is served on this target. Chat Completions,
-  Responses, and Embeddings requests are refused with an error naming
-  `/v1/messages` instead of being forwarded.
+- Only the Messages endpoint family is served for inference on this target.
+  Other inference endpoints, and every path outside the allow-list above, are
+  refused with an error naming `/v1/messages` instead of being forwarded.
 - Unknown model names are not rejected up front; the gateway answers
   `403 model_not_allowed`, which the proxy returns unchanged (probed with
   `claude-unknown-1`).

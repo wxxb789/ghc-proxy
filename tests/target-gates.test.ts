@@ -197,6 +197,21 @@ describe('per-target gates', () => {
     expect(refusal).toBeUndefined()
     expect(m365.models.getModelIds()).toEqual(['claude-opus-5.5'])
   })
+  test('refuses the proxy token route end to end without reaching its handler', async () => {
+    const m365 = activate('m365-only')
+    m365.auth.copilotToken = 'personal-microsoft-token'
+
+    const response = await runWithAccountRuntime(m365, () =>
+      createServer().handle(new Request('http://m365.localhost/token')))
+    const body = await response.text()
+
+    expect(response.status).toBe(400)
+    expect(body).not.toContain('personal-microsoft-token')
+    expect(JSON.parse(body)).toEqual({
+      error: { message: expect.stringContaining('/v1/messages'), type: 'invalid_request_error' },
+    })
+  })
+
   test('records a refused request in the request history', async () => {
     const m365 = activate('m365-only')
     setTargetAvailability(m365, { status: 'unavailable', cause: 'no matching broker account' })
@@ -217,6 +232,89 @@ describe('per-target gates', () => {
     expect(snapshot.totals.started).toBeGreaterThan(0)
     expect(snapshot.active.some(entry => entry.endpoint === '/v1/messages')).toBe(true)
   })
+})
+
+// The M365 allow-list, stated independently of the gate. Every route the real
+// server registers is checked against it, so a route added later is refused
+// on the M365 target unless it is added here deliberately.
+const M365_SERVED_PATHS = new Set(['/', '/health', '/models', '/v1/models', '/v1/messages', '/v1/messages/count_tokens'])
+const ANTHROPIC_PATHS = new Set(['/v1/messages', '/v1/messages/count_tokens'])
+
+function servedOnM365(pathname: string): boolean {
+  return M365_SERVED_PATHS.has(pathname) || pathname === '/dashboard' || pathname.startsWith('/dashboard/')
+}
+
+function errorEnvelope(pathname: string, message: unknown) {
+  const body = { error: { message, type: 'invalid_request_error' } }
+  return ANTHROPIC_PATHS.has(pathname) ? { type: 'error', ...body } : body
+}
+
+interface RouteCase { method: string, path: string }
+
+// `OPTIONS /*` is the CORS catch-all, not a path a client names.
+const registeredRoutes: Array<RouteCase> = createServer().routes.filter(route => !route.path.includes('*')).map(route => ({ method: route.method, path: route.path.replaceAll(/:\w+/g, 'x') }))
+
+describe('M365 allow-list over every registered route', () => {
+  afterEach(() => {
+    setMscHelperRunner(undefined)
+    resetMscTokenCache()
+  })
+
+  test('enumerates the proxy-specific routes it must refuse', () => {
+    const paths = registeredRoutes.map(route => route.path)
+    expect(paths).toEqual(expect.arrayContaining(['/token', '/usage', '/decisions', '/v1/decisions']))
+  })
+
+  for (const { method, path } of registeredRoutes) {
+    test(`${method} ${path} from loopback is ${servedOnM365(path) ? 'admitted' : 'refused'}`, async () => {
+      const m365 = activate('m365-only')
+      const refusal = await runWithAccountRuntime(m365, () => enforceTargetGates(
+        new Request(`http://m365.localhost${path}`, { method }),
+        loopbackServer,
+      ))
+
+      if (servedOnM365(path)) {
+        expect(refusal).toBeUndefined()
+        return
+      }
+      expect(refusal?.status).toBe(400)
+      await expect(refusal!.json()).resolves.toEqual(
+        errorEnvelope(path, expect.stringContaining('/v1/messages')),
+      )
+    })
+
+    test(`${method} ${path} from a remote peer is refused in its dialect`, async () => {
+      const m365 = activate('m365-only')
+      const refusal = await runWithAccountRuntime(m365, () => enforceTargetGates(
+        new Request(`http://m365.localhost${path}`, { method }),
+        remoteServer,
+      ))
+
+      expect(refusal?.status).toBe(403)
+      await expect(refusal!.json()).resolves.toEqual(
+        errorEnvelope(path, expect.stringContaining('local machine')),
+      )
+    })
+  }
+
+  for (const { path, served } of [
+    { path: '/v1/models/', served: true },
+    { path: '/dashboard/', served: true },
+    { path: '/token/', served: false },
+    { path: '/v1/decisions/', served: false },
+    { path: '/dashboardx', served: false },
+    { path: '/v1/messages//', served: false },
+    { path: '/v2/messages', served: false },
+    { path: '/unknown', served: false },
+  ]) {
+    test(`${path} is ${served ? 'admitted' : 'refused'} after trailing-slash normalization`, async () => {
+      const m365 = activate('m365-only')
+      const refusal = await runWithAccountRuntime(m365, () =>
+        enforceTargetGates(requestTo('m365.localhost', path), loopbackServer))
+
+      expect(refusal?.status).toBe(served ? undefined : 400)
+    })
+  }
 })
 
 afterAll(() => {
