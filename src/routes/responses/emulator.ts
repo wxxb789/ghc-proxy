@@ -28,7 +28,6 @@ function cloneValue<T>(value: T): T {
 
 export interface PreparedEmulatorRequest {
   upstreamPayload: ResponsesPayload
-  effectiveInputItems: Array<ResponseInputItem>
   conversation: ResponseConversation
   previousResponseId?: string
   shouldStore: boolean
@@ -66,7 +65,6 @@ export function prepareEmulatorRequest(payload: ResponsesPayload): PreparedEmula
   const continuationHistory = continuationSourceResponseId
     ? buildContinuationHistory(continuationSourceResponseId)
     : []
-  const effectiveInputItems = [...continuationHistory, ...normalizedCurrentInput]
   const shouldStore = payload.store ?? true
 
   const upstreamPayload: ResponsesPayload = {
@@ -75,12 +73,11 @@ export function prepareEmulatorRequest(payload: ResponsesPayload): PreparedEmula
     conversation: undefined,
     previous_response_id: undefined,
     store: undefined,
-    input: effectiveInputItems,
+    input: [...continuationHistory, ...normalizedCurrentInput],
   }
 
   return {
     upstreamPayload,
-    effectiveInputItems,
     previousResponseId: previousResponse?.id,
     conversation,
     shouldStore,

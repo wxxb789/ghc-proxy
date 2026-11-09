@@ -133,7 +133,6 @@ export async function runPipeline<TPayload, TStrategyCtx>(
         && validateFallback(config, pristinePayload, sourceModel).ok,
     },
   )
-  sourceAttempt.commitObservability()
 
   try {
     const result = await sourceAttempt.execute()
