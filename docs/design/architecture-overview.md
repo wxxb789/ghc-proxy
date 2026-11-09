@@ -139,8 +139,8 @@ the full asynchronous request lifecycle.
 A target carries its own upstream, credential source, and model catalog, so the
 GitHub accounts and the M365 gateway coexist in one process. The M365 target is
 registered by its hostname mapping rather than by a credential, and it adds a
-loopback-only peer check and Messages-only inference admission for its own
-requests; GitHub targets keep their existing behavior.
+loopback-only peer check and an inference allow-list (the Messages endpoint
+family and Responses creation; see `m365-upstream.md`) for its own requests; GitHub targets keep their existing behavior.
 
 ## Exposed Endpoints
 

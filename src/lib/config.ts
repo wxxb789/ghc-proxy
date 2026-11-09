@@ -242,6 +242,19 @@ export async function writeConfigField<K extends keyof ConfigFieldShape>(
   value: z.input<ConfigFieldShape[K]>,
   options: WriteConfigFieldOptions = {},
 ): Promise<void> {
+  await updateConfigField(field, () => value, options)
+}
+
+/**
+ * Writes one field computed from the value config.json holds for it now, so a
+ * change made by another process sharing the profile is seen, not overwritten.
+ * An error thrown by `update` leaves the file unchanged.
+ */
+export async function updateConfigField<K extends keyof ConfigFieldShape>(
+  field: K,
+  update: (stored: unknown) => z.input<ConfigFieldShape[K]>,
+  options: WriteConfigFieldOptions = {},
+): Promise<void> {
   const configPath = options.configPath ?? PATHS.CONFIG_PATH
   try {
     let existing: Record<string, unknown> = {}
@@ -271,6 +284,7 @@ export async function writeConfigField<K extends keyof ConfigFieldShape>(
       }
     }
 
+    const value = update(existing[field])
     const fieldValue = field === 'm365' && value !== undefined
       ? configFileSchema.shape.m365.parse({
           ...configFileSchema.shape.m365.parse(existing.m365),

@@ -6,6 +6,7 @@ import type {
 import type { AccountManagementTransactionPaths } from '~/lib/account-management-transaction'
 import type {
   AccountRoutingConfig,
+  AccountRoutingUpdate,
   CompiledAccountRouting,
 } from '~/lib/account-routing'
 import type { CredentialPaths } from '~/lib/credentials'
@@ -23,14 +24,16 @@ import {
   rollbackAccountManagementTransaction,
 } from '~/lib/account-management-transaction'
 import {
+  accountRoutingSchema,
   compileAccountRouting,
   M365_DEFAULT_HOSTNAME,
   normalizeAccountName,
   normalizeDnsHostname,
+  rebaseAccountRoutingUpdate,
   RESERVED_M365_TARGET,
 } from '~/lib/account-routing'
-import { getCachedConfig, writeConfigField } from '~/lib/config'
-import { removeGitHubCredential, writeNewGitHubCredential } from '~/lib/credentials'
+import { getCachedConfig, updateConfigField, writeConfigField } from '~/lib/config'
+import { readGitHubCredentials, removeGitHubCredential, writeNewGitHubCredential } from '~/lib/credentials'
 import { m365EndpointSchema } from '~/lib/m365-endpoints'
 import { PATHS } from '~/lib/paths'
 import { configureAccountRuntimes, disableAccountRouting, runWithAccountRuntime } from '~/state'
@@ -57,7 +60,7 @@ export class AccountManagementError extends Error {
 
 interface PersistAccountInput extends AddAccountInput {
   githubToken: string
-  routing: AccountRoutingConfig
+  routing: AccountRoutingUpdate
 }
 
 export interface M365TargetInput {
@@ -68,7 +71,7 @@ export interface M365TargetInput {
 }
 
 export interface PersistM365TargetInput {
-  routing?: AccountRoutingConfig
+  routing?: AccountRoutingUpdate
   account?: string | null
   endpoint?: string
   endpoints?: string[]
@@ -81,11 +84,11 @@ export interface AccountManagerPersistence {
   ) => Promise<void>
   removeAccount: (
     accountName: string,
-    routing: AccountRoutingConfig,
+    routing: AccountRoutingUpdate,
     applyRuntime: () => void,
   ) => Promise<void>
   persistRouting: (
-    routing: AccountRoutingConfig,
+    routing: AccountRoutingUpdate,
     applyRuntime: () => void,
   ) => Promise<void>
   /** Writes routing and M365 settings in one journal, preserving omitted settings. */
@@ -150,39 +153,27 @@ export function createAccountManagerPersistence(
           paths,
           input.accountName,
         )
-        await writeConfigField('accountRouting', input.routing, {
-          configPath: paths.CONFIG_PATH,
-          failOnReadError: true,
-        })
+        await writeAccountRouting(paths, input.routing)
         applyRuntime()
       })
     },
     removeAccount: async (accountName, routing, applyRuntime) => {
       await runPersistedAccountMutation(paths, async () => {
         await removeGitHubCredential(accountName, paths)
-        await writeConfigField('accountRouting', routing, {
-          configPath: paths.CONFIG_PATH,
-          failOnReadError: true,
-        })
+        await writeAccountRouting(paths, routing)
         applyRuntime()
       })
     },
     persistRouting: async (routing, applyRuntime) => {
       await runPersistedAccountMutation(paths, async () => {
-        await writeConfigField('accountRouting', routing, {
-          configPath: paths.CONFIG_PATH,
-          failOnReadError: true,
-        })
+        await writeAccountRouting(paths, routing)
         applyRuntime()
       })
     },
     persistM365Target: async (input, applyRuntime) => {
       await runPersistedAccountMutation(paths, async () => {
         if (input.routing !== undefined) {
-          await writeConfigField('accountRouting', input.routing, {
-            configPath: paths.CONFIG_PATH,
-            failOnReadError: true,
-          })
+          await writeAccountRouting(paths, input.routing)
         }
         await writeConfigField('m365', {
           ...(input.account !== undefined ? { account: input.account ?? undefined } : {}),
@@ -196,6 +187,40 @@ export function createAccountManagerPersistence(
       })
     },
   }
+}
+
+/**
+ * Writes a routing change on top of the routing config.json holds now, inside
+ * the caller's journal. Another process sharing the profile may have changed
+ * it since this process loaded it; a result that no longer validates against
+ * the stored credentials is refused rather than written.
+ */
+async function writeAccountRouting(
+  paths: AccountManagerPaths,
+  update: AccountRoutingUpdate,
+): Promise<void> {
+  const credentials = await readGitHubCredentials(paths)
+  const accountNames = Object.keys(credentials?.accounts ?? {})
+  await updateConfigField('accountRouting', (stored) => {
+    try {
+      const routing = rebaseAccountRoutingUpdate(
+        stored === undefined ? undefined : accountRoutingSchema.parse(stored),
+        update,
+      )
+      compileAccountRouting(routing, accountNames)
+      return routing
+    }
+    catch (error) {
+      throw new AccountManagementError(
+        'config.json accountRouting was changed by another ghc-proxy process in a way that conflicts with this change. Restart ghc-proxy to load the saved routing, then try again.',
+        409,
+        { cause: error },
+      )
+    }
+  }, {
+    configPath: paths.CONFIG_PATH,
+    failOnReadError: true,
+  })
 }
 
 const defaultDependencies: AccountManagerDependencies = {
@@ -312,9 +337,10 @@ export class AccountManager {
         hostnames: { [hostname]: this.routing.defaultAccount },
       }
       const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
+      // The legacy table was never saved, so this change has no previous one.
       await this.commitTable(
         { routing: nextRouting, runtimes: this.runtimes },
-        applyRuntime => this.dependencies.persistence.persistRouting(nextConfig, applyRuntime),
+        applyRuntime => this.dependencies.persistence.persistRouting({ next: nextConfig }, applyRuntime),
         { publish: 'in-journal', failureMessage: 'Could not enable named-account routing.' },
       )
       this.routingEnabled = true
@@ -455,9 +481,10 @@ export class AccountManager {
         defaultAccount: accountName,
       })
       const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
+      const update = { previous: routingConfig(this.routing), next: nextConfig }
       await this.commitTable(
         { routing: nextRouting, runtimes: this.runtimes },
-        applyRuntime => this.dependencies.persistence.persistRouting(nextConfig, applyRuntime),
+        applyRuntime => this.dependencies.persistence.persistRouting(update, applyRuntime),
         { publish: 'in-journal', failureMessage: 'Could not switch the default account.' },
       )
     })
@@ -504,7 +531,11 @@ export class AccountManager {
       const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
       await this.commitTable(
         { routing: nextRouting, runtimes: nextRuntimes },
-        applyRuntime => this.dependencies.persistence.removeAccount(accountName, nextConfig, applyRuntime),
+        applyRuntime => this.dependencies.persistence.removeAccount(
+          accountName,
+          { previous: current, next: nextConfig },
+          applyRuntime,
+        ),
         { publish: 'in-journal', failureMessage: 'Could not remove the account.' },
       )
 
@@ -561,7 +592,7 @@ export class AccountManager {
       await this.commitTable(
         { routing: nextRouting, runtimes: nextRuntimes },
         applyRuntime => persist({
-          routing: nextConfig,
+          routing: { previous: current, next: nextConfig },
           account: parsedInput.account,
           endpoint: parsedInput.endpoint,
           endpoints: parsedInput.endpoints,
@@ -614,7 +645,7 @@ export class AccountManager {
 
       await this.commitTable(
         { routing: nextRouting, runtimes: nextRuntimes },
-        applyRuntime => persist({ routing: nextConfig }, applyRuntime),
+        applyRuntime => persist({ routing: { previous: current, next: nextConfig } }, applyRuntime),
         { publish: 'after-commit', failureMessage: 'Could not remove the M365 target.' },
       )
     })
@@ -679,7 +710,7 @@ export class AccountManager {
       await this.commitTable(
         { routing: nextRouting, runtimes: nextRuntimes },
         applyRuntime => persist({
-          routing: nextConfig,
+          routing: { previous: current, next: nextConfig },
           account: parsedInput.account,
           endpoint: parsedInput.endpoint,
           endpoints: parsedInput.endpoints,
@@ -736,6 +767,7 @@ export class AccountManager {
         }
         const nextRuntimes = new Map(this.runtimes)
         nextRuntimes.set(session.accountName, authenticated.runtime)
+        const previousConfig = routingConfig(this.routing)
         const nextConfig = routingConfig(this.routing)
         nextConfig.hostnames[session.hostname] = session.accountName
         const nextRouting = compileAccountRouting(nextConfig, githubAccountNamesOf(nextRuntimes))
@@ -747,7 +779,7 @@ export class AccountManager {
               hostname: session.hostname,
               gheDomain,
               githubToken: authenticated.githubToken,
-              routing: nextConfig,
+              routing: { previous: previousConfig, next: nextConfig },
             }, applyRuntime),
             { publish: 'in-journal' },
           )
@@ -761,9 +793,13 @@ export class AccountManager {
       })
       session.state = 'succeeded'
     }
-    catch {
+    catch (error) {
       session.state = 'failed'
-      session.message = 'Account authentication failed.'
+      // A routing conflict with another process is actionable; anything else
+      // stays generic so authentication details are not exposed.
+      session.message = error instanceof AccountManagementError && error.status === 409
+        ? error.message
+        : 'Account authentication failed.'
     }
     finally {
       this.authenticationControllers.delete(session.abortController)

@@ -180,6 +180,16 @@ const shapingCases: Array<ShapingCase> = [
     expected: { model: 'gpt-5.6-sol', input: 'hello' },
     effects: { 'responses.parameter_filter': 1 },
   },
+  {
+    // The M365 gateway rejects `stream: null` with 400 "stream must be a
+    // boolean" (live, 2026-11-09); omitting it means the same non-streaming
+    // request on every upstream.
+    name: 'omits a null stream flag',
+    model: plainModel,
+    input: { model: 'gpt-5.6-sol', input: 'hello', stream: null },
+    expected: { model: 'gpt-5.6-sol', input: 'hello' },
+    effects: {},
+  },
 ]
 
 describe('shapeResponsesUpstreamPayload', () => {

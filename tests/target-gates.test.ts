@@ -178,6 +178,20 @@ describe('per-target gates', () => {
     })
   })
 
+  test('answers Responses creation on an unavailable target in the OpenAI envelope', async () => {
+    const m365 = activate('m365-only')
+    setTargetAvailability(m365, { status: 'unavailable', cause: 'no matching broker account' })
+    setMscHelperRunner(async () => ({ stdout: '', stderr: '', code: 2 }))
+
+    const refusal = await runWithAccountRuntime(m365, () =>
+      enforceTargetGates(requestTo('m365.localhost', '/v1/responses'), loopbackServer))
+
+    expect(refusal?.status).toBe(503)
+    await expect(refusal!.json()).resolves.toEqual({
+      error: { message: expect.stringMatching(/unavailable: .+/), type: 'invalid_request_error' },
+    })
+  })
+
   test('recovers once the broker answers again', async () => {
     const m365 = activate('m365-only')
     setTargetAvailability(m365, { status: 'unavailable', cause: 'expired' })
@@ -237,7 +251,16 @@ describe('per-target gates', () => {
 // The M365 allow-list, stated independently of the gate. Every route the real
 // server registers is checked against it, so a route added later is refused
 // on the M365 target unless it is added here deliberately.
-const M365_SERVED_PATHS = new Set(['/', '/health', '/models', '/v1/models', '/v1/messages', '/v1/messages/count_tokens'])
+const M365_SERVED_PATHS = new Set([
+  '/',
+  '/health',
+  '/models',
+  '/v1/models',
+  '/v1/messages',
+  '/v1/messages/count_tokens',
+  '/responses',
+  '/v1/responses',
+])
 const ANTHROPIC_PATHS = new Set(['/v1/messages', '/v1/messages/count_tokens'])
 
 function servedOnM365(pathname: string): boolean {
@@ -304,6 +327,9 @@ describe('M365 allow-list over every registered route', () => {
     { path: '/v1/decisions/', served: false },
     { path: '/dashboardx', served: false },
     { path: '/v1/messages//', served: false },
+    { path: '/v1/responses/', served: true },
+    { path: '/v1/responses/resp_1', served: false },
+    { path: '/v1/responses/input_tokens', served: false },
     { path: '/v2/messages', served: false },
     { path: '/unknown', served: false },
   ]) {

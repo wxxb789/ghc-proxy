@@ -920,9 +920,16 @@ describe('account removal', () => {
         },
       }))
       await createAccountManagerPersistence(paths).removeAccount('account1', {
-        baseHostname: state.routing.baseHostname,
-        defaultAccount: state.routing.defaultAccount,
-        hostnames: { 'default.localhost': 'default' },
+        previous: {
+          baseHostname: state.routing.baseHostname,
+          defaultAccount: state.routing.defaultAccount,
+          hostnames: Object.fromEntries(state.routing.hostnames),
+        },
+        next: {
+          baseHostname: state.routing.baseHostname,
+          defaultAccount: state.routing.defaultAccount,
+          hostnames: { 'default.localhost': 'default' },
+        },
       }, () => {})
       expect((await readGitHubCredentials(paths))?.accounts.account1).toBeUndefined()
       const config = JSON.parse(await fs.readFile(paths.CONFIG_PATH, 'utf8')) as {
@@ -1218,6 +1225,7 @@ describe('M365 target mutations', () => {
           CONFIG_MIGRATION_BACKUP_PATH: path.join(tempDir, 'config.json.github-token-migration.bak'),
           CREDENTIALS_PATH: path.join(tempDir, 'credentials.json'),
         }
+        await writeGitHubCredential('github-default', undefined, paths, 'default')
         const github = runtime('default', 'alice')
         const m365 = createTargetRuntime('m365', 'm365')
         const routingConfig = {
@@ -1257,6 +1265,149 @@ describe('M365 target mutations', () => {
           await fs.rm(tempDir, { recursive: true, force: true })
         }
       })
+    }
+  })
+})
+
+describe('account routing shared by several processes', () => {
+  // Two managers over one profile stand in for two ghc-proxy processes, each
+  // holding the routing table it loaded at startup.
+  async function sharedProfile() {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ghc-proxy-shared-routing-'))
+    const paths = {
+      ACCOUNT_MANAGEMENT_JOURNAL_PATH: path.join(tempDir, 'account-management-transaction.json'),
+      CONFIG_PATH: path.join(tempDir, 'config.json'),
+      CONFIG_MIGRATION_BACKUP_PATH: path.join(tempDir, 'config.json.github-token-migration.bak'),
+      CREDENTIALS_PATH: path.join(tempDir, 'credentials.json'),
+    }
+    await writeGitHubCredential('github-account1', undefined, paths, 'account1')
+    await writeGitHubCredential('github-default', undefined, paths, 'default')
+    const { routing } = initialState()
+    await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({
+      accountRouting: {
+        baseHostname: routing.baseHostname,
+        defaultAccount: routing.defaultAccount,
+        hostnames: Object.fromEntries(routing.hostnames),
+      },
+    }))
+    const readRouting = async () => (JSON.parse(await fs.readFile(paths.CONFIG_PATH, 'utf8')) as ConfigFile).accountRouting
+    // Loads the routing saved at "startup", as runServer does.
+    const process = async () => {
+      const routing = compileAccountRouting((await readRouting())!, ['default', 'account1'])
+      const runtimes = Array.from(routing.kinds, ([name, kind]) => kind === 'm365'
+        ? createTargetRuntime(name, 'm365')
+        : runtime(name, name))
+      return new AccountManager({ routing, runtimes }, dependencies({
+        persistence: createAccountManagerPersistence(paths),
+      }))
+    }
+    return { paths, process, readRouting, tempDir }
+  }
+
+  beforeEach(() => {
+    resetMscTokenCache()
+    setMscHelperRunner(async () => ({ stdout: '', stderr: '', code: 2 }))
+  })
+
+  afterEach(() => {
+    setMscHelperRunner(undefined)
+    resetMscTokenCache()
+  })
+
+  test('a change in another process keeps the M365 target this process registered', async () => {
+    const { process, readRouting, tempDir } = await sharedProfile()
+    const current = await process()
+    const stale = await process()
+    try {
+      await current.registerM365Target({})
+      await stale.setDefaultAccount('account1')
+
+      expect(await readRouting()).toEqual({
+        baseHostname: 'localhost',
+        defaultAccount: 'account1',
+        hostnames: {
+          'default.localhost': 'default',
+          'account1.localhost': 'account1',
+          'm365.localhost': 'm365',
+        },
+      })
+    }
+    finally {
+      await current.stop()
+      await stale.stop()
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('removing a target elsewhere is not undone by a stale process', async () => {
+    const { process, readRouting, tempDir } = await sharedProfile()
+    const first = await process()
+    try {
+      await first.registerM365Target({})
+    }
+    finally {
+      await first.stop()
+    }
+    // Both processes start after the registration; only one removes it.
+    const current = await process()
+    const stale = await process()
+    try {
+      await current.removeM365Target()
+      await stale.setDefaultAccount('account1')
+
+      expect((await readRouting())?.hostnames).toEqual({
+        'default.localhost': 'default',
+        'account1.localhost': 'account1',
+      })
+    }
+    finally {
+      await current.stop()
+      await stale.stop()
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('reports a conflicting account addition instead of a generic failure', async () => {
+    const { paths, process, tempDir } = await sharedProfile()
+    const current = await process()
+    const stale = await process()
+    try {
+      await current.registerM365Target({ hostname: 'shared.localhost' })
+      const saved = await fs.readFile(paths.CONFIG_PATH, 'utf8')
+
+      const session = await stale.beginAddAccount({ accountName: 'account2', hostname: 'shared.localhost' })
+      expect(await stale.waitForAuthentication(session.id)).toMatchObject({
+        state: 'failed',
+        message: expect.stringContaining('changed by another ghc-proxy process'),
+      })
+      expect(await fs.readFile(paths.CONFIG_PATH, 'utf8')).toBe(saved)
+      expect((await readGitHubCredentials(paths))?.accounts.account2).toBeUndefined()
+    }
+    finally {
+      await current.stop()
+      await stale.stop()
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('refuses a change that conflicts with routing saved by another process', async () => {
+    const { paths, process, readRouting, tempDir } = await sharedProfile()
+    const current = await process()
+    const stale = await process()
+    try {
+      await current.registerM365Target({})
+      const saved = await fs.readFile(paths.CONFIG_PATH, 'utf8')
+
+      await expect(stale.registerM365Target({ hostname: 'copilot.localhost' }))
+        .rejects
+        .toMatchObject({ status: 409 })
+      expect(await fs.readFile(paths.CONFIG_PATH, 'utf8')).toBe(saved)
+      expect((await readRouting())?.hostnames['m365.localhost']).toBe('m365')
+    }
+    finally {
+      await current.stop()
+      await stale.stop()
+      await fs.rm(tempDir, { recursive: true, force: true })
     }
   })
 })

@@ -12,6 +12,7 @@ import { getClientConfig } from '~/clients/factory'
 import { resetMscTokenCache, setMscHelperRunner } from '~/clients/msc-auth'
 import { compileAccountRouting } from '~/lib/account-routing'
 import { getCachedConfig } from '~/lib/config'
+import { writeGitHubCredential } from '~/lib/credentials'
 import { PATHS } from '~/lib/paths'
 import { createDashboardRoutes } from '~/routes/dashboard/route'
 import { createAccountRuntime, resetAccountRuntimes, resolveRequestAccountRuntime, runWithAccountRuntime } from '~/state'
@@ -58,6 +59,7 @@ async function fixture() {
     hostnames: { 'default.localhost': 'default' },
   }
   await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({ smallModel: 'preserved', accountRouting: routing }))
+  await writeGitHubCredential('github-default', undefined, paths, 'default')
   const manager = new AccountManager({
     authDefaults: { mscAuthExe: helperExe },
     routing: compileAccountRouting(routing, ['default']),

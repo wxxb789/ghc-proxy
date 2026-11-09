@@ -152,7 +152,7 @@
                 <h3 class='label'>Client environment</h3>
                 <CodeBlock id='m365-client' label='Client environment'
                            text={`ANTHROPIC_BASE_URL=${view.client?.baseUrl ?? ''}\nANTHROPIC_AUTH_TOKEN=dummy-token\nANTHROPIC_MODEL=${view.client?.model ?? ''}`} />
-                <p class='hint'>M365 serves Anthropic Messages only.</p>
+                <p class='hint'>M365 serves Anthropic Messages (/v1/messages) and OpenAI Responses (/v1/responses). From Claude Code, GPT models work through translation.</p>
               </div>
             </div>
           {:else}

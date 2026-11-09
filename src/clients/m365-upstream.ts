@@ -1,6 +1,6 @@
 /**
  * Microsoft 365 Copilot coding-agent gateway: transport constants, the
- * Anthropic-shaped header contract, and the fallback model catalog.
+ * gateway header contract, and the model catalog.
  *
  * Names the gateway does not list are rejected with `403 model_not_allowed`;
  * `max_tokens` above the value below is rejected with `400 invalid_body`.
@@ -12,14 +12,17 @@ import { randomUUID } from 'node:crypto'
 
 import { HTTPError } from '~/lib/error'
 import { M365_DEFAULT_ENDPOINT } from '~/lib/m365-endpoints'
+import { MESSAGES_ENDPOINT, RESPONSES_ENDPOINT } from '~/state/model-cache'
 
 export const M365_ANTHROPIC_VERSION = '2023-06-01'
 export const M365_API_VERSION = '2026-10-16'
 
 /**
  * Measured on 2026-10-31: `max_tokens: 128000` returns 200, `128001` returns
- * 400, for every catalog model. The gateway reports only `invalid_body`, so the
- * exact ceiling is pinned by bisection rather than read from an error message.
+ * 400, for every `/v1/messages` catalog model. The gateway reports only
+ * `invalid_body`, so the exact ceiling is pinned by bisection rather than read
+ * from an error message. `/responses` models were not measured and advertise
+ * no output ceiling.
  */
 const MAX_OUTPUT_TOKENS = 128_000
 
@@ -61,18 +64,33 @@ interface GatewayModel {
   name?: unknown
   publisher?: unknown
   supported_endpoints?: unknown
-  capabilities?: { limits?: { max_context_window_tokens?: unknown } }
+  capabilities?: {
+    limits?: { max_context_window_tokens?: unknown }
+    supports?: { reasoning_effort?: unknown }
+  }
+}
+
+/**
+ * Endpoints the M365 target serves. Anything else the gateway advertises is
+ * dropped, so a model is never routed to an endpoint the target refuses.
+ */
+const SERVED_ENDPOINTS: ReadonlyArray<string> = [MESSAGES_ENDPOINT, RESPONSES_ENDPOINT]
+
+function stringsOf(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
 }
 
 function toCatalogModel(entry: GatewayModel): Model | undefined {
   const id = typeof entry.id === 'string' ? entry.id : ''
-  const endpoints = Array.isArray(entry.supported_endpoints)
-    ? entry.supported_endpoints.filter((value): value is string => typeof value === 'string')
-    : []
-  if (!id || !endpoints.includes('/v1/messages')) {
+  const endpoints = stringsOf(entry.supported_endpoints)
+    .filter(endpoint => SERVED_ENDPOINTS.includes(endpoint))
+  if (!id || endpoints.length === 0) {
     return undefined
   }
   const contextTokens = entry.capabilities?.limits?.max_context_window_tokens
+  const reasoningEfforts = stringsOf(entry.capabilities?.supports?.reasoning_effort)
   const name = typeof entry.name === 'string' ? entry.name : id
   const publisher = typeof entry.publisher === 'string' ? entry.publisher.toLowerCase() : 'anthropic'
   return {
@@ -90,7 +108,7 @@ function toCatalogModel(entry: GatewayModel): Model | undefined {
       type: 'chat',
       tokenizer: 'cl100k_base',
       limits: {
-        max_output_tokens: MAX_OUTPUT_TOKENS,
+        ...(endpoints.includes(MESSAGES_ENDPOINT) ? { max_output_tokens: MAX_OUTPUT_TOKENS } : {}),
         ...(typeof contextTokens === 'number'
           ? { max_context_window_tokens: contextTokens, max_prompt_tokens: contextTokens }
           : {}),
@@ -99,6 +117,7 @@ function toCatalogModel(entry: GatewayModel): Model | undefined {
         tool_calls: true,
         parallel_tool_calls: true,
         streaming: true,
+        ...(reasoningEfforts.length > 0 ? { reasoning_effort: reasoningEfforts } : {}),
       },
     },
   }
@@ -107,8 +126,9 @@ function toCatalogModel(entry: GatewayModel): Model | undefined {
 const CATALOG_TIMEOUT_MS = 10_000
 
 /**
- * Normalizes a gateway catalog payload into the model list the proxy serves.
- * Entries without a `/v1/messages` endpoint are dropped.
+ * Normalizes a gateway catalog payload into the model list the proxy serves:
+ * Anthropic models on `/v1/messages` and OpenAI models on `/responses`.
+ * Entries with neither endpoint are dropped.
  */
 export function normalizeM365Catalog(payload: unknown): ModelsResponse {
   const data = (payload as { data?: unknown } | null | undefined)?.data
@@ -117,7 +137,7 @@ export function normalizeM365Catalog(payload: unknown): ModelsResponse {
     .map(toCatalogModel)
     .filter((model): model is Model => model !== undefined)
   if (models.length === 0) {
-    throw new Error('M365 model catalog returned no /v1/messages models')
+    throw new Error('M365 model catalog returned no /v1/messages or /responses models')
   }
   return { object: 'list', data: models }
 }

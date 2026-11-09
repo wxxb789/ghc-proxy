@@ -99,6 +99,77 @@ export function normalizeAccountRoutingConfig(
   return { baseHostname, defaultAccount, hostnames }
 }
 
+/**
+ * A routing change one process computed from its committed table: `previous`
+ * is that table, absent when the change first enables routing.
+ */
+export interface AccountRoutingUpdate {
+  previous?: AccountRoutingConfig
+  next: AccountRoutingConfig
+}
+
+/**
+ * Applies only what `update` changed to the routing stored now. Several
+ * processes can share one profile, and each holds the table it loaded at
+ * startup; writing that whole table would undo changes saved by the others.
+ * Hostnames that `update` added, reassigned, or removed are applied, and every
+ * stored hostname of a target it removed is dropped; the base hostname and
+ * default account follow `update` only where it changed them. A hostname this
+ * change touches that another process bound to a third target throws instead
+ * of being overwritten. The caller validates the result.
+ */
+export function rebaseAccountRoutingUpdate(
+  stored: AccountRoutingConfig | undefined,
+  update: AccountRoutingUpdate,
+): AccountRoutingConfig {
+  const { next } = update
+  if (!stored) {
+    return next
+  }
+  const previous = update.previous ?? { ...next, hostnames: {} }
+  const nextTargets = new Set(Object.values(next.hostnames))
+  const removedTargets = new Set(
+    Object.values(previous.hostnames).filter(target => !nextTargets.has(target)),
+  )
+
+  const hostnames: Record<string, string> = {}
+  for (const [hostname, target] of Object.entries(stored.hostnames)) {
+    if (!removedTargets.has(target)) {
+      hostnames[hostname] = target
+    }
+  }
+  const touched = new Set([...Object.keys(previous.hostnames), ...Object.keys(next.hostnames)])
+  for (const hostname of touched) {
+    const before = previous.hostnames[hostname]
+    const after = next.hostnames[hostname]
+    if (before === after) {
+      continue
+    }
+    const current = stored.hostnames[hostname]
+    if (current !== before && current !== after) {
+      throw new Error(
+        `accountRouting hostname ${JSON.stringify(hostname)} was changed by another process.`,
+      )
+    }
+    if (after === undefined) {
+      Reflect.deleteProperty(hostnames, hostname)
+    }
+    else {
+      hostnames[hostname] = after
+    }
+  }
+
+  return {
+    baseHostname: next.baseHostname !== previous.baseHostname
+      ? next.baseHostname
+      : stored.baseHostname,
+    defaultAccount: next.defaultAccount !== previous.defaultAccount
+      ? next.defaultAccount
+      : stored.defaultAccount,
+    hostnames,
+  }
+}
+
 export function compileAccountRouting(
   config: AccountRoutingConfig,
   accountNames: Iterable<string>,

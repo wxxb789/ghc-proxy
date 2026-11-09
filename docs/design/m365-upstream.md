@@ -4,8 +4,9 @@ Second upstream provider: the Microsoft 365 Copilot coding-agent gateway. The
 default endpoint is `https://loki.delve.office.com/api/v1/llmapi`;
 `https://df.loki.delve.office.com/api/v1/llmapi` and
 `https://msit.loki.delve.office.com/api/v1/llmapi` remain built-in options.
-It speaks the Anthropic Messages protocol directly, so the request path reuses
-`native-messages` without translation.
+It serves Claude models over the Anthropic Messages protocol, which the request
+path reaches through `native-messages` without translation, and GPT models over
+the OpenAI Responses protocol.
 
 Every built-in gateway serves the model catalog at `<endpoint>/models`, so
 catalog discovery works the same way whichever endpoint is selected; the listed
@@ -98,14 +99,38 @@ Consequences:
 whole list and filtering locally.
 
 At startup the proxy fetches that endpoint with the freshly acquired token and
-caches the `/v1/messages` subset. On 2026-11-03 a live GET returned 200 and ten
-entries: five Anthropic Messages models and five GPT Responses models. The
-proxy's M365 target supports Messages inference only, so `GET /models` and
-`GET /v1/models` on its hostname expose the five supported models rather than
-advertising unavailable Responses dispatch.
+caches every entry that advertises `/v1/messages` or `/responses`; other
+endpoints are removed from an entry's `supported_endpoints`, and an entry left
+with none is dropped, so no model is routed to an endpoint the target refuses.
+On 2026-11-09 a live GET on `loki` returned ten entries: five Claude models on
+`/v1/messages` and five GPT models (`gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-6-luna`,
+`gpt-6-sol`, `gpt-61-sol`) on `/responses`. `GET /models` and `GET /v1/models`
+on the target's hostname list all ten. The entry's `reasoning_effort` list is
+kept, so effort clamping and reasoning-parameter filtering follow the gateway.
+
+How a GPT model is reached:
+
+- `POST /v1/messages` (Claude Code and other Anthropic clients) selects the
+  Responses Translation strategy, because the model advertises `/responses`
+  and not `/v1/messages`. Claude models stay on `native-messages`.
+- `POST /v1/responses` or `/responses` (OpenAI Responses clients) selects
+  Responses passthrough. A Claude model on that path is refused with the
+  OpenAI-format `400` that every Messages-only model gets.
+
+Live checks on 2026-11-09 (`gpt-6-luna`, `loki`) returned `200` for
+`<endpoint>/responses` with the unchanged gateway header set below and the
+fields the translation sends (`store: false`,
+`include: ["reasoning.encrypted_content"]`, `reasoning.summary`, `null`
+sampling fields). Through the proxy, `/v1/messages` streaming, a forced tool
+call, the following `tool_result` turn, and `/v1/responses` all succeeded. The
+gateway rejects `stream: null` with `400 {"code":"invalid_body"}` ("stream must
+be a boolean"), so the shared Responses upstream tail
+(`shapeResponsesUpstreamPayload`) omits a null `stream` on both paths.
 
 `src/clients/m365-upstream.ts` retains a static catalog for transient discovery
-failures. A catalog 401/403 is an authorization failure, not a discovery outage:
+failures. It lists the verified Claude models only; the GPT ids change with the
+gateway and have no measured limits, so they appear only from a live catalog.
+A catalog 401/403 is an authorization failure, not a discovery outage:
 initialization and later metadata refreshes retain `unavailable` and ask the
 operator to select an account with gateway access and a Copilot subscription.
 
@@ -122,10 +147,14 @@ operator to select an account with gateway access and a Copilot subscription.
 `403 model_not_allowed`. The host offers those older names in its own picker, so
 the service-side allow-list is narrower than the client-side list.
 
-Every entry in the proxy's supported M365 catalog advertises `/v1/messages`.
-That keeps `resolveMessagesStrategyName()` on `native-messages`. The upstream's
-Responses models are filtered out because this target does not yet admit
-Responses or Chat Completions inference.
+Every Claude entry advertises `/v1/messages`, which keeps
+`resolveMessagesStrategyName()` on `native-messages` for it. No entry
+advertises `/chat/completions`, so the Responses-to-Chat bridge is never chosen
+and no catalog model routes to Chat Completions by endpoint. A model id outside
+the catalog (and outside the `claude-*` family fallbacks), or a Claude request
+carrying `output_config.format` (the catalog advertises no
+`structured_outputs`), still resolves to the Chat Completions fallback, which
+this gateway refuses.
 
 ## Measured limits
 
@@ -133,7 +162,9 @@ The gateway masks upstream detail (`400 {"code":"invalid_body"}`), so limits are
 established by bisection, not read from error text:
 
 - **Output:** `max_tokens: 128000` returns 200, `128001` returns 400 — the
-  ceiling is exactly 128k. That value is advertised as `max_output_tokens`.
+  ceiling is exactly 128k. That value is advertised as `max_output_tokens` for
+  `/v1/messages` models. GPT models were not measured and advertise no output
+  ceiling, so the gateway's own answer reaches the client.
 - **Context:** `GET /api/v1/llmapi/models` reports
   `capabilities.limits.max_context_window_tokens: 1000000` for all five Anthropic
   models, which matches a live 546,008-token request and the accepted
@@ -242,20 +273,21 @@ applies an allow-list to the path, with one trailing slash dropped:
 | Path | Decision |
 |------|----------|
 | `/v1/messages`, `/v1/messages/count_tokens` | Inference: admitted while the target is available |
+| `/responses`, `/v1/responses` | Inference (Responses creation): admitted while the target is available |
 | `/`, `/health`, `/models`, `/v1/models` | Not inference: continue to their handlers |
 | `/dashboard`, `/dashboard/...` | Not inference: continue to the Dashboard guard |
-| Anything else | `400` naming `/v1/messages` |
+| Anything else | `400` naming `/v1/messages` and `/v1/responses` |
 
-"Anything else" covers Chat Completions, Responses, Embeddings, Decisions
-(`/decisions`, `/v1/decisions`), unknown paths, and the proxy-specific
-`/token` and `/usage`. On this target the stored token is the user's personal
+"Anything else" covers Chat Completions, Responses resources (retrieve,
+delete, `input_items`, `input_tokens`), Embeddings, Decisions (`/decisions`,
+`/v1/decisions`), unknown paths, and the proxy-specific `/token` and `/usage`. On this target the stored token is the user's personal
 Microsoft delegated credential, so `/token` would hand it to any local caller,
 and `/usage` would call GitHub's quota endpoint without a GitHub credential
 (the M365 target has none). A route added to `src/server.ts` later is refused
 here until it is added to the allow-list on purpose; `tests/target-gates.test.ts`
 checks every registered route of the real server against the list.
 
-An unavailable target answers Messages requests with 503 and its recorded
+An unavailable target answers inference requests with 503 and its recorded
 cause, after one acquisition retry so a recovered broker restores service
 without a restart.
 
@@ -274,9 +306,14 @@ before the rule applies, so `/v1/messages//` is not a Messages path.
 
 - GitHub account management and GHE options remain GitHub-specific; they are
   not used here.
-- Only the Messages endpoint family is served for inference on this target.
-  Other inference endpoints, and every path outside the allow-list above, are
-  refused with an error naming `/v1/messages` instead of being forwarded.
+- Only the Messages endpoint family and Responses creation are served for
+  inference on this target. Other inference endpoints, the Responses resource
+  routes, and every path outside the allow-list above are refused instead of
+  being forwarded. `previous_response_id` works only through the local
+  Responses emulator (`responsesOfficialEmulator`).
+- `thinking: { type: "disabled" }` maps to `reasoning.effort: "none"`, which
+  `gpt-61-sol` does not advertise; see the `reasoning.effort: none` item in
+  `docs/TODO.md`.
 - Unknown model names are not rejected up front; the gateway answers
   `403 model_not_allowed`, which the proxy returns unchanged (probed with
   `claude-unknown-1`).
@@ -294,6 +331,7 @@ On Windows, source `start` prepares the native helper before the CLI loads.
 Local compilation requires the .NET 10 SDK, C++ tools, and Windows SDK; a complete
 explicit helper or `MSC_AUTH_DIR` prebuilt payload avoids that toolchain.
 
-Expected: five models listed (the catalog's `/v1/messages` subset; the gateway
-also serves five `gpt-*` models on `/responses`), `POST /v1/messages` returns
-`200`, streaming returns Anthropic SSE, and the listener binds `127.0.0.1` only.
+Expected: the gateway's Claude and GPT models are listed, `POST /v1/messages`
+returns `200` for both (GPT through Responses Translation), streaming returns
+Anthropic SSE, `POST /v1/responses` with a GPT model returns a Responses
+object, and the listener binds `127.0.0.1` only.

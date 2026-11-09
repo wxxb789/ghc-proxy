@@ -20,6 +20,7 @@ import { RESERVED_M365_TARGET } from '~/lib/account-routing'
 import { getCachedConfig } from '~/lib/config'
 import { M365_BUILTIN_ENDPOINTS, M365_DEFAULT_ENDPOINT } from '~/lib/m365-endpoints'
 import { getRoutingTargets, getTargetAvailability } from '~/state/account-runtime'
+import { MESSAGES_ENDPOINT } from '~/state/model-cache'
 
 export interface M365Readiness {
   platformSupported: boolean
@@ -116,6 +117,9 @@ export function getM365DashboardState(
   }
 
   const modelIds = target.runtime.models.getModelIds()
+  // The snippet configures an Anthropic client, so it names a native Messages
+  // model even when the gateway lists a Responses model first.
+  const clientModel = target.runtime.models.getModels()?.data.find(model => model.supported_endpoints?.includes(MESSAGES_ENDPOINT))?.id
   return {
     registered: true,
     ...endpointSettings(target.runtime.auth.m365Endpoint),
@@ -132,7 +136,7 @@ export function getM365DashboardState(
     routing,
     client: {
       baseUrl: baseUrlFor(target.hostname, options.serverPort),
-      model: modelIds[0] ?? 'claude-opus-5.5',
+      model: clientModel ?? modelIds[0] ?? 'claude-opus-5.5',
     },
     onboarding,
   }
