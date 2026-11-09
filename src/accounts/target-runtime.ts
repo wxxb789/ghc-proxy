@@ -37,13 +37,15 @@ export function createTargetRuntime(
   options: TargetRuntimeOptions = {},
 ): AccountRuntime {
   if (kind === 'm365') {
+    const { auth = {} } = options
+    const saved = getCachedConfig().m365
     return createAccountRuntime(name, {
-      ...options.auth,
+      ...auth,
       upstream: 'm365',
-      m365Endpoint: options.m365Endpoint ?? getCachedConfig().m365?.endpoint ?? M365_DEFAULT_ENDPOINT,
-      mscAuthExe: options.mscAuthExe,
-      mscAuthAccount: options.mscAuthAccount,
-      mscAuthUpn: options.mscAuthUpn,
+      m365Endpoint: options.m365Endpoint ?? auth.m365Endpoint ?? saved?.endpoint ?? M365_DEFAULT_ENDPOINT,
+      mscAuthExe: options.mscAuthExe ?? auth.mscAuthExe,
+      mscAuthAccount: options.mscAuthAccount ?? auth.mscAuthAccount,
+      mscAuthUpn: options.mscAuthUpn ?? auth.mscAuthUpn ?? saved?.upn,
     })
   }
 

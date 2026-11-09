@@ -155,10 +155,22 @@ planned for minting gateway tokens for an MSA.
 
 - `config.json#m365.account` stores the broker **home account id**
   (`uid.utid`), which stays unambiguous when one UPN exists in several tenants.
-- Precedence: `--msc-auth-account` → `config.json#m365.account` →
+- Startup precedence: `--msc-auth-account` → `config.json#m365.account` →
   `config.json#m365.upn` → a unique broker account in the authority tenant, or
   the only broker account. There is no hard-coded email or substring fallback;
   an ambiguous selector requires a home account ID.
+- Dashboard registration and reconfiguration: a non-empty account chosen in
+  the Dashboard wins for the running process and is saved as `m365.account`,
+  so a later restart with `--msc-auth-account` still uses the CLI value.
+  Registering with the account left blank uses `--msc-auth-account` when it is
+  set; a blank registration also clears the saved `m365.account`, and the CLI
+  value is never written to `config.json`. Clearing the selected account later
+  returns to `--msc-auth-account`.
+- Every M365 runtime (startup and Dashboard) is built by `createTargetRuntime`
+  (`src/accounts/target-runtime.ts`). Explicit arguments win; otherwise the
+  helper path and account come from the process auth defaults (which carry
+  `--msc-auth-exe` and `--msc-auth-account`), and the endpoint and broker email
+  fall back to `config.json#m365`.
 - The Dashboard displays the selected email and Microsoft tenant ID instead of
   a GitHub tenant. It discovers broker accounts on the first Accounts visit and
   on explicit probes, not on every Live poll. The first visit includes a page

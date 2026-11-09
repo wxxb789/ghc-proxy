@@ -175,8 +175,6 @@ async function runServer(options: RunServerOptions): Promise<void> {
 
   const upstream = options.upstream === 'm365' ? 'm365' : 'github'
   authStore.upstream = upstream
-  authStore.mscAuthExe = options.mscAuthExe
-  authStore.mscAuthAccount = options.mscAuthAccount ?? cachedConfig.m365?.account
   if (upstream === 'm365') {
     consola.info('Upstream: Microsoft 365 Copilot gateway')
   }
@@ -202,15 +200,13 @@ async function runServer(options: RunServerOptions): Promise<void> {
   if (upstream === 'm365') {
     // M365 only: one target, no GitHub credentials, loopback-only listener.
     const target = createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
-      mscAuthExe: options.mscAuthExe,
-      mscAuthAccount: authStore.mscAuthAccount,
-      mscAuthUpn: cachedConfig.m365?.upn,
+      mscAuthAccount: options.mscAuthAccount ?? cachedConfig.m365?.account,
       auth: serverAuthDefaults(options, accountType),
     })
     await initializeM365Target(target)
     const availability = getTargetAvailability(target)
     if (availability?.status === 'ready') {
-      consola.info(`M365 target ready (account ${authStore.mscAuthAccount ?? 'default'})`)
+      consola.info(`M365 target ready (account ${target.auth.mscAuthAccount ?? 'default'})`)
     }
     else {
       consola.warn(`M365 target unavailable: ${availability?.cause ?? 'unknown cause'}`)
@@ -463,9 +459,7 @@ async function setupRoutedAccounts(
   const runtimes = targetNames.map((accountName) => {
     if (compiled.kinds.get(accountName) === 'm365') {
       return createTargetRuntime(accountName, 'm365', {
-        mscAuthExe: options.mscAuthExe,
-        mscAuthAccount: authStore.mscAuthAccount,
-        mscAuthUpn: getCachedConfig().m365?.upn,
+        mscAuthAccount: options.mscAuthAccount ?? getCachedConfig().m365?.account,
         auth: serverAuthDefaults(options, accountType),
       })
     }
@@ -476,7 +470,6 @@ async function setupRoutedAccounts(
     return runtime
   })
 
-  configureAccountRuntimes(compiled, runtimes)
   const cleanups = new Map<string, () => void>()
   try {
     for (const runtime of runtimes) {
@@ -550,6 +543,7 @@ function serverAuthDefaults(
     rateLimitWait: options.rateLimitWait,
     showToken: false,
     mscAuthExe: options.mscAuthExe,
+    mscAuthAccount: options.mscAuthAccount,
     upstreamTimeoutSeconds: options.upstreamTimeoutSeconds,
   }
 }

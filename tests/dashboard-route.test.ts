@@ -258,7 +258,6 @@ describe('dashboard account management API', () => {
         'work.localhost': 'work',
       },
     }, ['default', 'work'])
-    configureAccountRuntimes(routing, [defaultRuntime, workRuntime])
     const app = createServer({
       accountManager: new AccountManager({ routing, runtimes: [defaultRuntime, workRuntime] }),
     })
@@ -324,7 +323,6 @@ describe('dashboard account management API', () => {
         'work.localhost': 'work',
       },
     }, ['default', 'work'])
-    configureAccountRuntimes(routing, [defaultRuntime, workRuntime])
     const quotaCache = new DashboardQuotaCache(async () => ({
       ...usageFixture(),
       copilot_plan: authStore.githubToken ?? 'missing-token',
@@ -364,7 +362,6 @@ describe('dashboard account management API', () => {
         runtimes.map(runtime => [`${runtime.name}.localhost`, runtime.name]),
       ),
     }, runtimes.map(runtime => runtime.name))
-    configureAccountRuntimes(routing, runtimes)
 
     const started = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
