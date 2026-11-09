@@ -208,6 +208,13 @@ test('an M365 client records availability on the target it was built for', async
   expect(getTargetAvailability(ambient)).toBeUndefined()
 })
 
+test('an M365 client cannot be built without the target it serves', () => {
+  expect(() => new CopilotClient(
+    { copilotToken: 'token-value' },
+    { upstream: 'm365', accountType: 'individual' },
+  )).toThrow('An M365 client requires its route target runtime')
+})
+
 describe('listMscAccounts', () => {
   test('parses the tab-separated account listing', async () => {
     process.env.GHC_MSC_AUTH_EXE = makeFile('unused')

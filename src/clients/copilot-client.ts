@@ -54,7 +54,11 @@ interface FetchParams {
 
 export class CopilotClient {
   private auth: ClientAuth
-  private runtime: AccountRuntime | undefined
+  /**
+   * Set exactly when the upstream is M365, which records its credential and
+   * availability on the route target it serves.
+   */
+  private m365Runtime: AccountRuntime | undefined
   private config: ClientConfig
   private fetchImpl: typeof fetch
   private requestQueue: UpstreamRequestQueue | undefined
@@ -63,8 +67,13 @@ export class CopilotClient {
   private fallbackAttempt: boolean
 
   constructor(auth: ClientAuth, config: ClientConfig, deps?: ClientDeps) {
+    if (config.upstream === 'm365') {
+      if (!deps?.runtime) {
+        throw new Error('An M365 client requires its route target runtime')
+      }
+      this.m365Runtime = deps.runtime
+    }
     this.auth = auth
-    this.runtime = deps?.runtime
     this.config = config
     this.fetchImpl = deps?.fetch ?? fetch
     this.requestQueue = deps?.requestQueue
@@ -79,22 +88,14 @@ export class CopilotClient {
     }
   }
 
-  /** The M365 upstream records its credential and availability on the target it serves. */
-  private requireRuntime(): AccountRuntime {
-    if (!this.runtime) {
-      throw new Error('An M365 client requires its route target runtime')
-    }
-    return this.runtime
-  }
-
   /** Low-level fetch with token check, header injection, and error handling */
   private async request(
     path: string,
     errorMessage: string,
     options: RequestOptions = {},
   ): Promise<QueuedUpstreamResponse> {
-    if (this.config.upstream === 'm365') {
-      const credential = await acquireM365Credential(this.requireRuntime())
+    if (this.m365Runtime) {
+      const credential = await acquireM365Credential(this.m365Runtime)
       if (credential.status === 'unavailable') {
         throw new HTTPError(503, {
           error: {
@@ -331,16 +332,16 @@ export class CopilotClient {
         'Failed to get models',
         { retryable: true, signal: options.signal },
       )
-      if (this.config.upstream !== 'm365')
+      if (!this.m365Runtime)
         return payload as ModelsResponse
       const catalog = normalizeM365Catalog(payload)
-      setTargetAvailability(this.requireRuntime(), { status: 'ready' })
+      setTargetAvailability(this.m365Runtime, { status: 'ready' })
       return catalog
     }
     catch (error) {
-      if (this.config.upstream === 'm365' && isM365CatalogAccessDenied(error)) {
+      if (this.m365Runtime && isM365CatalogAccessDenied(error)) {
         markM365Unavailable(
-          this.requireRuntime(),
+          this.m365Runtime,
           `M365 model catalog access denied (${error.status}); select a work account with gateway access and a Copilot subscription.`,
         )
       }

@@ -70,7 +70,8 @@ runtime-neutral and talks to it over stdout JSON.
 record the target as `unavailable` with a bounded cause. The client factory
 passes the route target's runtime to the client, so credential and
 availability writes land on the target that built the client, not on the
-ambient request runtime.
+ambient request runtime. Constructing an M365 `CopilotClient` without that
+runtime throws, so a misbuilt client fails before any request is sent.
 
 | Property | Value |
 | --- | --- |
