@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from 'bun:test'
 
 import { copilotHeaders } from '~/clients/api-config'
 import { fetchM365Models, M365_FALLBACKS, M365_MODELS, m365FallbackFor, m365Headers } from '~/clients/m365-upstream'
+import { resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
+import { resolveResponsesStrategyName } from '~/routes/responses/capabilities'
 import { modelCache } from '~/state'
+import { resolveStrippedResponsesParams } from '~/transform/parameter-filter'
 
 afterEach(() => {
   modelCache.clearModels()
@@ -102,17 +105,30 @@ describe('m365 model catalog', () => {
     expect(M365_FALLBACKS.claudeSonnet).toBe('claude-sonnet-5.5')
   })
 
-  test('maps the gateway catalog onto /v1/messages models only', async () => {
+  test('serves the gateway Messages and Responses models and nothing else', async () => {
     const gateway = {
       data: [
         {
           id: 'claude-opus-5.5',
           name: 'Claude Opus 5.5',
           publisher: 'Anthropic',
-          supported_endpoints: ['/v1/messages'],
-          capabilities: { limits: { max_context_window_tokens: 1000000 } },
+          supported_endpoints: ['/v1/messages', '/chat/completions'],
+          capabilities: {
+            limits: { max_context_window_tokens: 1000000 },
+            supports: { reasoning_effort: ['low', 'medium', 'high', 'xhigh', 'max'] },
+          },
         },
-        { id: 'gpt-6-sol', supported_endpoints: ['/responses'] },
+        {
+          id: 'gpt-6-sol',
+          name: 'GPT-6 Sol',
+          publisher: 'OpenAI',
+          supported_endpoints: ['/responses'],
+          capabilities: {
+            limits: { max_context_window_tokens: 1050000 },
+            supports: { reasoning_effort: ['none', 'low', 'medium', 'high', 'xhigh', 'max'] },
+          },
+        },
+        { id: 'chat-only', supported_endpoints: ['/chat/completions'] },
       ],
     }
     let catalogUrl = ''
@@ -122,17 +138,29 @@ describe('m365 model catalog', () => {
     })
 
     expect(catalogUrl).toBe('https://catalog.example.test/api/models')
+    expect(models.data.map(model => model.id)).toEqual(['claude-opus-5.5', 'gpt-6-sol'])
+    const [claude, gpt] = models.data
+    expect(claude?.supported_endpoints).toEqual(['/v1/messages'])
+    expect(claude?.capabilities.limits.max_context_window_tokens).toBe(1_000_000)
+    expect(claude?.capabilities.limits.max_output_tokens).toBe(128_000)
+    expect(claude?.vendor).toBe('anthropic')
+    expect(gpt?.supported_endpoints).toEqual(['/responses'])
+    expect(gpt?.vendor).toBe('openai')
+    expect(gpt?.capabilities.limits.max_context_window_tokens).toBe(1_050_000)
+    // The 128k ceiling was measured on /v1/messages only.
+    expect(gpt?.capabilities.limits.max_output_tokens).toBeUndefined()
+    expect(gpt?.capabilities.supports.reasoning_effort).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
 
-    expect(models.data.map(model => model.id)).toEqual(['claude-opus-5.5'])
-    const [model] = models.data
-    expect(model?.capabilities.limits.max_context_window_tokens).toBe(1_000_000)
-    expect(model?.capabilities.limits.max_output_tokens).toBe(128_000)
-    expect(model?.vendor).toBe('anthropic')
+    modelCache.cacheModels(models)
+    expect(resolveMessagesStrategyName(claude)).toBe('native-messages')
+    expect(resolveMessagesStrategyName(gpt)).toBe('responses-api')
+    expect(resolveResponsesStrategyName(gpt)).toBe('responses-passthrough')
+    expect(resolveStrippedResponsesParams(gpt)).toContain('temperature')
   })
 
   test('rejects a catalog without usable models', async () => {
     await expect(
-      fetchM365Models('token', undefined, async () => Response.json({ data: [{ id: 'gpt-6-sol', supported_endpoints: ['/responses'] }] })),
-    ).rejects.toThrow('no /v1/messages models')
+      fetchM365Models('token', undefined, async () => Response.json({ data: [{ id: 'chat-only', supported_endpoints: ['/chat/completions'] }] })),
+    ).rejects.toThrow('no /v1/messages or /responses models')
   })
 })

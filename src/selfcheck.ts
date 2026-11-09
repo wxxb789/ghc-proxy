@@ -852,7 +852,7 @@ async function probeLegacySingleAccountRoutingMigration(): Promise<void> {
       },
       persistRouting: async (routing, applyRuntime) => {
         assertProbe(!listenerStarted, 'legacy migration persisted routing after the listener started')
-        persistedRouting = routing
+        persistedRouting = routing.next
         applyRuntime()
       },
     },

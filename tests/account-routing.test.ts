@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   compileAccountRouting,
   normalizeDnsHostname,
+  rebaseAccountRoutingUpdate,
   resolveAccountName,
 } from '~/lib/account-routing'
 
@@ -140,4 +141,45 @@ describe('account routing contract', () => {
   ])('rejects non-DNS hostname %s', (input) => {
     expect(() => normalizeDnsHostname(input)).toThrow('DNS hostname')
   })
+})
+
+describe('rebasing a routing change onto the stored routing', () => {
+  const routing = (hostnames: Record<string, string>, defaultAccount = 'default') => ({
+    baseHostname: 'localhost',
+    defaultAccount,
+    hostnames: { 'default.localhost': 'default', ...hostnames },
+  })
+
+  test('applies only this change and keeps entries saved by another process', () => {
+    expect(rebaseAccountRoutingUpdate(
+      routing({ 'm365.localhost': 'm365', 'old.localhost': 'gh1' }),
+      { previous: routing({ 'old.localhost': 'gh1' }), next: routing({ 'new.localhost': 'gh1' }, 'gh1') },
+    )).toEqual(routing({ 'm365.localhost': 'm365', 'new.localhost': 'gh1' }, 'gh1'))
+  })
+
+  test('drops every stored hostname of a removed target', () => {
+    expect(rebaseAccountRoutingUpdate(
+      routing({ 'gh1.localhost': 'gh1', 'alias.localhost': 'gh1', 'm365.localhost': 'm365' }),
+      { previous: routing({ 'gh1.localhost': 'gh1' }), next: routing({}) },
+    )).toEqual(routing({ 'm365.localhost': 'm365' }))
+  })
+
+  for (const { name, stored, previous, next } of [
+    {
+      name: 'binding a hostname another process bound to a different target',
+      stored: routing({ 'shared.localhost': 'gh3' }),
+      previous: routing({}),
+      next: routing({ 'shared.localhost': 'gh2' }),
+    },
+    {
+      name: 'dropping a hostname another process rebound',
+      stored: routing({ 'm365.localhost': 'gh3' }),
+      previous: routing({ 'm365.localhost': 'm365' }),
+      next: routing({}),
+    },
+  ]) {
+    test(`refuses ${name}`, () => {
+      expect(() => rebaseAccountRoutingUpdate(stored, { previous, next })).toThrow('changed')
+    })
+  }
 })

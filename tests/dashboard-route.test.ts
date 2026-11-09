@@ -775,11 +775,10 @@ describe('M365 target projection', () => {
     })
     m365.models.cacheModels({
       object: 'list',
-      data: [{
-        id: 'claude-opus-5.5',
-        name: 'Claude Opus 5.5',
-        supported_endpoints: ['/v1/messages'],
-      }],
+      data: [
+        { id: 'gpt-6-sol', name: 'GPT-6 Sol', supported_endpoints: ['/responses'] },
+        { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', supported_endpoints: ['/v1/messages'] },
+      ],
     } as never)
     const github = createAccountRuntime('default')
     const accounts = [
@@ -808,15 +807,15 @@ describe('M365 target projection', () => {
     expect(state.routing.map(row => row.hostname)).toEqual(['default.localhost'])
   })
 
-  test('projects registration, catalog, and the client base URL', () => {
+  test('projects registration, catalog, and an Anthropic client snippet', () => {
     const state = getM365DashboardState({ manager: targetManager(true), serverPort: 4141 })
 
     expect(state).toMatchObject({
       registered: true,
       hostname: 'm365.localhost',
       account: 'home-account',
-      modelCount: 1,
-      models: ['claude-opus-5.5'],
+      modelCount: 2,
+      models: ['gpt-6-sol', 'claude-opus-5.5'],
       client: {
         baseUrl: 'http://m365.localhost:4141',
         model: 'claude-opus-5.5',

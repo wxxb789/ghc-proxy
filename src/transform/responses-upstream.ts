@@ -53,6 +53,11 @@ export function shapeResponsesUpstreamPayload(
 
   if (clampResponsesOutputTokens(payload))
     runtimeStore.requests.recordEffect(requestId, 'responses.output_tokens_raised')
+
+  // A null flag and an absent one both mean non-streaming, but the M365
+  // gateway rejects null ("stream must be a boolean").
+  if (payload.stream === null)
+    delete payload.stream
 }
 
 export interface ResponsesTerminalObservers {

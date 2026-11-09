@@ -4,11 +4,12 @@
  * A hostname selects a target; the target's own upstream then decides what the
  * request may reach. The M365 gateway serves a personal Microsoft credential,
  * so requests to it are limited to loopback peers and to an allow-list: the
- * Messages endpoint family for inference, plus the root, health, the target's
- * model list, and Dashboard paths, which are not inference and continue to
- * their own handlers and their own guard. Every other path, including the
- * proxy-specific `/token` and `/usage`, is refused. An unavailable target
- * answers Messages requests with its recorded cause.
+ * Messages endpoint family and Responses creation for inference, plus the
+ * root, health, the target's model list, and Dashboard paths, which are not
+ * inference and continue to their own handlers and their own guard. Every
+ * other path, including Responses resources, the proxy-specific `/token` and
+ * `/usage`, is refused. An unavailable target answers inference requests with
+ * its recorded cause.
  */
 import { initializeM365Target } from '~/accounts/target-runtime'
 import { isMessagesPath, normalizeRequestPathname, pathRefusalResponse } from '~/lib/error-dialect'
@@ -16,8 +17,9 @@ import { isLoopbackAddress, resolveRequestPeer } from '~/lib/peer'
 import { getCurrentAccountRuntime, getTargetAvailability } from '~/state/account-runtime'
 
 const M365_NON_INFERENCE_PATHS = new Set(['/', '/health', '/models', '/v1/models'])
+const M365_RESPONSES_PATHS = new Set(['/responses', '/v1/responses'])
 const M365_UNSERVED_PATH_MESSAGE
-  = 'The Microsoft 365 target serves the Anthropic Messages endpoint only; use /v1/messages.'
+  = 'The Microsoft 365 target serves the Anthropic Messages endpoint and Responses creation only; use /v1/messages or /v1/responses.'
 
 function isM365NonInferencePath(pathname: string): boolean {
   return M365_NON_INFERENCE_PATHS.has(pathname)
@@ -55,7 +57,7 @@ export async function enforceTargetGates(
   if (isM365NonInferencePath(pathname))
     return undefined
 
-  if (!isMessagesPath(pathname))
+  if (!isMessagesPath(pathname) && !M365_RESPONSES_PATHS.has(pathname))
     return pathRefusalResponse(pathname, 400, M365_UNSERVED_PATH_MESSAGE)
 
   if (getTargetAvailability(runtime)?.status !== 'unavailable')

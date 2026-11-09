@@ -319,6 +319,22 @@ Successful legacy bootstrap, account additions, and default changes remove the
 journal last; a failed operation restores both files and the previous in-memory
 routing mode/map.
 
+Several processes can share one profile (another worktree, port, or install),
+and each holds the routing table it loaded at startup. A mutation therefore
+writes only its own change: inside the journal it re-reads
+`config.json#accountRouting` and applies the hostnames it added, removed, or
+reassigned, every hostname of a target it removed, and the base hostname or
+default account only where it changed them
+(`rebaseAccountRoutingUpdate` in `src/lib/account-routing.ts`). Entries another
+process saved survive, so an M365 target registered in one process is not
+dropped by a default switch in another. When the result no longer validates
+against the stored credentials (for example, both processes registered the
+M365 target on different hostnames, or one hostname to different targets),
+the mutation answers `409` (a Dashboard account addition reports it as the
+failed session's message) and leaves the files unchanged; restart the process
+to load the saved routing. The process
+does not adopt the other process's entries until it restarts.
+
 ## CLI Arguments → Runtime Settings
 
 The `start` command maps CLI flags onto `authStore` and the upstream queue:
