@@ -30,6 +30,13 @@ The M365 target is the exception: because the gateway serves a narrow catalog,
 catalog before strategy selection. The mapping is per target; it never turns
 into a process-wide fallback switch.
 
+`getEffectiveModelFallbackConfig()` in `src/lib/model-resolver.ts` owns the
+family fallbacks of the current target: `M365_FALLBACKS` on M365 (the table
+`rewriteModel` maps onto, ignoring `MODEL_FALLBACK_*` and `modelFallback`),
+otherwise the configuration below. The Chat-adapter fallback, the startup
+banner, and the Dashboard Behavior view all read it, so what they show is what
+requests get.
+
 ### Chat-Adapter Family Fallback
 
 Claude family fallback has a narrower scope: it belongs to the Anthropic ->
@@ -167,9 +174,11 @@ the Chat Completions strategy rejects the format with `400` instead of silently
 dropping it.
 
 Priority order otherwise remains native Messages, then Responses translation,
-then Chat Completions. The last entry is a strategy fallback, not proof that
-the chosen model actually advertises `/chat/completions`; upstream can still
-reject an unsupported or unknown model.
+then Chat Completions. `resolveMessagesStrategyName()` is the only place that
+order lives: each registry entry's `canHandle` asks it, and so do the overload
+fallback eligibility check and the Dashboard. The last entry is a strategy
+fallback, not proof that the chosen model actually advertises
+`/chat/completions`; upstream can still reject an unsupported or unknown model.
 
 ### Responses Strategy Selection
 

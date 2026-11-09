@@ -12,7 +12,8 @@ import {
 import { applyGheDomain } from '~/clients/ghe-domain'
 import { normalizeAccountName } from '~/lib/account-routing'
 import { setupCopilotToken } from '~/lib/token'
-import { createAccountRuntime, runWithAccountRuntime } from '~/state'
+import { runWithAccountRuntime } from '~/state'
+import { createTargetRuntime } from './target-runtime'
 
 interface DeviceAuthenticationClient {
   getDeviceCode: () => Promise<DeviceCodeResponse>
@@ -73,9 +74,10 @@ export async function beginAccountDeviceAuthentication(
   completion: Promise<AuthenticatedAccount>
 }> {
   const dependencies = { ...defaultDependencies, ...dependencyOverrides }
-  const runtime = createAccountRuntime(
+  const runtime = createTargetRuntime(
     normalizeAccountName(options.accountName),
-    options.authDefaults,
+    'github',
+    { auth: options.authDefaults },
   )
   applyGheDomain(runtime.auth, undefined, options.gheDomain)
 

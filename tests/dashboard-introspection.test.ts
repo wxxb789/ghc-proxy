@@ -4,6 +4,7 @@ import type { CopilotUsageResponse, Model } from '~/types'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
+import { M365_MODELS } from '~/clients/m365-upstream'
 import { UpstreamRequestQueue } from '~/clients/upstream-queue'
 import { getCachedConfig } from '~/lib/config'
 import {
@@ -12,6 +13,7 @@ import {
   getDashboardBehavior,
   getDashboardModels,
 } from '~/routes/dashboard/handler'
+import { resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
 import {
   authStore,
   createAccountRuntime,
@@ -19,6 +21,7 @@ import {
   runtimeStore,
   runWithAccountRuntime,
 } from '~/state'
+import { rewriteModel } from '~/transform/model-rewrite'
 
 import {
   buildGptModel,
@@ -118,6 +121,29 @@ describe('dashboard model introspection', () => {
     })
   })
 
+  test('reports Messages structured output only when the Messages strategy can serve it', () => {
+    const chatOnly = buildModel('claude-chat-only', {
+      supported_endpoints: ['/chat/completions'],
+      capabilities: {
+        ...buildModel('chat-only').capabilities,
+        supports: { tool_calls: true, structured_outputs: true },
+      },
+    })
+    modelCache.cacheModels(buildModelsResponse(chatOnly))
+    const formatRequest = {
+      model: chatOnly.id,
+      max_tokens: 16,
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      output_config: { format: { type: 'json_schema' as const, schema: { type: 'object' } } },
+    }
+
+    expect(resolveMessagesStrategyName(chatOnly, formatRequest)).toBe('chat-completions')
+    expect(getDashboardModels()[0]?.effective).toMatchObject({
+      nativeStructuredOutput: true,
+      messagesStructuredOutput: false,
+    })
+  })
+
   test('projects only allowlisted upstream model metadata', () => {
     const model = buildGptModel('gpt-5.6-sol', {
       supported_endpoints: ['/responses'],
@@ -195,6 +221,31 @@ describe('dashboard behavior introspection', () => {
     })
     expect(behavior.effects.find(effect => effect.id === 'responses.parameter_filter'))
       .toMatchObject({ count: 3 })
+  })
+})
+
+const M365_CATALOG_WITHOUT_OPUS_5_5 = {
+  ...M365_MODELS,
+  data: M365_MODELS.data.filter(model => model.id !== 'claude-opus-5.5'),
+}
+
+describe.each([
+  { name: 'a configured override', catalog: M365_MODELS, modelFallback: { claudeOpus: 'claude-opus-override' } },
+  { name: 'a catalog without the current default', catalog: M365_CATALOG_WITHOUT_OPUS_5_5, modelFallback: undefined },
+])('dashboard family fallbacks on M365 with $name', ({ catalog, modelFallback }) => {
+  test('show the family rewrite requests actually get', () => {
+    getCachedConfig().modelFallback = modelFallback
+    const runtime = createAccountRuntime('m365', { upstream: 'm365' })
+    runtime.models.cacheModels(catalog)
+
+    runWithAccountRuntime(runtime, () => {
+      const { familyFallbacks } = getDashboardBehavior().modelRouting
+      expect(familyFallbacks).toEqual({
+        claudeOpus: rewriteModel('claude-opus-4-1').model,
+        claudeSonnet: rewriteModel('claude-sonnet-4-1').model,
+        claudeHaiku: rewriteModel('claude-haiku-4-1').model,
+      })
+    })
   })
 })
 

@@ -28,6 +28,16 @@ preserve single-account behavior. With routing enabled, `src/server.ts` binds a
 request to exactly one account before CORS or route handling; an unknown
 hostname returns `421` before any upstream work.
 
+The account manager (`src/accounts/manager.ts`) owns the routing table it
+manages: its constructor publishes that table (`configureAccountRuntimes`), or
+keeps routing disabled until a legacy bootstrap commits, and later mutations
+publish through its single commit path. Callers therefore never publish the
+same table separately. Routed startup builds the manager only after every
+target has warmed up, because warm-up runs inside each target's own runtime
+context and reads no process-wide table, and no listener exists yet. An
+M365-only process has no manager and publishes its fixed one-target table
+directly.
+
 The client/queue factory (`createCopilotClient`, `getClientConfig`,
 `cacheModels`, `cacheVSCodeVersion`, `configureUpstreamRequestQueue`) lives in
 `src/clients/factory.ts`. It creates one upstream queue per account runtime so

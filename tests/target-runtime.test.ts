@@ -6,6 +6,7 @@ import { createTargetRuntime, initializeM365Target } from '~/accounts/target-run
 import { acquireM365Credential } from '~/clients/m365-credential'
 import { M365_MODELS } from '~/clients/m365-upstream'
 import { compileAccountRouting } from '~/lib/account-routing'
+import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
 import { getM365DashboardState } from '~/routes/dashboard/m365'
 import {
@@ -50,6 +51,40 @@ describe('target runtime factory', () => {
     expect(runtime.auth.mscAuthExe).toBe('C:/tools/msc-auth.exe')
     expect(runtime.auth.mscAuthAccount).toBe('home-account-id')
     expect(runtime.auth.mscAuthUpn).toBe('operator@example.com')
+  })
+
+  test('keeps the M365 identity supplied through auth defaults', () => {
+    const runtime = createTargetRuntime('m365', 'm365', {
+      auth: {
+        mscAuthExe: 'X.exe',
+        mscAuthAccount: 'cli-account',
+        mscAuthUpn: 'auth@example.com',
+        m365Endpoint: 'https://custom.example.com/api',
+      },
+    })
+
+    expect(runtime.auth).toMatchObject({
+      upstream: 'm365',
+      mscAuthExe: 'X.exe',
+      mscAuthAccount: 'cli-account',
+      mscAuthUpn: 'auth@example.com',
+      m365Endpoint: 'https://custom.example.com/api',
+    })
+  })
+
+  test('defaults the broker email and endpoint from the saved M365 settings', () => {
+    const config = getCachedConfig()
+    const saved = config.m365
+    config.m365 = { upn: 'saved@example.com', endpoint: 'https://saved.example.com/api' }
+    try {
+      const runtime = createTargetRuntime('m365', 'm365')
+
+      expect(runtime.auth.mscAuthUpn).toBe('saved@example.com')
+      expect(runtime.auth.m365Endpoint).toBe('https://saved.example.com/api')
+    }
+    finally {
+      config.m365 = saved
+    }
   })
 
   test('initializes the catalog and reports the target ready', async () => {

@@ -197,12 +197,21 @@ or serializing request bodies.
 The dashboard reuses the same runtime sources as request execution:
 
 - `modelCache` predicates for endpoint and effective capability checks
-- `resolveMessagesStrategyName()` for Messages strategy selection
+- `resolveMessagesStrategyName()` for Messages strategy selection, and
+  `canServeMessagesOutputFormat()` (the same decision run on a bare
+  `output_config.format` probe) for `messagesStructuredOutput`
 - `resolveStrippedResponsesParams()` for parameter filtering
-- `getModelFallbackConfig()` for environment/config/default precedence
+- `getEffectiveModelFallbackConfig()` for the family fallbacks the current
+  target applies (`M365_FALLBACKS` on M365, otherwise environment/config/default
+  precedence)
 - `configStore` getters for rewrites, compact routing, overload fallbacks,
   context management, and tool compatibility
 - `UpstreamRequestQueue.snapshot()` for active and pending work
+
+`messagesStructuredOutput` is a per-model answer for a bare `{ type, schema }`
+format. A format carrying `description` or `strict` cannot stay on native
+Messages, so a model without `/responses` still rejects it; that
+payload-dependent case is a documented limitation of the per-model flag.
 
 Upstream model records remain unchanged. The dashboard creates a separate
 effective projection so upstream capability provenance is not lost.

@@ -35,7 +35,14 @@ export interface StrategyContext {
   modelMapping: ModelMappingInfo
 }
 
-export function canUseNativeMessages(
+// Structured output is served natively when the model advertises
+// `structured_outputs` and the format carries nothing native drops — probed
+// 2026-07-26 (`scripts/probes/messages/output-format.ts`): 6 of 8 Messages
+// models return 200 for a bare `{ type, schema }`. The two that fail
+// (claude-opus-4.7, claude-sonnet-4.6) fail on a Vertex organization policy
+// rather than a protocol limit — they advertise the capability, so
+// `supportsStructuredOutputs` excludes them by ID rather than by flag.
+function canUseNativeMessages(
   model: Model | undefined,
   payload?: AnthropicMessagesPayload,
 ): boolean {
@@ -56,16 +63,27 @@ export function resolveMessagesStrategyName(
   return 'chat-completions'
 }
 
+const BARE_OUTPUT_FORMAT_PROBE: AnthropicMessagesPayload = {
+  model: '',
+  max_tokens: 1,
+  messages: [],
+  output_config: { format: { type: 'json_schema', schema: { type: 'object' } } },
+}
+
+/**
+ * Whether `/v1/messages` serves a bare `output_config.format` (`{ type, schema }`)
+ * for this model: the Chat Completions fallback rejects every format. A format
+ * carrying `description` or `strict` additionally keeps native Messages out, so
+ * a native-only model can still reject one — a payload-dependent case this
+ * per-model answer does not cover.
+ */
+export function canServeMessagesOutputFormat(model: Model | undefined): boolean {
+  return resolveMessagesStrategyName(model, BARE_OUTPUT_FORMAT_PROBE) !== 'chat-completions'
+}
+
 const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
   name: 'native-messages',
-  // Structured output is served natively when the model advertises
-  // `structured_outputs` and the format carries nothing native drops — probed
-  // 2026-07-26 (`scripts/probes/messages/output-format.ts`): 6 of 8 Messages
-  // models return 200 for a bare `{ type, schema }`. The two that fail
-  // (claude-opus-4.7, claude-sonnet-4.6) fail on a Vertex organization policy
-  // rather than a protocol limit — they advertise the capability, so
-  // `supportsStructuredOutputs` excludes them by ID rather than by flag.
-  canHandle: (model, ctx) => canUseNativeMessages(model, ctx?.anthropicPayload),
+  canHandle: (model, ctx) => resolveMessagesStrategyName(model, ctx?.anthropicPayload) === 'native-messages',
   async execute(ctx) {
     if (convertEnabledThinkingToAdaptive(ctx.anthropicPayload, ctx.selectedModel))
       runtimeStore.requests.recordEffect(ctx.requestId, 'messages.thinking_adapted')
@@ -111,7 +129,7 @@ const nativeMessagesEntry: StrategyEntry<StrategyContext> = {
 
 const responsesApiEntry: StrategyEntry<StrategyContext> = {
   name: 'responses-api',
-  canHandle: model => modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT),
+  canHandle: (model, ctx) => resolveMessagesStrategyName(model, ctx?.anthropicPayload) === 'responses-api',
   async execute(ctx) {
     const responsesPayload = withTranslationErrors(() =>
       translateAnthropicToResponsesPayload(ctx.anthropicPayload, {
@@ -142,7 +160,7 @@ const responsesApiEntry: StrategyEntry<StrategyContext> = {
 
 const chatCompletionsEntry: StrategyEntry<StrategyContext> = {
   name: 'chat-completions',
-  canHandle: () => true,
+  canHandle: (model, ctx) => resolveMessagesStrategyName(model, ctx?.anthropicPayload) === 'chat-completions',
   async execute(ctx) {
     if (hasOutputConfigFormat(ctx.anthropicPayload)) {
       throwInvalidRequestError(

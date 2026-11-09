@@ -7,12 +7,6 @@ export type UpstreamKind = 'github' | 'm365'
 export interface ClientAuth {
   githubToken?: string
   copilotToken?: string
-  copilotTokenExpiresAt?: number
-  copilotTokenLastRefreshAt?: number
-  copilotTokenLastRefreshSucceeded?: boolean
-  mscAuthUsername?: string
-  mscAuthTenant?: string
-  copilotApiBase?: string
 }
 
 export interface ClientConfig {
@@ -29,8 +23,9 @@ export interface ClientConfig {
 export interface ClientDeps {
   fetch?: typeof fetch
   /**
-   * The route target whose `auth` the client uses. The `m365` upstream acquires
-   * its credential through it and records the target's availability on it.
+   * The route target whose `auth` the client uses. The `m365` upstream requires
+   * it at construction, acquires its credential through it, and records the
+   * target's availability on it.
    */
   runtime?: AccountRuntime
   requestQueue?: UpstreamRequestQueue

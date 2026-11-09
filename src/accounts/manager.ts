@@ -31,7 +31,7 @@ import {
 } from '~/lib/account-routing'
 import { getCachedConfig, writeConfigField } from '~/lib/config'
 import { removeGitHubCredential, writeNewGitHubCredential } from '~/lib/credentials'
-import { M365_DEFAULT_ENDPOINT, m365EndpointSchema } from '~/lib/m365-endpoints'
+import { m365EndpointSchema } from '~/lib/m365-endpoints'
 import { PATHS } from '~/lib/paths'
 import { configureAccountRuntimes, disableAccountRouting, runWithAccountRuntime } from '~/state'
 import {
@@ -246,6 +246,7 @@ export class AccountManager {
       this.refreshCleanups.set(name, cleanup)
     }
     this.assertManagedRoutingInvariant()
+    this.republishCommittedTable()
   }
 
   getAccountSnapshot(): AccountManagementSnapshot {
@@ -539,8 +540,11 @@ export class AccountManager {
       const current = routingConfig(this.routing)
       const hostname = parsedInput.hostname ?? M365_DEFAULT_HOSTNAME
       this.assertHostnameAvailable(hostname, RESERVED_M365_TARGET)
-      const saved = getCachedConfig().m365
-      const account = parsedInput.account === undefined ? saved?.account : parsedInput.account ?? undefined
+      // A non-empty Dashboard account wins, then --msc-auth-account, then the
+      // saved account unless the input cleared it (`null`); the broker email
+      // applies only when none is set.
+      const account = parsedInput.account || this.authDefaults.mscAuthAccount
+        || (parsedInput.account === undefined ? getCachedConfig().m365?.account : undefined)
       const nextConfig: AccountRoutingConfig = {
         ...current,
         hostnames: { ...current.hostnames, [hostname]: RESERVED_M365_TARGET },
@@ -548,9 +552,7 @@ export class AccountManager {
       const nextRouting = compileAccountRouting(nextConfig, this.githubAccountNames())
       const runtime = createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
         m365Endpoint: parsedInput.endpoint,
-        mscAuthExe: this.authDefaults.mscAuthExe,
         mscAuthAccount: account,
-        mscAuthUpn: saved?.upn,
         auth: this.authDefaults,
       })
       const nextRuntimes = new Map(this.runtimes)
@@ -615,10 +617,6 @@ export class AccountManager {
         applyRuntime => persist({ routing: nextConfig }, applyRuntime),
         { publish: 'after-commit', failureMessage: 'Could not remove the M365 target.' },
       )
-
-      const cleanup = this.refreshCleanups.get(RESERVED_M365_TARGET)
-      this.refreshCleanups.delete(RESERVED_M365_TARGET)
-      cleanup?.()
     })
   }
 
@@ -651,8 +649,8 @@ export class AccountManager {
       const current = routingConfig(this.routing)
       const account = parsedInput.account === undefined
         ? currentRuntime.auth.mscAuthAccount
-        : parsedInput.account ?? undefined
-      const endpoint = parsedInput.endpoint ?? currentRuntime.auth.m365Endpoint ?? M365_DEFAULT_ENDPOINT
+        : parsedInput.account || this.authDefaults.mscAuthAccount
+      const endpoint = parsedInput.endpoint ?? currentRuntime.auth.m365Endpoint
       const hostname = parsedInput.hostname === undefined
         ? dedicatedHostnamesByAccount(this.routing).get(RESERVED_M365_TARGET)!
         : parsedInput.hostname
@@ -669,10 +667,8 @@ export class AccountManager {
       const runtimeChanged = accountChanged || endpoint !== currentRuntime.auth.m365Endpoint
       const runtime = runtimeChanged
         ? createTargetRuntime(RESERVED_M365_TARGET, 'm365', {
-            mscAuthExe: this.authDefaults.mscAuthExe,
             m365Endpoint: endpoint,
             mscAuthAccount: account,
-            mscAuthUpn: getCachedConfig().m365?.upn,
             auth: this.authDefaults,
           })
         : currentRuntime
@@ -851,7 +847,11 @@ export class AccountManager {
     this.runtimes = next.runtimes
   }
 
-  /** Restores the process-wide routing state the manager last committed. */
+  /**
+   * Publishes the manager's committed table as the process-wide routing state:
+   * at construction, so the owner never serves a table it has not published,
+   * and after a failed commit, to restore it.
+   */
   private republishCommittedTable(): void {
     // Until legacy bootstrap commits, the process serves the legacy runtime
     // without a routing table, so that is the state to restore.

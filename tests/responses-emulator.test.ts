@@ -109,7 +109,7 @@ describe('responses official emulator', () => {
       input: 'continue',
     })
 
-    expect(prepared.effectiveInputItems).toEqual([
+    expect(prepared.upstreamPayload.input).toEqual([
       { type: 'message', role: 'user', content: 'hello' },
       {
         type: 'message',

@@ -15,6 +15,12 @@ Tracked items for future work. Items are roughly ordered by priority.
   - Reproduced 2026-11-08 with a scratch test during the architecture review. Impact is bounded: one queue per admin mutation, and the only production `configureUpstreamRequestQueue()` call (`src/start.ts`) runs at startup before any queue exists.
   - Local fix candidates: build each queue from the current options and track queues weakly, or release a runtime's queue when the account mutation disposes the runtime.
 
+- [ ] **Dashboard reports Messages structured output for models that reject `output_config`**
+  - `canServeMessagesOutputFormat()` (`src/routes/messages/strategy-registry.ts`) asks the Messages strategy decision, but `canUseNativeMessages` does not check `modelCache.supportsOutputConfig()`. For `MODELS_REJECTING_OUTPUT_CONFIG` models (`claude-sonnet-4.5`, `claude-haiku-4.5`) that advertise `/v1/messages` and `structured_outputs`, `sanitizeOutputConfig` (`src/transform/sanitize.ts`) deletes the whole `output_config`, format included, yet the Dashboard shows structured output as available. Pre-existing; found during the 2026-11-09 architecture-review fixes. Fixing it changes Messages routing, so decide the intended route first.
+
+- [ ] **Device auth accepts the reserved account name `m365`**
+  - `AccountManager.startAccountAuthentication` does not reject `m365`; only `writeNewGitHubCredential` (`src/lib/credentials.ts`) refuses it at persist time. With a persistence double that writes no credential, a GitHub runtime ends up under the M365 kind. Validation gap, found 2026-11-09.
+
 ## Upstream Probe Refresh
 
 - [ ] **Re-probe `/responses` + `/chat/completions` (gpt/gemini) upstream surface**
@@ -102,3 +108,6 @@ Recorded during other work; revalidate before removing.
 
 - [ ] **`runWithAccountRuntime` wrappers around `initializeM365Target` are redundant**
   - Since `acquireM365Credential()` writes to the runtime it is given and the client receives its runtime explicitly, `initializeM365Target(runtime)` no longer reads the ambient request runtime (`fetchM365Models` takes the token and endpoint as arguments). The wrappers in `AccountManager.registerM365Target` / `configureM365Target` warm-up (`src/accounts/manager.ts`) and in the M365 startup path (`src/start.ts`) can likely be dropped; revalidate that nothing else under them reads `getCurrentAccountRuntime()` first.
+
+- [ ] **`TargetRuntimeOptions.mscAuthExe` / `mscAuthUpn` have no production caller**
+  - Since `createTargetRuntime` falls back to `auth` fields and defaults the UPN from config (`src/accounts/target-runtime.ts`), no `src/` caller passes these two options; only `tests/m365-endpoints.test.ts`, `tests/msc-auth.test.ts`, and `tests/target-runtime.test.ts` do. Dropping them means passing the values through `auth` in those tests.

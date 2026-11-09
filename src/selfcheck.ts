@@ -923,7 +923,6 @@ async function probeDashboardNodeQuotaProjection(): Promise<void> {
   const app = createRuntimeApp().use(createDashboardRoutes({ accountManager: manager, quotaCache }))
   let listener: RuntimeListener | undefined
 
-  configureAccountRuntimes(routing, [runtime])
   try {
     listener = await listenRuntimeServer(app, { hostname: '127.0.0.1', port: 0 })
     const port = listener.port

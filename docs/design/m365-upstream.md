@@ -70,7 +70,8 @@ runtime-neutral and talks to it over stdout JSON.
 record the target as `unavailable` with a bounded cause. The client factory
 passes the route target's runtime to the client, so credential and
 availability writes land on the target that built the client, not on the
-ambient request runtime.
+ambient request runtime. Constructing an M365 `CopilotClient` without that
+runtime throws, so a misbuilt client fails before any request is sent.
 
 | Property | Value |
 | --- | --- |
@@ -154,10 +155,22 @@ planned for minting gateway tokens for an MSA.
 
 - `config.json#m365.account` stores the broker **home account id**
   (`uid.utid`), which stays unambiguous when one UPN exists in several tenants.
-- Precedence: `--msc-auth-account` → `config.json#m365.account` →
+- Startup precedence: `--msc-auth-account` → `config.json#m365.account` →
   `config.json#m365.upn` → a unique broker account in the authority tenant, or
   the only broker account. There is no hard-coded email or substring fallback;
   an ambiguous selector requires a home account ID.
+- Dashboard registration and reconfiguration: a non-empty account chosen in
+  the Dashboard wins for the running process and is saved as `m365.account`,
+  so a later restart with `--msc-auth-account` still uses the CLI value.
+  Registering with the account left blank uses `--msc-auth-account` when it is
+  set; a blank registration also clears the saved `m365.account`, and the CLI
+  value is never written to `config.json`. Clearing the selected account later
+  returns to `--msc-auth-account`.
+- Every M365 runtime (startup and Dashboard) is built by `createTargetRuntime`
+  (`src/accounts/target-runtime.ts`). Explicit arguments win; otherwise the
+  helper path and account come from the process auth defaults (which carry
+  `--msc-auth-exe` and `--msc-auth-account`), and the endpoint and broker email
+  fall back to `config.json#m365`.
 - The Dashboard displays the selected email and Microsoft tenant ID instead of
   a GitHub tenant. It discovers broker accounts on the first Accounts visit and
   on explicit probes, not on every Live poll. The first visit includes a page
@@ -223,17 +236,47 @@ target rather than the process:
 - When M365 is the only target (`--upstream m365`), the listener still binds
   `127.0.0.1` only.
 
-An unavailable target answers 503 with its recorded cause; dashboard paths and
-the target's own model list are not inference and continue to their own
-handlers.
+After the loopback check, `enforceTargetGates` (`src/lib/target-gates.ts`)
+applies an allow-list to the path, with one trailing slash dropped:
+
+| Path | Decision |
+|------|----------|
+| `/v1/messages`, `/v1/messages/count_tokens` | Inference: admitted while the target is available |
+| `/`, `/health`, `/models`, `/v1/models` | Not inference: continue to their handlers |
+| `/dashboard`, `/dashboard/...` | Not inference: continue to the Dashboard guard |
+| Anything else | `400` naming `/v1/messages` |
+
+"Anything else" covers Chat Completions, Responses, Embeddings, Decisions
+(`/decisions`, `/v1/decisions`), unknown paths, and the proxy-specific
+`/token` and `/usage`. On this target the stored token is the user's personal
+Microsoft delegated credential, so `/token` would hand it to any local caller,
+and `/usage` would call GitHub's quota endpoint without a GitHub credential
+(the M365 target has none). A route added to `src/server.ts` later is refused
+here until it is added to the allow-list on purpose; `tests/target-gates.test.ts`
+checks every registered route of the real server against the list.
+
+An unavailable target answers Messages requests with 503 and its recorded
+cause, after one acquisition retry so a recovered broker restores service
+without a restart.
+
+### Error dialect
+
+Refusals answered before a route handler runs pick their envelope from the
+path: the Messages family gets the Anthropic envelope
+(`{ "type": "error", "error": { … } }`), every other path the OpenAI one
+(`{ "error": { … } }`). `pathRefusalResponse` in `src/lib/error-dialect.ts`
+owns that rule; the gate's 403, 400, and 503 and the unknown-hostname 421 in
+`src/server.ts` all use it, so an OpenAI-facing path never receives an
+Anthropic envelope. The path is normalized once (one trailing slash dropped)
+before the rule applies, so `/v1/messages//` is not a Messages path.
 
 ## Known limits
 
 - GitHub account management and GHE options remain GitHub-specific; they are
   not used here.
-- Only the Messages endpoint family is served on this target. Chat Completions,
-  Responses, and Embeddings requests are refused with an error naming
-  `/v1/messages` instead of being forwarded.
+- Only the Messages endpoint family is served for inference on this target.
+  Other inference endpoints, and every path outside the allow-list above, are
+  refused with an error naming `/v1/messages` instead of being forwarded.
 - Unknown model names are not rejected up front; the gateway answers
   `403 model_not_allowed`, which the proxy returns unchanged (probed with
   `claude-unknown-1`).

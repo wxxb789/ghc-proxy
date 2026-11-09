@@ -52,9 +52,7 @@ function initialState() {
       'account1.localhost': 'account1',
     },
   }, ['default', 'account1'])
-  const runtimes = [defaultRuntime, account1Runtime]
-  configureAccountRuntimes(routing, runtimes)
-  return { routing, runtimes }
+  return { routing, runtimes: [defaultRuntime, account1Runtime] }
 }
 
 function bootstrapState(accountName = 'default') {
@@ -181,6 +179,21 @@ describe('AccountManager', () => {
       .toBe(421)
     expect(await (await app.handle(new Request('http://personal.localhost/token'))).json())
       .toEqual({ token: 'copilot-default' })
+  })
+
+  test('publishes the table it owns when constructed', () => {
+    const account1 = runtime('account1', 'bob')
+    const routing = compileAccountRouting({
+      baseHostname: 'localhost',
+      defaultAccount: 'default',
+      hostnames: { 'default.localhost': 'default', 'account1.localhost': 'account1' },
+    }, ['default', 'account1'])
+
+    const manager = new AccountManager({ routing, runtimes: [runtime('default', 'alice'), account1] }, dependencies())
+
+    expect(manager.getAccountSnapshot().accounts.find(account => account.name === 'account1')?.hostname)
+      .toBe('account1.localhost')
+    expect(resolveRequestAccountRuntime(new Request('http://account1.localhost/token'))).toBe(account1)
   })
 
   test('lists routed account descriptors and stable dedicated hostnames', () => {
@@ -942,7 +955,6 @@ describe('account removal', () => {
         accountRouting: routingConfig,
         m365: { account: 'unchanged-broker' },
       }))
-      configureAccountRuntimes(routing, [github, m365])
 
       await manager.removeAccount('account1')
 
@@ -998,6 +1010,50 @@ describe('M365 target mutations', () => {
     expect(snapshot.accounts.map(account => account.name)).toEqual(['account1', 'default', 'm365'])
     expect(snapshot.accounts.find(account => account.name === 'm365')?.hostname)
       .toBe('m365.localhost')
+  })
+
+  describe('broker account precedence at registration', () => {
+    let savedM365: ConfigFile['m365']
+
+    beforeEach(() => {
+      savedM365 = getCachedConfig().m365
+      getCachedConfig().m365 = { account: 'saved-account' }
+    })
+
+    afterEach(() => {
+      getCachedConfig().m365 = savedM365
+    })
+
+    test.each([
+      { name: 'an omitted account uses --msc-auth-account', cli: 'cli-account', input: undefined, expected: 'cli-account' },
+      { name: 'a blank account uses --msc-auth-account', cli: 'cli-account', input: null, expected: 'cli-account' },
+      { name: 'an explicit account beats --msc-auth-account', cli: 'cli-account', input: 'dashboard-account', expected: 'dashboard-account' },
+      { name: 'an omitted account uses the saved account', cli: undefined, input: undefined, expected: 'saved-account' },
+      { name: 'a blank account clears the saved account', cli: undefined, input: null, expected: undefined },
+    ])('$name', async ({ cli, input, expected }) => {
+      const manager = new AccountManager(
+        { ...initialState(), authDefaults: { mscAuthAccount: cli } },
+        m365Dependencies(),
+      )
+
+      await manager.registerM365Target({ account: input })
+
+      const target = manager.getAccountSnapshot().accounts.find(account => account.name === 'm365')
+      expect(target?.runtime.auth.mscAuthAccount).toBe(expected)
+    })
+
+    test('clearing the Dashboard account returns to --msc-auth-account', async () => {
+      const manager = new AccountManager(
+        { ...initialState(), authDefaults: { mscAuthAccount: 'cli-account' } },
+        m365Dependencies(),
+      )
+      await manager.registerM365Target({ account: 'dashboard-account' })
+
+      await manager.configureM365Target({ account: null })
+
+      const target = manager.getAccountSnapshot().accounts.find(account => account.name === 'm365')
+      expect(target?.runtime.auth.mscAuthAccount).toBe('cli-account')
+    })
   })
 
   test('refuses a duplicate registration', async () => {
@@ -1174,7 +1230,6 @@ describe('M365 target mutations', () => {
         }
         const routing = compileAccountRouting(routingConfig, ['default'])
         const runtimes = registered ? [github, m365] : [github]
-        configureAccountRuntimes(routing, runtimes)
         await fs.writeFile(paths.CONFIG_PATH, JSON.stringify({ accountRouting: routingConfig }))
         const originalConfig = await fs.readFile(paths.CONFIG_PATH, 'utf8')
         const persistence = createAccountManagerPersistence(paths)

@@ -4,10 +4,10 @@ import type { AccountRuntime } from '~/state/account-runtime'
 import type { CopilotUsageResponse, Model, QuotaDetail } from '~/types'
 
 import { getUpstreamRequestQueueSnapshot } from '~/clients/factory'
-import { getModelFallbackConfig } from '~/lib/model-resolver'
+import { getEffectiveModelFallbackConfig } from '~/lib/model-resolver'
 import { PROXY_EFFECT_DEFINITIONS } from '~/observability/effects'
 import { chatCompletionsStrategyRegistry } from '~/routes/chat-completions/strategy-registry'
-import { defaultStrategyRegistry, resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
+import { canServeMessagesOutputFormat, defaultStrategyRegistry, resolveMessagesStrategyName } from '~/routes/messages/strategy-registry'
 import { resolveResponsesStrategyName } from '~/routes/responses/capabilities'
 import { responsesStrategyRegistry } from '~/routes/responses/strategy-registry'
 import { handleUsageCore } from '~/routes/usage/handler'
@@ -191,10 +191,6 @@ export function getDashboardModelCatalog(
 export function getDashboardBehavior() {
   const requestSummary = runtimeStore.requests.summary()
   const rewrites = configStore.getModelRewrites().map(rule => ({ ...rule }))
-  const cachedModels = modelCache.getModels()
-  const knownModelIds = cachedModels
-    ? new Set(cachedModels.data.map(model => model.id))
-    : undefined
   const effects = Object.entries(PROXY_EFFECT_DEFINITIONS).map(([id, definition]) => ({
     id,
     ...definition,
@@ -209,7 +205,7 @@ export function getDashboardBehavior() {
         enabled: configStore.isCompactSmallModelEnabled(),
         smallModel: configStore.getSmallModel(),
       },
-      familyFallbacks: getModelFallbackConfig(knownModelIds),
+      familyFallbacks: getEffectiveModelFallbackConfig(),
       overloadFallbacks: configStore.getOverloadFallbacks(),
     },
     strategies: {
@@ -356,7 +352,7 @@ function projectModel(model: Model) {
       defaultResponsesStrategy,
       outputConfig: modelCache.supportsOutputConfig(model),
       nativeStructuredOutput,
-      messagesStructuredOutput: nativeStructuredOutput || responsesAvailable,
+      messagesStructuredOutput: canServeMessagesOutputFormat(model),
       toolCalls: modelCache.supportsToolCalls(model),
       vision: modelCache.supportsVision(model),
       adaptiveThinking: modelCache.supportsAdaptiveThinking(model),
