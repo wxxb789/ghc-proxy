@@ -174,7 +174,14 @@ the Chat Completions strategy rejects the format with `400` instead of silently
 dropping it.
 
 Priority order otherwise remains native Messages, then Responses translation,
-then Chat Completions. `resolveMessagesStrategyName()` is the only place that
+then Chat Completions. A model advertising an Images endpoint but none of
+Messages, Responses, or Chat Completions is image-only: the resolver returns
+`unavailable`, the Dashboard displays its Images compatibility instead of chat
+parameters, and Chat Completions/Messages reject it with `400`. It cannot be an
+overload-fallback target for Messages. Models that also advertise a chat endpoint
+retain the normal strategy selection.
+
+`resolveMessagesStrategyName()` is the only place that
 order lives: each registry entry's `canHandle` asks it, and so do the overload
 fallback eligibility check and the Dashboard. The last entry is a strategy
 fallback, not proof that the chosen model actually advertises
@@ -218,6 +225,17 @@ an unknown model or a model with neither endpoint returns `400` before
 inference. There is no model
 fallback, overload fallback, or System One passthrough. See
 [Decisions API](decisions-api.md).
+
+### Images Admission
+
+`POST /images/generations`, `/v1/images/generations`, `/images/edits`, and
+`/v1/images/edits` use the common model resolver with compact routing disabled.
+An explicit model must resolve to a catalog entry advertising the exact upstream
+`/v1/images/generations` or `/v1/images/edits` endpoint. The catalog is loaded once
+when absent. Generation requires a model; edits may omit it or send JSON `null`,
+in which case the proxy preserves upstream default selection without guessing a
+local model. Images never fall back through Messages, Responses, or Chat
+Completions, and have no overload-model fallback.
 
 ## Small-Model Routing
 

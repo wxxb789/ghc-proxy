@@ -13,6 +13,7 @@ import { createCompletionRoutes } from './routes/chat-completions/route'
 import { createDashboardRoutes } from './routes/dashboard/route'
 import { createDecisionRoutes } from './routes/decisions/route'
 import { createEmbeddingRoutes } from './routes/embeddings/route'
+import { createImageRoutes } from './routes/images/route'
 import { createMessageRoutes } from './routes/messages/route'
 import { createModelRoutes } from './routes/models/route'
 import { createResponsesRoutes } from './routes/responses/route'
@@ -279,7 +280,7 @@ export function createServer(options?: ServerOptions) {
       accountManager: options?.accountManager,
       serverPort: options?.serverPort,
     }))
-    // Root-level routes: completions, decisions, models, embeddings, responses are
+    // Root-level routes: completions, decisions, models, embeddings, images, responses are
     // registered here for clients that omit the /v1 prefix. Token and usage routes
     // are root-only because they are proxy-specific endpoints, not part of any
     // upstream API spec.
@@ -287,6 +288,7 @@ export function createServer(options?: ServerOptions) {
     .use(createDecisionRoutes())
     .use(createModelRoutes())
     .use(createEmbeddingRoutes())
+    .use(createImageRoutes())
     .use(createResponsesRoutes())
     .use(createTokenRoute())
     .use(createUsageRoute())
@@ -299,6 +301,7 @@ export function createServer(options?: ServerOptions) {
         .use(createDecisionRoutes())
         .use(createModelRoutes())
         .use(createEmbeddingRoutes())
+        .use(createImageRoutes())
         .use(createResponsesRoutes())
         .use(createMessageRoutes())
     })

@@ -3,8 +3,9 @@ import type { PipelineResult } from '~/pipeline/runner'
 import type { ChatCompletionsPayload } from '~/types'
 
 import consola from 'consola'
+import { throwInvalidRequestError } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
-import { runtimeStore } from '~/state'
+import { modelCache, runtimeStore } from '~/state'
 import { applyChatCompletionsTokenParam } from '~/transform/parameter-filter'
 
 import { checkChatCompletionsFallbackTarget } from './fallback-eligibility'
@@ -36,6 +37,8 @@ export async function handleCompletionCore(
         return payload
       },
       afterTransform({ payload, selectedModel }) {
+        if (modelCache.isImageOnlyModel(selectedModel))
+          throwInvalidRequestError('This model only supports Images. Use /v1/images/generations or /v1/images/edits.', 'model')
         if (payload.max_tokens == null) {
           payload.max_tokens = selectedModel?.capabilities.limits.max_output_tokens
           consola.debug('Set max_tokens to:', JSON.stringify(payload.max_tokens))

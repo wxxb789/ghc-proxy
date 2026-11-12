@@ -1,4 +1,5 @@
 export * from './copilot'
 export * from './decisions'
 export * from './github'
+export * from './images'
 export * from './responses'

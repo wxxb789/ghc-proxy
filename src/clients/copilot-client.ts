@@ -12,6 +12,9 @@ import type {
   DecisionsRequest,
   EmbeddingRequest,
   EmbeddingResponse,
+  ImageEditRequest,
+  ImageGenerationRequest,
+  ImageResponse,
   ModelsResponse,
   ResponseDeletionResult,
   ResponseInputItemsListParams,
@@ -38,7 +41,7 @@ export type UpstreamErrorMapper = (message: string, response: Response) => Promi
 
 interface RequestOptions {
   method?: string
-  body?: string
+  body?: string | FormData
   signal?: AbortSignal
   headerOptions?: CopilotHeaderOptions
   extraHeaders?: Record<string, string>
@@ -112,6 +115,10 @@ export class CopilotClient {
       ? { ...copilotHeaders(this.auth, this.config, options.headerOptions), ...options.extraHeaders }
       : copilotHeaders(this.auth, this.config, options.headerOptions)
 
+    // Fetch must generate the multipart boundary together with the body.
+    if (options.body instanceof FormData)
+      delete headers['content-type']
+
     const url = `${copilotBaseUrl(this.config)}${path}`
     const request = {
       url,
@@ -172,13 +179,16 @@ export class CopilotClient {
   /** POST payload, return parsed JSON or SSE stream based on payload.stream */
   private async requestStreamable<T>(
     path: string,
-    payload: { stream?: boolean | null, model?: unknown },
+    payload: { stream?: boolean | null, model?: unknown } | FormData,
     errorMessage: string,
     options?: Omit<RequestOptions, 'method' | 'body' | 'retryable'>,
   ) {
+    const multipart = payload instanceof FormData
+    const model = multipart ? payload.get('model') : payload.model
+    const stream = multipart ? payload.get('stream') === 'true' : payload.stream === true
     const { response, release } = await this.request(path, errorMessage, {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: multipart ? payload : JSON.stringify(payload),
       // Every completion endpoint routes through here, and each one bills a
       // generation. An upstream 5xx does not mean the request was refused —
       // it may have been fully processed before failing — so replaying one
@@ -187,11 +197,11 @@ export class CopilotClient {
       // excluded from `options` above so a future caller cannot widen this
       // back to the full transient set without saying so here.
       retryable: 'capacity',
-      effectiveModel: typeof payload.model === 'string' ? payload.model : undefined,
+      effectiveModel: typeof model === 'string' ? model : undefined,
       ...options,
     })
 
-    if (payload.stream) {
+    if (stream) {
       return withRelease(events(response), release)
     }
 
@@ -301,6 +311,30 @@ export class CopilotClient {
         retryable: 'capacity',
         errorMapper: options?.errorMapper,
       },
+    )
+  }
+
+  async createImageGeneration(
+    payload: ImageGenerationRequest,
+    options?: { signal?: AbortSignal },
+  ) {
+    return this.requestStreamable<ImageResponse>(
+      '/v1/images/generations',
+      payload,
+      'Failed to generate images',
+      { signal: options?.signal, headerOptions: { initiator: 'user' } },
+    )
+  }
+
+  async createImageEdit(
+    payload: ImageEditRequest,
+    options?: { signal?: AbortSignal },
+  ) {
+    return this.requestStreamable<ImageResponse>(
+      '/v1/images/edits',
+      payload,
+      'Failed to edit images',
+      { signal: options?.signal, headerOptions: { initiator: 'user' } },
     )
   }
 
