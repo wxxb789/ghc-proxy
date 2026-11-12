@@ -1,4 +1,5 @@
 import type { CapturedChatCall, CapturedDecisionsCall, CapturedEmbeddingCall, CapturedResponsesCall } from './helpers'
+import type { HTTPErrorBody } from '~/lib/error'
 import type { AnthropicResponse } from '~/translator'
 import type {
   ChatCompletionChunk,
@@ -62,6 +63,32 @@ afterEach(() => {
 })
 
 describe('API smoke', () => {
+  test.each(['/v1/messages', '/v1/chat/completions'])('%s rejects an image-only model before inference', async (path) => {
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-image-2.5-flare', {
+      supported_endpoints: ['/v1/images/generations', '/v1/images/edits'],
+    })))
+    CopilotClient.prototype.createChatCompletions = async () => {
+      throw new Error('Image requests must not reach Chat Completions')
+    }
+
+    const response = await createApp().handle(new Request(`http://localhost${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-image-2.5-flare',
+        max_tokens: 32,
+        messages: [{ role: 'user', content: 'Draw a cat.' }],
+      }),
+    }))
+
+    expect(response.status).toBe(400)
+    const body = await response.json() as HTTPErrorBody & { type?: string }
+    expect(body.error).toMatchObject({ type: 'invalid_request_error', param: 'model' })
+    expect(body.error.message).toContain('/images/')
+    if (path === '/v1/messages')
+      expect(body.type).toBe('error')
+  })
+
   test('Responses emulator create and retrieve stay OpenAI-compatible at the public boundary', async () => {
     const app = createApp()
     const calls: Array<CapturedResponsesCall> = []

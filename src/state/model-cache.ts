@@ -81,6 +81,14 @@ export class ModelCache {
     return model?.supported_endpoints?.includes(endpoint) ?? false
   }
 
+  isImageOnlyModel(model: Model | undefined): boolean {
+    return (this.supportsEndpoint(model, '/v1/images/generations')
+      || this.supportsEndpoint(model, '/v1/images/edits'))
+    && !this.supportsEndpoint(model, '/chat/completions')
+    && !this.supportsEndpoint(model, MESSAGES_ENDPOINT)
+    && !this.supportsEndpoint(model, RESPONSES_ENDPOINT)
+  }
+
   supportsToolCalls(model: Model | undefined): boolean {
     return model?.capabilities?.supports?.tool_calls ?? false
   }

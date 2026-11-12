@@ -3,8 +3,9 @@ import type { PipelineResult } from '~/pipeline/runner'
 
 import type { AnthropicMessagesPayload } from '~/translator'
 import consola from 'consola'
-import { HTTPError } from '~/lib/error'
+import { HTTPError, throwInvalidRequestError } from '~/lib/error'
 import { runPipeline } from '~/pipeline/runner'
+import { modelCache } from '~/state'
 
 import { processAnthropicBetaHeader } from '~/transform'
 import { checkMessagesFallbackTarget } from './fallback-eligibility'
@@ -44,6 +45,10 @@ export async function handleMessagesCore(
           // runner requires a returned payload (replacement callers return a
           // different one); returning ctx.payload is the no-substitution case.
           return payload
+        },
+        afterTransform({ selectedModel }) {
+          if (modelCache.isImageOnlyModel(selectedModel))
+            throwInvalidRequestError('This model only supports Images. Use /v1/images/generations or /v1/images/edits.', 'model')
         },
         buildStrategyContext({ payload, meta, headers: reqHeaders, selectedModel, copilotClient, upstreamSignal, modelMapping, recovery }) {
           return {

@@ -47,6 +47,21 @@ afterEach(() => {
 })
 
 describe('dashboard model introspection', () => {
+  test('does not advertise a Messages strategy for an image-only model', () => {
+    modelCache.cacheModels(buildModelsResponse(buildModel('gpt-image-2.5-flare', {
+      supported_endpoints: ['/v1/images/generations', '/v1/images/edits'],
+    })))
+
+    expect(getDashboardModels()[0]).toMatchObject({
+      upstream: { endpoints: ['/v1/images/generations', '/v1/images/edits'] },
+      effective: {
+        defaultMessagesStrategy: 'unavailable',
+        messagesStructuredOutput: false,
+        defaultResponsesStrategy: null,
+      },
+    })
+  })
+
   test('discloses translated Responses without claiming native upstream support', () => {
     getCachedConfig().responsesChatCompletionsFallback = true
     getCachedConfig().responsesApiAutoContextManagement = true

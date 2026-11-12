@@ -538,6 +538,7 @@ For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-op
 
 - `POST /v1/chat/completions`: OpenAI Chat Completions -> shared planning pipeline -> Copilot `/chat/completions`
 - `POST /v1/decisions`: OpenAI Decisions -> Copilot `/v1/decisions` passthrough for models advertising it (e.g. `gpt-6-luna-decisions`), or direct JSON translation to `/v1/systemone` for System One models (e.g. `microsoft-decision-1`); no streaming, strategy, or overload fallback
+- `POST /v1/images/generations` and `/v1/images/edits`: OpenAI Images -> the matching advertised Copilot Images endpoint; image-only models do not use the chat or Messages fallback
 - `POST /v1/responses`: OpenAI Responses create -> native Responses handler -> Copilot `/responses`, or (with `responsesChatCompletionsFallback: true`) Responses-to-Chat translation -> Copilot `/chat/completions` for Chat-only models
 - `POST /v1/responses/input_tokens`: Responses input-token counting passthrough by default, or local estimation in official emulator mode
 - `GET /v1/responses/:responseId`: Responses retrieve passthrough by default, or local retrieval in official emulator mode
@@ -565,6 +566,8 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 | `DELETE` | `/v1/responses/:responseId` | Delete one response via upstream passthrough or the local official emulator |
 | `GET`  | `/v1/models` | List available models |
 | `POST` | `/v1/embeddings` | Generate embeddings |
+| `POST` | `/v1/images/generations` | Generate images from a JSON prompt; JSON or SSE response |
+| `POST` | `/v1/images/edits` | Edit images using JSON references or multipart uploads; JSON or SSE response |
 
 **Anthropic compatible:**
 
@@ -612,7 +615,53 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 
 Dashboard routes are restricted to local access and return `403` when the peer, request host, or supplied `Origin` fails the loopback/same-origin checks. A normal legacy single-account process automatically migrates to named routing at startup, so adding accounts and changing the default are available after startup. Account management returns `409` when it is unavailable for the process: with legacy `start --github-token` or `start --ghe-domain` overrides (they cannot be assigned safely), in an M365-only `start --upstream m365` process, or for a legacy `credentials.json` without `accountRouting` that holds more than one account or whose active account name is not routing-compatible. With `accountRouting` configured, `--github-token` and `--ghe-domain` are startup errors. Dashboard requests are excluded from request history and access logging. See [Dashboard Observability](./docs/design/dashboard-observability.md) for the projection, transaction, and security contract.
 
-> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/decisions`, `/responses` and its resource routes, `/models`, `/embeddings`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
+> **Note:** The `/v1/` prefix is optional for OpenAI-compatible endpoints (`/chat/completions`, `/decisions`, `/responses` and its resource routes, `/models`, `/embeddings`, `/images/generations`, `/images/edits`). Anthropic endpoints (`/v1/messages`, `/v1/messages/count_tokens`) require the `/v1` prefix. The utility and Dashboard endpoints are root-only and not exposed under `/v1`.
+
+## Images
+
+Use the Images endpoints for models such as `gpt-image-2.5-flare` that advertise
+`/v1/images/generations` or `/v1/images/edits` in the Dashboard. Image-only
+models show `Messages route: unavailable`; sending them to Chat Completions or
+Messages returns `400` rather than attempting a chat fallback.
+
+Generate an image:
+
+```bash
+curl http://localhost:4141/v1/images/generations \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-image-2.5-flare","prompt":"A watercolor fox in a snowy forest","size":"1024x1024"}'
+```
+
+Edit uploaded images (repeat `image[]` for multiple inputs; add `mask=@mask.png`
+when needed):
+
+```bash
+curl http://localhost:4141/v1/images/edits \
+  -F model=gpt-image-2.5-flare \
+  -F 'prompt=Replace the background with a snowy forest' \
+  -F 'image[]=@source.png'
+```
+
+Edits also accept JSON with `images: [{"image_url":"data:image/png;base64,..."}]`
+or `file_id` references. References are passed upstream; the proxy does not host
+a Files API or resolve uploaded file IDs. An explicit model uses the normal
+model rewrite rules and must advertise the requested Images endpoint. Omitting
+or nulling the edit model leaves the default selection to Copilot.
+
+JSON responses preserve upstream image data (including `b64_json`) and usage.
+Set JSON `stream: true`, or multipart `stream=true`, for SSE; image event names,
+IDs, and data pass through without chat translation. A stream read failure or
+upstream timeout emits an SSE `error` event; a caller disconnect does not.
+Optional image parameters
+are preserved for upstream validation, not filtered through chat-model rules.
+Requests reuse account selection, request approval/rate limiting, upstream
+timeouts, and cancellation. Only upstream `429`/`529` capacity refusals can be
+retried; a `5xx` or failure after response headers never replays image generation.
+
+The public shape follows the [OpenAI Images API](https://platform.openai.com/docs/api-reference/images).
+Local verification uses a simulated upstream, not a quota-consuming Copilot
+image-generation probe; account access and model-specific options remain subject
+to the live Copilot service.
 
 ## Responses Compatibility
 

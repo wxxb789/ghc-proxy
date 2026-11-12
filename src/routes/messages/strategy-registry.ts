@@ -55,7 +55,9 @@ function canUseNativeMessages(
 export function resolveMessagesStrategyName(
   model: Model | undefined,
   payload?: AnthropicMessagesPayload,
-): 'native-messages' | 'responses-api' | 'chat-completions' {
+): 'native-messages' | 'responses-api' | 'chat-completions' | 'unavailable' {
+  if (modelCache.isImageOnlyModel(model))
+    return 'unavailable'
   if (canUseNativeMessages(model, payload))
     return 'native-messages'
   if (modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT))
@@ -78,7 +80,8 @@ const BARE_OUTPUT_FORMAT_PROBE: AnthropicMessagesPayload = {
  * per-model answer does not cover.
  */
 export function canServeMessagesOutputFormat(model: Model | undefined): boolean {
-  return resolveMessagesStrategyName(model, BARE_OUTPUT_FORMAT_PROBE) !== 'chat-completions'
+  const strategy = resolveMessagesStrategyName(model, BARE_OUTPUT_FORMAT_PROBE)
+  return strategy === 'native-messages' || strategy === 'responses-api'
 }
 
 const nativeMessagesEntry: StrategyEntry<StrategyContext> = {

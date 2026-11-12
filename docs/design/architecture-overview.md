@@ -158,6 +158,8 @@ Root OpenAI-compatible routes are mirrored under `/v1`. Anthropic Messages is
 | `GET /responses/:responseId/input_items`, `GET /v1/responses/:responseId/input_items` | OpenAI | List stored/upstream response input items |
 | `DELETE /responses/:responseId`, `DELETE /v1/responses/:responseId` | OpenAI | Delete a stored/upstream response |
 | `POST /embeddings`, `POST /v1/embeddings` | OpenAI | Embeddings |
+| `POST /images/generations`, `POST /v1/images/generations` | OpenAI | Image generation, with JSON or SSE output |
+| `POST /images/edits`, `POST /v1/images/edits` | OpenAI | Image editing from JSON references or multipart uploads, with JSON or SSE output |
 | `POST /decisions`, `POST /v1/decisions` | OpenAI | Decisions passed through to Copilot `/v1/decisions` or translated to `/v1/systemone`, per model; capacity-only retry and no strategy fallback |
 | `GET /models`, `GET /v1/models` | OpenAI | List available models |
 | `GET /token` | Proxy | Return the current Copilot token state |
@@ -199,6 +201,19 @@ Route handlers like messages and chat-completions supply their own config object
 ## Endpoint Compatibility Notes
 
 `POST /embeddings` and `POST /v1/embeddings` remain OpenAI-compatible at the proxy boundary. When Copilot upstream expects a stricter request shape, the proxy normalizes internally before forwarding, for example converting a single string `input` into a one-element string array.
+
+Images uses a direct guarded route in `src/routes/images/`, without a strategy
+registry or chat translation. It parses JSON or multipart input without
+flattening repeated files/fields, resolves explicit model rewrites, and admits
+only models advertising the requested `/v1/images/*` endpoint. An omitted/null
+edit model passes upstream unchanged. `CopilotClient` reuses account-scoped
+authentication, queueing, capacity-only retry, and upstream error mapping;
+Fetch supplies multipart boundaries. The existing strategy runner and delivery
+helpers carry JSON/SSE output and keep cancellation, timeout, and queue release
+active through stream completion. Request observations contain metadata only,
+not prompts, image bytes, or base64 output. Stream read failures emit an OpenAI
+SSE `error` envelope, with `timeout_error` for upstream timeouts, instead of
+silently ending the stream. Client cancellation does not synthesize an error.
 
 `POST /decisions` and `POST /v1/decisions` are a direct JSON path for the
 OpenAI Decisions API. The handler validates the public envelope, resolves the

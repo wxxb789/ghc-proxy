@@ -15,6 +15,8 @@ export function checkMessagesFallbackTarget(
   payload: AnthropicMessagesPayload,
   target: Model,
 ): FallbackEligibility {
+  if (resolveMessagesStrategyName(target, payload) === 'unavailable')
+    return { ok: false, reason: 'unsupported-endpoint' }
   const tools = hasTools(payload.tools)
   const thinkingType = payload.thinking?.type
   const requirements = checkFallbackRequirements({

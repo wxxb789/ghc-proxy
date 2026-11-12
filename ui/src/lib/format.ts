@@ -143,6 +143,13 @@ export function modelCapabilities(model: DashboardModel): string[] {
 
 export function modelCompatibilityLines(model: DashboardModel): string[] {
   const effective = model.effective
+  if (effective.defaultMessagesStrategy === 'unavailable') {
+    const endpoints = model.upstream.endpoints
+    return [
+      `images generations ${endpoints.includes('/v1/images/generations') ? 'available' : 'unavailable'}`,
+      `images edits ${endpoints.includes('/v1/images/edits') ? 'available' : 'unavailable'}`,
+    ]
+  }
   const responses = effective.defaultResponsesStrategy === 'responses-passthrough'
     ? 'native'
     : effective.defaultResponsesStrategy === 'responses-chat-completions' ? 'via Chat Completions' : 'unavailable'
