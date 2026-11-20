@@ -159,7 +159,7 @@ describe('account queue ownership', () => {
       expect(queueSnapshot(control).concurrency).toBe(2)
       const controlQueue = snapshot.mock.contexts[0]
       expect(queueSnapshot(runtime).concurrency).toBe(2)
-      const warmedQueue = snapshot.mock.contexts[1]
+      const warmedQueue = snapshot.mock.contexts[1] as UpstreamRequestQueue
       expect(warmedQueue).toBeInstanceOf(UpstreamRequestQueue)
 
       updateOptions.mockClear()
@@ -168,6 +168,7 @@ describe('account queue ownership', () => {
       expect(updateOptions.mock.contexts[0]).toBe(controlQueue)
       publishQueueRuntimes(control, runtime)
 
+      expect(warmedQueue.snapshot().concurrency).toBe(3)
       expect(queueSnapshot(runtime).concurrency).toBe(3)
       expect(updateOptions).toHaveBeenCalledTimes(2)
       expect(updateOptions.mock.contexts[1]).toBe(warmedQueue)
@@ -180,7 +181,7 @@ describe('account queue ownership', () => {
     }
   })
 
-  test('keeps defined updates for existing queues without restoring cleared overrides to new queues', () => {
+  test('preserves defined overrides when a later update explicitly passes undefined', () => {
     const control = createAccountRuntime('default')
     const warmed = createAccountRuntime('work')
     const fresh = createAccountRuntime('fresh')
@@ -193,13 +194,13 @@ describe('account queue ownership', () => {
 
       configureUpstreamRequestQueue({ concurrency: 3 })
       configureUpstreamRequestQueue({ concurrency: undefined })
-      expect(queueSnapshot(fresh)).toMatchObject({ concurrency: 10, maxPending: 7 })
+      expect(queueSnapshot(fresh)).toMatchObject({ concurrency: 3, maxPending: 7 })
       configureUpstreamRequestQueue({ maxQueueDepth: 8 })
       publishQueueRuntimes(control, warmed, fresh)
 
       expect(queueSnapshot(control)).toMatchObject({ concurrency: 3, maxPending: 8 })
       expect(queueSnapshot(warmed)).toMatchObject({ concurrency: 3, maxPending: 8 })
-      expect(queueSnapshot(fresh)).toMatchObject({ concurrency: 10, maxPending: 8 })
+      expect(queueSnapshot(fresh)).toMatchObject({ concurrency: 3, maxPending: 8 })
     }
     finally {
       resetAccountRuntimes()

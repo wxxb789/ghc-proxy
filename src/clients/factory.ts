@@ -1,6 +1,5 @@
 import type { UpstreamRecoveryRecord, UpstreamRequestQueueOptions, UpstreamRequestQueueSnapshot } from './upstream-queue'
 import type { ClientConfig } from '~/clients'
-import type { AccountRuntime } from '~/state'
 import type { ModelCache } from '~/state/model-cache'
 
 import consola from 'consola'
@@ -8,71 +7,21 @@ import { CopilotClient, getVSCodeVersion } from '~/clients'
 import { getOrCreateRequestCorrelation } from '~/lib/request-logger'
 import { getCurrentAccountRuntime, getRequestAccountName } from '~/state'
 import { getConfiguredAccountRuntimes } from '~/state/account-runtime'
+import { configureAccountQueueOptions, getOrCreateAccountQueue } from './account-queue'
 import { buildGitHubUrls } from './ghe-domain'
 import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
-interface AccountQueue {
-  queue: ReturnType<typeof createDefaultUpstreamRequestQueue>
-  optionsRevision: number
-}
-
-let upstreamRequestQueueOptions: Partial<UpstreamRequestQueueOptions> = {}
-let queueOptionsRevision = 0
-// Clearing a constructor override does not undo a defined update for existing queues.
-const lastDefinedQueueOptions: Record<keyof UpstreamRequestQueueOptions, { revision: number, value: number } | undefined> = {
-  concurrency: undefined,
-  maxRetries: undefined,
-  baseDelayMs: undefined,
-  maxDelayMs: undefined,
-  maxQueueDepth: undefined,
-  recoveryBudgetMs: undefined,
-}
-const queueOptionKeys = Object.keys(lastDefinedQueueOptions) as Array<keyof UpstreamRequestQueueOptions>
-const accountQueues = new WeakMap<AccountRuntime, AccountQueue>()
 const coldModelLoads = new WeakMap<ModelCache, Promise<void>>()
 let vsCodeVersionPromise: Promise<string> | undefined
 
-function applyUpstreamRequestQueueOptions(entry: AccountQueue): void {
-  const updates: Partial<UpstreamRequestQueueOptions> = {}
-  for (const key of queueOptionKeys) {
-    const update = lastDefinedQueueOptions[key]
-    if (update && update.revision > entry.optionsRevision)
-      updates[key] = update.value
-  }
-  entry.optionsRevision = queueOptionsRevision
-  entry.queue.updateOptions(updates)
-}
-
 function getUpstreamRequestQueue() {
-  const runtime = getCurrentAccountRuntime()
-  const existing = accountQueues.get(runtime)
-  if (existing) {
-    // A runtime warmed up outside the committed table may have missed a broadcast.
-    if (existing.optionsRevision !== queueOptionsRevision)
-      applyUpstreamRequestQueueOptions(existing)
-    return existing.queue
-  }
-
-  const queue = createDefaultUpstreamRequestQueue(upstreamRequestQueueOptions)
-  accountQueues.set(runtime, { queue, optionsRevision: queueOptionsRevision })
-  return queue
+  return getOrCreateAccountQueue(getCurrentAccountRuntime(), createDefaultUpstreamRequestQueue)
 }
 
 export function configureUpstreamRequestQueue(
   options: Partial<UpstreamRequestQueueOptions>,
 ): void {
-  upstreamRequestQueueOptions = { ...upstreamRequestQueueOptions, ...options }
-  queueOptionsRevision++
-  for (const key of queueOptionKeys) {
-    const value = options[key]
-    if (value != null)
-      lastDefinedQueueOptions[key] = { revision: queueOptionsRevision, value }
-  }
-  for (const runtime of getConfiguredAccountRuntimes()) {
-    const existing = accountQueues.get(runtime)
-    if (existing)
-      applyUpstreamRequestQueueOptions(existing)
-  }
+  configureAccountQueueOptions(options, getConfiguredAccountRuntimes())
 }
 
 export function getUpstreamRequestQueueSnapshot(): UpstreamRequestQueueSnapshot {
