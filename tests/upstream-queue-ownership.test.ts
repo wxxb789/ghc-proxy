@@ -52,6 +52,7 @@ describe('account queue ownership', () => {
     const unchangedResponse = holdModelsResponse()
     const originalFetch = globalThis.fetch
     const updateOptions = spyOn(UpstreamRequestQueue.prototype, 'updateOptions')
+    const snapshot = spyOn(UpstreamRequestQueue.prototype, 'snapshot')
 
     function publish(work?: AccountRuntime) {
       const runtimes = work ? [unchanged, work] : [unchanged]
@@ -114,12 +115,20 @@ describe('account queue ownership', () => {
       updateOptions.mockClear()
       configureUpstreamRequestQueue({ concurrency: 3 })
       expect(updateOptions).toHaveBeenCalledTimes(1)
+      snapshot.mockClear()
       expect(queueSnapshot(unchanged)).toMatchObject({ active: 1, concurrency: 3, maxPending: 7 })
+      const unchangedQueue = snapshot.mock.contexts[0]
 
       const newRuntime = createAccountRuntime('work')
       publish(newRuntime)
       expect(queueSnapshot(newRuntime)).toMatchObject({ active: 0, concurrency: 3, maxPending: 7 })
+      const newQueue = snapshot.mock.contexts[1]
+
+      updateOptions.mockClear()
       configureUpstreamRequestQueue({ maxQueueDepth: 8 })
+      expect(updateOptions.mock.calls).toEqual([[{ maxQueueDepth: 8 }], [{ maxQueueDepth: 8 }]])
+      expect(updateOptions.mock.contexts.filter(queue => queue === unchangedQueue)).toHaveLength(1)
+      expect(updateOptions.mock.contexts.filter(queue => queue === newQueue)).toHaveLength(1)
       expect(queueSnapshot(newRuntime)).toMatchObject({ active: 0, concurrency: 3, maxPending: 8 })
       expect(queueSnapshot(unchanged)).toMatchObject({ active: 1, concurrency: 3, maxPending: 8 })
 
@@ -131,6 +140,7 @@ describe('account queue ownership', () => {
       previousResponse.release('previous-model')
       unchangedResponse.release('unchanged-model')
       globalThis.fetch = originalFetch
+      snapshot.mockRestore()
       updateOptions.mockRestore()
       configureUpstreamRequestQueue({ concurrency: 10, maxQueueDepth: 1_000 })
       resetAccountRuntimes()
