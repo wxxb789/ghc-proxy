@@ -1,17 +1,21 @@
 import type { UpstreamRecoveryRecord, UpstreamRequestQueueOptions, UpstreamRequestQueueSnapshot } from './upstream-queue'
 import type { ClientConfig } from '~/clients'
+import type { AccountRuntime } from '~/state'
 import type { ModelCache } from '~/state/model-cache'
 
 import consola from 'consola'
 import { CopilotClient, getVSCodeVersion } from '~/clients'
 import { getOrCreateRequestCorrelation } from '~/lib/request-logger'
 import { getCurrentAccountRuntime, getRequestAccountName } from '~/state'
+import { getConfiguredAccountRuntimes } from '~/state/account-runtime'
 import { buildGitHubUrls } from './ghe-domain'
 import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
-const upstreamRequestQueues = new Set<ReturnType<typeof createDefaultUpstreamRequestQueue>>()
 let upstreamRequestQueueOptions: Partial<UpstreamRequestQueueOptions> = {}
-const accountQueues = new WeakMap<object, ReturnType<typeof createDefaultUpstreamRequestQueue>>()
+const accountQueues = new WeakMap<AccountRuntime, {
+  queue: ReturnType<typeof createDefaultUpstreamRequestQueue>
+  options: Partial<UpstreamRequestQueueOptions>
+}>()
 const coldModelLoads = new WeakMap<ModelCache, Promise<void>>()
 let vsCodeVersionPromise: Promise<string> | undefined
 
@@ -19,12 +23,16 @@ function getUpstreamRequestQueue() {
   const runtime = getCurrentAccountRuntime()
   const existing = accountQueues.get(runtime)
   if (existing) {
-    return existing
+    // A runtime warmed up outside the committed table may have missed a broadcast.
+    if (existing.options !== upstreamRequestQueueOptions) {
+      existing.queue.updateOptions(upstreamRequestQueueOptions)
+      existing.options = upstreamRequestQueueOptions
+    }
+    return existing.queue
   }
 
   const queue = createDefaultUpstreamRequestQueue(upstreamRequestQueueOptions)
-  accountQueues.set(runtime, queue)
-  upstreamRequestQueues.add(queue)
+  accountQueues.set(runtime, { queue, options: upstreamRequestQueueOptions })
   return queue
 }
 
@@ -32,8 +40,12 @@ export function configureUpstreamRequestQueue(
   options: Partial<UpstreamRequestQueueOptions>,
 ): void {
   upstreamRequestQueueOptions = { ...upstreamRequestQueueOptions, ...options }
-  for (const queue of upstreamRequestQueues) {
-    queue.updateOptions(options)
+  for (const runtime of getConfiguredAccountRuntimes()) {
+    const existing = accountQueues.get(runtime)
+    if (existing) {
+      existing.queue.updateOptions(upstreamRequestQueueOptions)
+      existing.options = upstreamRequestQueueOptions
+    }
   }
 }
 

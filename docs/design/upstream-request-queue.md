@@ -12,6 +12,14 @@ the same queue settings apply to every account, but queue occupancy and cooldown
 state do not cross account boundaries. Queue startup settings are not queried
 through `ConfigStore`.
 
+The factory keys queues weakly by runtime identity, not by account name.
+Option updates visit only existing queues for the current runtime table
+(or the legacy runtime when routing is disabled). New queues start with the
+latest overrides; a previously created queue that missed an update picks it
+up on the next lookup. Removing or replacing a runtime does not cancel its
+work: existing clients keep using their original queue, and a replacement
+runtime starts with a fresh queue even if the name is unchanged.
+
 ## Admission and Cooldown Scope
 
 Each account queue holds its own active-slot count, pending list, account

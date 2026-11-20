@@ -10,7 +10,7 @@ Tracked items for future work. Items are roughly ordered by priority.
   - Not a plain clamp-up: `none` means "do not reason", and the nearest advertised level (`low`) is a materially different request. Options are to drop the field, to reject locally with a clear message, or to map to `low` and say so — pick deliberately rather than by default.
   - Evidence: `docs/research/grok-4.5-schema.md`. Convention amended in `docs/solutions/conventions/upstream-types-are-not-contract-evidence.md`.
 
-- [ ] **Upstream request queues of removed or replaced route targets are never released**
+- [x] **Upstream request queues of removed or replaced route targets are never released**
   - `src/clients/factory.ts` keys queues by runtime in a `WeakMap` (`accountQueues`) but also adds every queue to a strong module-level `Set` (`upstreamRequestQueues`), kept only so `configureUpstreamRequestQueue()` can broadcast option changes. The `Set` defeats the `WeakMap`: a runtime removed or replaced by an account mutation (for example `configureM365Target` with a changed runtime) keeps its queue alive for the process lifetime.
   - Reproduced 2026-11-08 with a scratch test during the architecture review. Impact is bounded: one queue per admin mutation, and the only production `configureUpstreamRequestQueue()` call (`src/start.ts`) runs at startup before any queue exists.
   - Local fix candidates: build each queue from the current options and track queues weakly, or release a runtime's queue when the account mutation disposes the runtime.

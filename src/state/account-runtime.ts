@@ -156,6 +156,10 @@ export function disableAccountRouting(): void {
   routing = undefined
 }
 
+export function getConfiguredAccountRuntimes(): Iterable<AccountRuntime> {
+  return accountRuntimes.values()
+}
+
 export interface RoutingTargetView {
   name: string
   hostname: string
