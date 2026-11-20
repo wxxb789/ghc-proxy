@@ -14,7 +14,7 @@
   import { rovingGrid } from '../lib/actions/rovingGrid.ts'
   import { selectValue } from '../lib/actions/selectValue.ts'
   import { copyInto } from '../lib/clipboard.ts'
-  import { formatClock, formatNumber, modelCapabilities, modelCompatibilityLines, modelsTsv, plural } from '../lib/format.ts'
+  import { formatClock, formatNumber, modelCapabilities, modelCompatibilityLines, modelPriceGroups, modelsTsv, plural } from '../lib/format.ts'
   import { refreshMetadata, refreshSelectedView } from '../lib/poller.svelte.ts'
   import { focusHeading, replaceParams, router } from '../lib/router.svelte.ts'
   import { app, faults, metadataUnavailableReason } from '../lib/store.svelte.ts'
@@ -223,22 +223,22 @@
                 <th>Messages route</th>
                 <th>Upstream endpoints</th>
                 <th>Limits</th>
+                <th>Price<span class='line muted'>USD / 1M tokens</span></th>
                 <th>Capabilities</th>
                 <th>Proxy compatibility</th>
               </tr>
             </thead>
             <tbody>
               {#if !all}
-                {#each { length: 10 }, index (index)}<tr><td colspan='7'><Skeleton /></td></tr>{/each}
+                {#each { length: 10 }, index (index)}<tr><td colspan='8'><Skeleton /></td></tr>{/each}
               {:else if !all.length}
-                <tr><td colspan='7' class='empty-cell'>
-                  <!-- The hint is the only cue that models arrive on their own while Refresh metadata is unavailable. -->
+                <tr><td colspan='8' class='empty-cell'>
                   <EmptyState icon='models' title='No models loaded.' hint={metadataUnavailableReason() ? 'Models appear after the Copilot catalog loads.' : undefined}>
                     <ReasonButton reason={metadataUnavailableReason()} busy={app.busy.metadata} onclick={refreshMetadata}><Icon name='refresh' />Refresh metadata</ReasonButton>
                   </EmptyState>
                 </td></tr>
               {:else if !shown.length}
-                <tr><td colspan='7' class='empty-cell'>
+                <tr><td colspan='8' class='empty-cell'>
                   <EmptyState title={`No models match "${query.trim()}".`}>
                     <button type='button' class='btn ghost' onclick={clearFilter}>Clear filter</button>
                   </EmptyState>
@@ -246,7 +246,7 @@
               {:else}
                 {#each groups as group (group.vendor)}
                   {#if grouped}
-                    <tr class='group vendor-group'><th colspan='7' scope='colgroup'><span>{group.vendor}<span class='muted'>{` · ${group.rows.length}`}</span></span></th></tr>
+                    <tr class='group vendor-group'><th colspan='8' scope='colgroup'><span>{group.vendor}<span class='muted'>{` · ${group.rows.length}`}</span></span></th></tr>
                   {/if}
                   <!-- Index keys: the server does not guarantee unique ids or endpoints, and duplicate keys throw. -->
                   {#each group.rows as model, index (index)}
@@ -279,6 +279,16 @@
                             <span class='muted'>{label}</span><span class='num'>{formatNumber(limits[key])}</span>
                           {/each}
                         </span>
+                      </td>
+                      <td class='price-cell' data-label='Price · USD / 1M tokens'>
+                        {#each modelPriceGroups(model) as { heading, rows } (heading)}
+                          {#if heading}<span class='price-tier line muted'>{heading}</span>{/if}
+                          <span class='limits'>
+                            {#each rows as [label, price] (label)}
+                              <span class='muted'>{label}</span><span class='num'>{price}</span>
+                            {/each}
+                          </span>
+                        {:else}<Nil />{/each}
                       </td>
                       <td class='caps-cell'>
                         <span class='caps'>{#each modelCapabilities(model) as capability (capability)}<Tag kind='mono' value={capability} />{:else}<Nil />{/each}</span>
@@ -321,6 +331,7 @@
   .catalog :global(.tag-outline) { padding: 0 4px; border-color: var(--line-strong); color: var(--text-2); }
   .vendor-group span { position: sticky; left: 16px; }
   .limits { display: inline-grid; grid-template-columns: auto auto; column-gap: var(--s-3); }
+  .price-tier { margin-top: var(--s-1); }
   .caps { display: flex; flex-wrap: wrap; gap: var(--s-1); max-width: 260px; }
   /* Right-edge fade while columns remain off-screen (the pinned columns sit on the left); it steps aside for focus outlines. */
   .scroll-frame { position: relative; }
@@ -344,17 +355,15 @@
     .models:not(.has-selection) .selection-bar { display: none; }
     .catalog { min-width: 0; }
     .catalog td { white-space: normal; }
-    /* Cards: checkbox beside the id and line 2, then limits beside capabilities (self-explanatory, so uncaptioned),
-       then the captioned route, endpoints and compatibility. */
     .catalog tbody tr[data-row] { grid-template-columns: 32px auto minmax(0, 1fr); }
     .catalog tbody tr[data-row] > td { grid-column: 2 / -1; position: static; background: none; }
     .catalog tbody tr[data-row] > .sel { grid-column: 1; grid-row: 1; width: auto; box-shadow: none; }
     .catalog tbody tr[data-row] > .limits-cell { grid-column: 2; }
     .catalog tbody tr[data-row] > .caps-cell { grid-column: 3; padding-left: var(--s-4); }
-    .catalog :is(.route, .endpoints, .compat) { order: 1; }
+    .catalog .price-cell { order: 1; }
+    .catalog :is(.route, .endpoints, .compat) { order: 2; }
     .catalog .endpoints .line { display: inline; }
     .catalog .endpoints .line + .line::before { content: ' · '; }
-    /* The vendor group row stays a flush band, not a card. */
     .catalog tbody tr.vendor-group { padding: 0; border-bottom: 0; }
     .catalog tr.vendor-group > th { display: flex; align-items: center; padding: 0 12px; }
   }

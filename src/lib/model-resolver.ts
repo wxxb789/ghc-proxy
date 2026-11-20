@@ -17,10 +17,7 @@ export const DEFAULT_FALLBACKS: ModelFallbackConfig = {
   claudeHaiku: 'claude-haiku-5.5',
 }
 
-// Previous built-in defaults, used only when the cached model list advertises
-// them and omits the current default.
-const LEGACY_FALLBACKS: ModelFallbackConfig = {
-  claudeOpus: 'claude-opus-5',
+const LEGACY_FALLBACKS: Partial<ModelFallbackConfig> = {
   claudeSonnet: 'claude-sonnet-5',
   claudeHaiku: 'claude-haiku-4.5',
 }
@@ -42,7 +39,7 @@ export function getModelFallbackConfig(
       return configured
     const current = DEFAULT_FALLBACKS[family]
     const legacy = LEGACY_FALLBACKS[family]
-    return knownModelIds && !knownModelIds.has(current) && knownModelIds.has(legacy)
+    return legacy && knownModelIds && !knownModelIds.has(current) && knownModelIds.has(legacy)
       ? legacy
       : current
   }

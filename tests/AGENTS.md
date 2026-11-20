@@ -1,9 +1,5 @@
 # tests/AGENTS.md
 
-> **Convention**: `tests/CLAUDE.md` is a symlink to this file (git mode
-> `120000`). Edit this file only; never `Write`/`Edit` `tests/CLAUDE.md`.
-> Recreation recipe lives at the bottom of the root `AGENTS.md`.
-
 Test-runner conventions and helper inventory for the `tests/` directory.
 For project-wide rules see the root `AGENTS.md`.
 

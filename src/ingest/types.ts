@@ -8,6 +8,7 @@ export type ProtocolId
     | 'responses-input-tokens'
     | 'embeddings'
     | 'openai-decisions'
+    | 'systemone'
 
 export interface RequestMeta {
   sessionId?: string

@@ -1335,12 +1335,12 @@ describe('runPipeline', () => {
   })
 
   test('fallback events render concise selection and result lines', async () => {
-    const originalInfo = consola.info
+    const originalWarn = consola.warn
     const events: string[] = []
-    consola.info = ((message: unknown) => {
+    consola.warn = ((message: unknown) => {
       if (typeof message === 'string' && message.startsWith('Upstream '))
         events.push(message)
-    }) as unknown as typeof consola.info
+    }) as unknown as typeof consola.warn
 
     const config_ = getCachedConfig() as Record<string, unknown>
     config_.overloadFallbacks = { source: 'target' }
@@ -1461,17 +1461,17 @@ describe('runPipeline', () => {
       }
     }
     finally {
-      consola.info = originalInfo
+      consola.warn = originalWarn
     }
   })
 
   test('asks the endpoint about the target with the pristine post-ingest payload', async () => {
-    const originalInfo = consola.info
+    const originalWarn = consola.warn
     const events: string[] = []
-    consola.info = ((message: unknown) => {
+    consola.warn = ((message: unknown) => {
       if (typeof message === 'string' && message.startsWith('Upstream '))
         events.push(message)
-    }) as unknown as typeof consola.info
+    }) as unknown as typeof consola.warn
     const config_ = getCachedConfig() as Record<string, unknown>
     config_.overloadFallbacks = { source: 'target' }
     modelCache.cacheModels(buildModelsResponse(buildModel('source'), buildModel('target')))
@@ -1526,7 +1526,7 @@ describe('runPipeline', () => {
       expect(events[0]).toContain('model=source')
     }
     finally {
-      consola.info = originalInfo
+      consola.warn = originalWarn
     }
   })
 

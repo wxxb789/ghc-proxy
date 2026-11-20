@@ -16,6 +16,7 @@ describe('m365 upstream transport', () => {
     const headers = copilotHeaders(
       { copilotToken: 'token-value' },
       { accountType: 'individual', upstream: 'm365' },
+      { apiVersion: '2026-08-01' },
     )
 
     expect(headers.Authorization).toBe('Bearer token-value')

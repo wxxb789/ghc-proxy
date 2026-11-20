@@ -1,5 +1,6 @@
 import type { UpstreamRecoveryRecord, UpstreamRequestQueueOptions, UpstreamRequestQueueSnapshot } from './upstream-queue'
 import type { ClientConfig } from '~/clients'
+import type { ModelCache } from '~/state/model-cache'
 
 import consola from 'consola'
 import { CopilotClient, getVSCodeVersion } from '~/clients'
@@ -11,6 +12,7 @@ import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 const upstreamRequestQueues = new Set<ReturnType<typeof createDefaultUpstreamRequestQueue>>()
 let upstreamRequestQueueOptions: Partial<UpstreamRequestQueueOptions> = {}
 const accountQueues = new WeakMap<object, ReturnType<typeof createDefaultUpstreamRequestQueue>>()
+const coldModelLoads = new WeakMap<ModelCache, Promise<void>>()
 let vsCodeVersionPromise: Promise<string> | undefined
 
 function getUpstreamRequestQueue() {
@@ -80,14 +82,51 @@ export function createRequestRecoveryRecord(request: Request): UpstreamRecoveryR
   }
 }
 
+async function waitForColdModelLoad(load: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await load.catch(() => {})
+    return
+  }
+
+  signal.throwIfAborted()
+  const { promise, resolve, reject } = Promise.withResolvers<void>()
+  const onAbort = () => reject(signal.reason)
+  signal.addEventListener('abort', onAbort, { once: true })
+  void load.then(resolve, () => resolve())
+  try {
+    await promise
+    signal.throwIfAborted()
+  }
+  finally {
+    signal.removeEventListener('abort', onAbort)
+  }
+}
+
 export async function cacheModels(
   client?: CopilotClient,
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const { models } = getCurrentAccountRuntime()
-  const copilotClient = client ?? createCopilotClient()
-  const response = await copilotClient.getModels(options)
-  models.cacheModels(response)
+  if (models.getModels()?.data.length) {
+    const response = await (client ?? createCopilotClient()).getModels(options)
+    models.cacheModels(response)
+    return
+  }
+
+  let pending = coldModelLoads.get(models)
+  while (pending) {
+    await waitForColdModelLoad(pending, options.signal)
+    if (models.getModels()?.data.length)
+      return
+    pending = coldModelLoads.get(models)
+  }
+
+  options.signal?.throwIfAborted()
+  const load = (client ?? createCopilotClient()).getModels(options).then((response) => {
+    models.cacheModels(response)
+  }).finally(() => coldModelLoads.delete(models))
+  coldModelLoads.set(models, load)
+  await load
 }
 
 export async function cacheVSCodeVersion() {

@@ -63,6 +63,16 @@ afterEach(() => {
 })
 
 describe('API smoke', () => {
+  test.each([
+    { method: 'GET', path: '/v1/token' },
+    { method: 'GET', path: '/v1/usage' },
+    { method: 'POST', path: '/messages' },
+  ])('$method $path is not exposed', async ({ method, path }) => {
+    const response = await createServer().handle(new Request(`http://localhost${path}`, { method }))
+
+    expect(response.status).toBe(404)
+  })
+
   test.each(['/v1/messages', '/v1/chat/completions'])('%s rejects an image-only model before inference', async (path) => {
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-image-2.5-flare', {
       supported_endpoints: ['/v1/images/generations', '/v1/images/edits'],
@@ -919,6 +929,48 @@ describe('API smoke', () => {
     expect(calls).toHaveLength(1)
   })
 
+  test('System One serves both public paths and rejects Decisions-only models', async () => {
+    const body = {
+      model: 'microsoft-decision-1',
+      state: { text: 'I want a refund' },
+      questions: { refund: { type: 'noul' as const, instructions: 'Is the customer asking for a refund?' } },
+    }
+    const upstream = {
+      model: 'microsoft-decision-1.1',
+      answers: { refund: { type: 'noul', noul: 1 } },
+      usage: { input_tokens: 10, output_tokens: 0 },
+    }
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel(body.model, { supported_endpoints: ['/v1/systemone'] }),
+      buildModel('gpt-6-luna-decisions', { supported_endpoints: ['/v1/decisions'] }),
+    ))
+    const calls: Array<CapturedDecisionsCall> = []
+    CopilotClient.prototype.createSystemOne = mockSystemOne(upstream, calls)
+    const app = createServer()
+    const post = (path: string, model = body.model) => app.handle(new Request(`http://localhost${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, model }),
+    }))
+
+    for (const path of ['/systemone', '/v1/systemone']) {
+      const response = await post(path)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual(upstream)
+    }
+
+    const rejected = await post('/v1/systemone', 'gpt-6-luna-decisions')
+    expect(rejected.status).toBe(400)
+    expect(await rejected.json()).toEqual({
+      error: {
+        type: 'invalid_request_error',
+        param: 'model',
+        message: 'The selected model does not support the systemone endpoint.',
+      },
+    })
+    expect(calls.map(call => call.payload)).toEqual([body, body])
+  })
+
   test('Decisions passes a native model public body and response through', async () => {
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-6-luna-decisions', {
       supported_endpoints: ['/v1/decisions'],
@@ -946,7 +998,7 @@ describe('API smoke', () => {
       safety_identifier: 'user-1',
     }
 
-    const response = await createApp('decisions').handle(new Request('http://localhost/v1/decisions', {
+    const response = await createServer().handle(new Request('http://localhost/v1/decisions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

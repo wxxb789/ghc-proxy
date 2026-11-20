@@ -161,6 +161,7 @@ Root OpenAI-compatible routes are mirrored under `/v1`. Anthropic Messages is
 | `POST /images/generations`, `POST /v1/images/generations` | OpenAI | Image generation, with JSON or SSE output |
 | `POST /images/edits`, `POST /v1/images/edits` | OpenAI | Image editing from JSON references or multipart uploads, with JSON or SSE output |
 | `POST /decisions`, `POST /v1/decisions` | OpenAI | Decisions passed through to Copilot `/v1/decisions` or translated to `/v1/systemone`, per model; capacity-only retry and no strategy fallback |
+| `POST /systemone`, `POST /v1/systemone` | System One | Keyed JSON requests and responses for models advertising Copilot `/v1/systemone`; unavailable on M365 targets |
 | `GET /models`, `GET /v1/models` | OpenAI | List available models |
 | `GET /token` | Proxy | Return the current Copilot token state |
 | `GET /usage` | Proxy | Fetch Copilot quota/usage statistics |
@@ -223,6 +224,11 @@ for System One models, using the existing Copilot client with capacity-only
 retry. It does not enter `ExecutionStrategy`, the chat
 planning pipeline, streaming, or model fallback. See
 [Decisions API](decisions-api.md).
+
+`POST /systemone` and `POST /v1/systemone` use the same direct transport but
+keep the System One wire shape: `state`, keyed `questions`, and keyed `answers`.
+They require the model to advertise `/v1/systemone` and validate the upstream
+response without translating it to the Decisions array format.
 
 `POST /responses` and `POST /v1/responses` stay close to passthrough by default. Before dispatch, the handler applies tool-schema normalization and the Responses input policy, then the shared upstream tail that the `/v1/messages` Responses Translation strategy also runs (`shapeResponsesUpstreamPayload()`: optional compaction, `phase` stripping, optional context management, per-model parameter filters, and the output-token floor), then the reasoning-effort clamp. The strategy then stabilizes stream IDs, forwards events, and observes terminal `response.completed`, `response.incomplete`, and `response.failed` events.
 

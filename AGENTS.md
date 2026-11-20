@@ -1,10 +1,5 @@
 # AGENTS.md
 
-> **Convention**: `CLAUDE.md` in this repo is a **symlink → `AGENTS.md`** (git
-> mode `120000`). Same applies to every nested `**/CLAUDE.md`. Edit
-> `AGENTS.md` only; never `Write`/`Edit` `CLAUDE.md` (it would replace the
-> symlink with a regular file on Windows). Recreation recipe at the bottom.
-
 This file is for agentic coding tools (Claude Code, Codex, Cursor, GitHub
 Copilot, etc.) working in this repository.
 
@@ -229,49 +224,3 @@ Single-context: `CONCEPTS.md` (glossary) + `docs/design/` (decisions) + `docs/so
 - **Version contract:** Publishing workflows validate `vX.Y.Z` matches `package.json` `version` before publish.
 - **Auth model:** npm Trusted Publishing (GitHub OIDC) bound to `release-npm.yml`. No long-lived npm tokens.
 - **Immutability:** npm rejects republishing an existing version; the release job refuses a version whose tag already exists.
-
-## Agent Instruction File Symlink (Windows-safe recipe)
-
-`CLAUDE.md` is a git symlink (mode `120000`) pointing to `AGENTS.md`. The
-same convention applies to every nested directory: any `**/CLAUDE.md` is a
-symlink to the `AGENTS.md` in the **same** directory. See
-`docs/solutions/conventions/agent-instruction-symlink.md` for the rationale
-and the footguns this avoids.
-
-### Golden rule
-
-**Edit `AGENTS.md` only.** Never `Write`/`Edit` `CLAUDE.md` — on Windows
-that replaces the symlink with a regular file and the two files drift again.
-
-### Recreating a symlink (if it gets clobbered)
-
-```bash
-# 1. Pick the clobbered path. For nested files, the target is still AGENTS.md
-#    because each CLAUDE.md points to the AGENTS.md in the same directory.
-path=CLAUDE.md              # or tests/CLAUDE.md, docs/foo/CLAUDE.md, etc.
-
-# 2. Write target path as file content (no trailing newline)
-printf 'AGENTS.md' > "$path"
-
-# 3. Create blob WITHOUT trailing newline and register as symlink (mode 120000)
-git update-index --add --cacheinfo \
-  120000,$(printf 'AGENTS.md' | git hash-object -w --stdin),"$path"
-
-# 4. Checkout to materialize the OS-level symlink
-git checkout -- "$path"
-
-# 5. Verify
-git ls-files -s "$path"     # must show mode 120000
-```
-
-Do NOT use `ln -s` (Git Bash on Windows silently makes a copy), `cp`, or
-here-strings (`<<<`) with `git hash-object` (they append `\n` and break the
-target).
-
-### After a fresh clone on Windows
-
-```bash
-git config --local core.symlinks true
-git ls-files -z 'CLAUDE.md' '**/CLAUDE.md' | xargs -0 git checkout --
-git ls-files -s 'CLAUDE.md' '**/CLAUDE.md'   # all must show mode 120000
-```

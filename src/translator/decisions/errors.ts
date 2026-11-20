@@ -1,9 +1,10 @@
 import type { DecisionsQuestionMapping } from './mapping'
 import type { HTTPErrorBody } from '~/lib/error'
 
-import { HTTPError } from '~/lib/error'
+import { HTTPError, withTranslationErrors } from '~/lib/error'
 import { isTimeoutLikeError } from '~/lib/timeout-error'
-import { isClientAbortError } from '~/lib/upstream-signal'
+import { ClientAbortError, isClientAbortError } from '~/lib/upstream-signal'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 
 const MAX_ERROR_MESSAGE = 500
 const MAX_ERROR_DETAILS = 20
@@ -13,7 +14,33 @@ const NUMERIC_RE = /^\d+$/
 // System One reports some validation failures as a plain `detail` string that
 // names the internal question key and the upstream validator.
 const DETAIL_QUESTION_RE = /question "(q\d+)"/
+const NATIVE_DETAIL_QUESTION_RE = /question "([^"\r\n]{1,200})"/
+const NATIVE_PARAM_RE = /^(?:questions|state)(?:\.[^\r\n]{1,240})?$/u
 const DETAIL_VALIDATOR_PREFIX_RE = /^invalid TypeSafe request: /
+
+export async function callDecisionsUpstream(
+  call: () => Promise<unknown>,
+  callerSignal: AbortSignal,
+  message: string,
+  kind: 'invalid_upstream_decisions_response' | 'invalid_upstream_systemone_response',
+): Promise<unknown> {
+  try {
+    return await call()
+  }
+  catch (error) {
+    // A bare AbortError from a cancelled body read has no marker. Tag it
+    // before the shared error mapper so caller aborts aren't recorded as
+    // failures and deadline aborts stay timeout-shaped.
+    if (error instanceof DOMException && error.name === 'AbortError' && callerSignal.aborted)
+      throw new ClientAbortError()
+    if (error instanceof SyntaxError) {
+      withTranslationErrors(() => {
+        throw new TranslationFailure(message, { status: 502, kind })
+      })
+    }
+    throw error
+  }
+}
 
 function boundedMessage(value: unknown, fallback: string): string {
   if (typeof value !== 'string' || value.trim().length === 0)
@@ -114,6 +141,25 @@ function mapDetailString(
   return { message, ...(param ? { param } : {}) }
 }
 
+function nativeDetailPath(location: unknown): string | undefined {
+  if (!Array.isArray(location))
+    return undefined
+  const start = location.findIndex(part => part === 'questions' || part === 'state')
+  if (start < 0 || location.length - start > 20)
+    return undefined
+  const parts: Array<string> = []
+  for (const part of location.slice(start)) {
+    if (typeof part === 'string' && part.length <= 240)
+      parts.push(part)
+    else if (typeof part === 'number' && Number.isSafeInteger(part) && part >= 0)
+      parts.push(String(part))
+    else
+      return undefined
+  }
+  const path = parts.join('.')
+  return NATIVE_PARAM_RE.test(path) ? path : undefined
+}
+
 interface DetailInput {
   loc?: unknown
   msg?: unknown
@@ -122,7 +168,7 @@ interface DetailInput {
 
 function readValidationDetails(
   value: unknown,
-  questions: Array<DecisionsQuestionMapping> | undefined,
+  mapPath: (location: unknown) => string | undefined,
   fallbackMessage: string,
 ): { details: Array<{ path: string, message: string, code?: string }>, firstPath?: string } {
   const items = Array.isArray(value)
@@ -133,7 +179,7 @@ function readValidationDetails(
   const details: Array<{ path: string, message: string, code?: string }> = []
 
   for (const item of items.slice(0, MAX_ERROR_DETAILS)) {
-    const path = mapQuestionPath(item.loc, questions)
+    const path = mapPath(item.loc)
     const message = boundedMessage(item.msg, fallbackMessage)
     const code = typeof item.type === 'string' && SAFE_TOKEN_RE.test(item.type)
       ? item.type
@@ -146,31 +192,74 @@ function readValidationDetails(
 
   return {
     details,
-    firstPath: details.find(detail => detail.path.startsWith('questions['))?.path,
+    firstPath: details.find(detail => detail.path !== 'body')?.path,
   }
 }
 
-/**
- * Convert a System One error response into the OpenAI Decisions envelope before
- * any shared upstream logger can inspect the body. Rejected evidence never
- * reaches the log or the wire.
- */
-export async function normalizeDecisionsUpstreamError(
+interface UpstreamErrorMapper {
+  mapStructuredParam: (value: string) => string | undefined
+  mapDetailString: (detail: string) => { message: string, param?: string }
+  mapDetailPath: (location: unknown) => string | undefined
+}
+
+const systemOneErrorMapper: UpstreamErrorMapper = {
+  mapStructuredParam: value => NATIVE_PARAM_RE.test(value) ? value : undefined,
+  mapDetailString(detail) {
+    const key = NATIVE_DETAIL_QUESTION_RE.exec(detail)?.[1]
+    return { message: detail, ...(key !== undefined ? { param: `questions.${key}` } : {}) }
+  },
+  mapDetailPath: nativeDetailPath,
+}
+
+async function readErrorBody(response: Response): Promise<string> {
+  if (!response.body || response.bodyUsed)
+    return response.text()
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let oversized = false
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done)
+        break
+      // Drain the remainder without decoding so later aborts/timeouts still surface.
+      if (oversized)
+        continue
+      for (let offset = 0; offset < value.length; offset += 8192) {
+        const chunk = decoder.decode(value.subarray(offset, offset + 8192), { stream: true })
+        if (text.length + chunk.length > MAX_ERROR_BODY) {
+          oversized = true
+          text = ''
+          break
+        }
+        text += chunk
+      }
+    }
+    return oversized ? '' : text + decoder.decode()
+  }
+  finally {
+    reader.releaseLock()
+  }
+}
+
+async function normalizeUpstreamError(
   message: string,
   response: Response,
-  questions?: Array<DecisionsQuestionMapping>,
+  mapper: UpstreamErrorMapper,
 ): Promise<HTTPError> {
   let raw = ''
   try {
-    raw = await response.text()
+    raw = await readErrorBody(response)
   }
   catch (error) {
-    // A failed error-body read must not reclassify the request: a cancelled
-    // body keeps its client-abort classification, and a deadline miss stays a
-    // timeout. Only genuinely unreadable bodies fall back to an empty body so
-    // the upstream status and Retry-After still reach the client.
-    if (isClientAbortError(error) || isTimeoutLikeError(error))
+    if (
+      isClientAbortError(error) || isTimeoutLikeError(error)
+      || (error instanceof DOMException && error.name === 'AbortError')
+    ) {
       throw error
+    }
     raw = ''
   }
 
@@ -196,17 +285,17 @@ export async function normalizeDecisionsUpstreamError(
       const error = structured as Record<string, unknown>
       errorMessage = boundedMessage(error.message, message)
       if (typeof error.param === 'string')
-        param = mapStructuredParam(error.param, questions)
+        param = mapper.mapStructuredParam(error.param)
       if (typeof error.code === 'string' && SAFE_TOKEN_RE.test(error.code))
         code = error.code
     }
     else if (typeof body.detail === 'string') {
-      const mapped = mapDetailString(body.detail, questions)
+      const mapped = mapper.mapDetailString(body.detail)
       errorMessage = boundedMessage(mapped.message, message)
       param = mapped.param
     }
     else if (Array.isArray(body.detail)) {
-      const mapped = readValidationDetails(body.detail, questions, message)
+      const mapped = readValidationDetails(body.detail, mapper.mapDetailPath, message)
       details = mapped.details
       param = mapped.firstPath
       code = 'upstream_validation_error'
@@ -230,4 +319,20 @@ export async function normalizeDecisionsUpstreamError(
     { error },
     retryAfter ? { headers: { 'retry-after': retryAfter } } : undefined,
   )
+}
+
+export function normalizeDecisionsUpstreamError(
+  message: string,
+  response: Response,
+  questions?: Array<DecisionsQuestionMapping>,
+): Promise<HTTPError> {
+  return normalizeUpstreamError(message, response, {
+    mapStructuredParam: value => mapStructuredParam(value, questions),
+    mapDetailString: detail => mapDetailString(detail, questions),
+    mapDetailPath: location => mapQuestionPath(location, questions),
+  })
+}
+
+export function normalizeSystemOneUpstreamError(message: string, response: Response): Promise<HTTPError> {
+  return normalizeUpstreamError(message, response, systemOneErrorMapper)
 }

@@ -1157,9 +1157,9 @@ describe('completion POSTs are not replayed on ambiguous upstream failures', () 
     expect(calls.n).toBe(1)
   })
 
-  // Effect-free reads keep the wide tier — a duplicate costs a round trip.
-  test('getModels still replays upstream 500', async () => {
+  test('getModels replays upstream 500 with the billing API version', async () => {
     const calls = { n: 0 }
+    const versions: (string | null)[] = []
     const requestQueue = new UpstreamRequestQueue(
       { concurrency: 1, maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1 },
       {
@@ -1175,7 +1175,8 @@ describe('completion POSTs are not replayed on ambiguous upstream failures', () 
       { accountType: 'individual', vsCodeVersion: '1.99.0' },
       {
         requestQueue,
-        fetch: ((async () => {
+        fetch: ((async (_url: string, init?: RequestInit) => {
+          versions.push(new Headers(init?.headers).get('x-github-api-version'))
           calls.n++
           if (calls.n === 1) {
             return new Response('boom', { status: 500 })
@@ -1187,6 +1188,7 @@ describe('completion POSTs are not replayed on ambiguous upstream failures', () 
 
     await client.getModels()
     expect(calls.n).toBe(2)
+    expect(versions).toEqual(['2026-08-01', '2026-08-01'])
   })
 })
 
@@ -1577,6 +1579,24 @@ describe('decisions error-body transport', () => {
 
     expect(isTimeoutLikeError(error)).toBe(true)
     expect(requestQueue.snapshot().active).toBe(0)
+  })
+
+  test('preserves the status and Retry-After when the error body stream fails', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"detail":"partial'))
+      },
+      pull(controller) {
+        controller.error(new Error('socket reset mid-body'))
+      },
+    })
+    const upstream = new Response(stream, { status: 429, headers: { 'Retry-After': '7' } })
+    const error = await normalizeDecisionsUpstreamError('Upstream error', upstream)
+    const response = error.toResponse()
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe('7')
+    expect(await response.json()).toEqual({ error: { message: 'Upstream error', type: 'rate_limit_error' } })
   })
 })
 

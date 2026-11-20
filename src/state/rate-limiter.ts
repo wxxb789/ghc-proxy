@@ -44,7 +44,7 @@ export class RateLimiter {
     )
     await sleep(waitMs)
 
-    consola.info('Rate limit wait completed, proceeding with request')
+    consola.debug('Rate limit wait completed, proceeding with request')
   }
 }
 

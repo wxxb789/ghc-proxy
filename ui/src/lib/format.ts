@@ -1,6 +1,7 @@
-import type { DashboardModel, DashboardQuotaDetail, UpstreamQueueSnapshot } from '@contract'
+import type { DashboardModel, DashboardQuotaDetail, DashboardTokenPriceTier, UpstreamQueueSnapshot } from '@contract'
 
 const numberFormat = new Intl.NumberFormat()
+const usdFormat = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })
 const relativeFormat = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 
 const pad2 = (value: number) => String(value).padStart(2, '0')
@@ -120,19 +121,46 @@ export function tsvCell(value: unknown): string {
   return String(value ?? '').replace(TSV_BREAK_RE, ' ').trim()
 }
 
-// The TSV keeps the legacy `-` placeholder so copied text is byte-identical.
-const legacyNumber = (value: number | undefined) => value !== undefined && Number.isFinite(value) ? numberFormat.format(value) : '-'
+const formatTsvNumber = (value: number | undefined) => value !== undefined && Number.isFinite(value) ? numberFormat.format(value) : '-'
 
-export function modelLimitLines(model: DashboardModel, format: (value: number | undefined) => string = formatNumber): string[] {
+function modelLimitLines(model: DashboardModel): string[] {
   const limits = model.upstream.capabilities.limits
   return [
-    `context ${format(limits.max_context_window_tokens)}`,
-    `prompt ${format(limits.max_prompt_tokens)}`,
-    `output ${format(limits.max_output_tokens)}`,
+    `context ${formatTsvNumber(limits.max_context_window_tokens)}`,
+    `prompt ${formatTsvNumber(limits.max_prompt_tokens)}`,
+    `output ${formatTsvNumber(limits.max_output_tokens)}`,
   ]
 }
 
-/** `supports` keys whose value is `true` or a non-empty array. */
+function priceRows(tier: DashboardTokenPriceTier): [string, string][] {
+  const image = (tier.imageInput ?? 0) > 0 || (tier.imageOutput ?? 0) > 0
+  const rates = [
+    [image ? 'text in' : 'in', tier.input],
+    ['out', image && tier.output === 0 ? undefined : tier.output],
+    ['cache', tier.cacheRead || undefined],
+    ['write', tier.cacheWrite || undefined],
+    ['img in', tier.imageInput || undefined],
+    ['img out', tier.imageOutput || undefined],
+  ] as const
+  if (!rates.some(([, rate]) => rate !== undefined && rate > 0))
+    return [['Included', '']]
+  return rates.flatMap(([label, rate]) => rate === undefined ? [] : [[label, `$${usdFormat.format(rate)}`]])
+}
+
+export function modelPriceGroups(model: DashboardModel) {
+  const prices = model.upstream.billing?.tokenPrices
+  if (!prices)
+    return []
+
+  const groups = [{ heading: '', rows: priceRows(prices.default) }]
+  if (prices.longContext) {
+    const threshold = prices.default.maxPromptTokens
+    const heading = threshold === undefined ? 'Long context' : `>${threshold >= 1000 && threshold % 1000 === 0 ? `${threshold / 1000}k` : formatNumber(threshold)}`
+    groups.push({ heading, rows: priceRows(prices.longContext) })
+  }
+  return groups
+}
+
 export function modelCapabilities(model: DashboardModel): string[] {
   const supports = model.upstream.capabilities.supports
   return Object.keys(supports).filter((key) => {
@@ -163,9 +191,8 @@ export function modelCompatibilityLines(model: DashboardModel): string[] {
   ]
 }
 
-const TSV_HEADER = ['Model ID', 'Model Name', 'Vendor', 'Version', 'Messages Route', 'Upstream Endpoints', 'Limits', 'Capabilities', 'Proxy Compatibility']
+const TSV_HEADER = ['Model ID', 'Model Name', 'Vendor', 'Version', 'Messages Route', 'Upstream Endpoints', 'Limits', 'Price (USD / 1M tokens)', 'Capabilities', 'Proxy Compatibility']
 
-/** Copy text for the selected models, byte-identical to the legacy Dashboard: always sorted by `name || id`. */
 export function modelsTsv(models: DashboardModel[], origin: string): string {
   const rows = [...models]
     .sort((left, right) => String(left.name || left.id).localeCompare(String(right.name || right.id)))
@@ -176,7 +203,11 @@ export function modelsTsv(models: DashboardModel[], origin: string): string {
       model.version,
       model.effective.defaultMessagesStrategy,
       model.upstream.endpoints.join(', ') || '-',
-      modelLimitLines(model, legacyNumber).join('; '),
+      modelLimitLines(model).join('; '),
+      modelPriceGroups(model).map(({ heading, rows }) => {
+        const rates = rows.map(([label, price]) => price ? `${label} ${price}` : label).join('; ')
+        return heading ? `${heading}: ${rates}` : rates
+      }).join(' | ') || '-',
       modelCapabilities(model).join(', ') || '-',
       modelCompatibilityLines(model).join('; '),
     ].map(tsvCell).join('\t'))

@@ -163,7 +163,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
   }
 
   if (accountType !== 'individual') {
-    consola.info(`Using ${accountType} plan GitHub account`)
+    consola.debug(`Using ${accountType} plan GitHub account`)
   }
   runtimeStore.dumpFailedPayloads = resolveDumpFailedPayloadsOption(options.dumpFailedPayloads)
 
@@ -176,7 +176,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
   const upstream = options.upstream === 'm365' ? 'm365' : 'github'
   authStore.upstream = upstream
   if (upstream === 'm365') {
-    consola.info('Upstream: Microsoft 365 Copilot gateway')
+    consola.debug('Upstream: Microsoft 365 Copilot gateway')
   }
 
   const upstreamQueueConcurrency = options.upstreamQueueConcurrency ?? cachedConfig.upstreamQueueConcurrency
@@ -206,7 +206,7 @@ async function runServer(options: RunServerOptions): Promise<void> {
     await initializeM365Target(target)
     const availability = getTargetAvailability(target)
     if (availability?.status === 'ready') {
-      consola.info(`M365 target ready (account ${target.auth.mscAuthAccount ?? 'default'})`)
+      consola.debug(`M365 target ready (account ${target.auth.mscAuthAccount ?? 'default'})`)
     }
     else {
       consola.warn(`M365 target unavailable: ${availability?.cause ?? 'unknown cause'}`)
@@ -325,11 +325,9 @@ async function setupLegacyAccount(
 
   if (options.githubToken) {
     authStore.githubToken = options.githubToken
-    consola.info('Using provided GitHub token')
+    consola.debug('Using provided GitHub token')
   }
 
-  // Load persisted GHE domain from config, then override with CLI arg if provided.
-  // Pass --ghe-domain "" (empty string) to explicitly clear a persisted domain.
   applyGheDomain(authStore, persistedGheDomain, options.gheDomain)
   await cacheVSCodeVersion()
 
@@ -410,7 +408,7 @@ async function setupLegacyAccountManager(
       runtimes: [runtime],
     })
     await accountManager.bootstrapAccountRouting(DEFAULT_ACCOUNT_HOSTNAME)
-    consola.info(
+    consola.debug(
       `Migrated legacy account ${JSON.stringify(accountName)} to named-account routing at ${DEFAULT_ACCOUNT_HOSTNAME}.`,
     )
     return {
@@ -477,7 +475,7 @@ async function setupRoutedAccounts(
         await runWithAccountRuntime(runtime, () => initializeM365Target(runtime))
         const availability = getTargetAvailability(runtime)
         if (availability?.status === 'ready') {
-          consola.info(`M365 target ${JSON.stringify(runtime.name)} ready`)
+          consola.debug(`M365 target ${JSON.stringify(runtime.name)} ready`)
         }
         else {
           consola.warn(
@@ -486,7 +484,7 @@ async function setupRoutedAccounts(
         }
         continue
       }
-      consola.info(`Initializing GitHub account ${JSON.stringify(runtime.name)}`)
+      consola.debug(`Initializing GitHub account ${JSON.stringify(runtime.name)}`)
       const cleanup = await runWithAccountRuntime(runtime, async () => {
         await cacheVSCodeVersion()
         const stopRefresh = await setupAuthTokens({ accountName: runtime.name })

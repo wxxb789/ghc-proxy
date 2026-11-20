@@ -9,6 +9,13 @@ export const jsonObjectSchema = z.object({}).catchall(z.unknown())
 export const finiteNumberSchema = z.number().finite()
 export const nonNegativeIntegerSchema = z.number().int().nonnegative()
 
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null)
+    return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
 export function createObjectSchemaDefinitionSchema(message: string) {
   return jsonObjectSchema.superRefine((schema, ctx) => {
     const typeValue = schema.type

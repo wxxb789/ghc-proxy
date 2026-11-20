@@ -4,6 +4,7 @@ import { embeddingsProtocol } from './embeddings'
 import { openaiChatProtocol } from './openai-chat'
 import { ProtocolRegistry } from './registry'
 import { responsesInputTokensProtocol, responsesProtocol } from './responses'
+import { systemOneProtocol } from './systemone'
 
 const protocolRegistry = new ProtocolRegistry()
 
@@ -14,6 +15,7 @@ protocolRegistry.register('responses', responsesProtocol)
 protocolRegistry.register('responses-input-tokens', responsesInputTokensProtocol)
 protocolRegistry.register('embeddings', embeddingsProtocol)
 protocolRegistry.register('openai-decisions', decisionsProtocol)
+protocolRegistry.register('systemone', systemOneProtocol)
 
 export { protocolRegistry }
 export type { IngestedRequest, ProtocolHandler, ProtocolId, RequestMeta } from './types'

@@ -40,6 +40,13 @@ Configure:
   line for the catalog's target: the page origin for its own target, else the
   target's hostname on the page's protocol and port. The M365 panel lists the
   target's model ids and links to its catalog.
+  For GitHub Copilot, the Models request opts into the API version that
+  advertises token rates. The Dashboard projects these under
+  `upstream.billing.tokenPrices` and shows them in Price and Copy selected as
+  USD per million tokens, before discounts. Missing or invalid default rates
+  are unknown; advertised zero rates are included. A separate long-context
+  tier is shown only when its rates differ. Public model responses do not
+  expose billing metadata.
 - Behavior: current configuration, strategy order, and process-local effect
   counters.
 

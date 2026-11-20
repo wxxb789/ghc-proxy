@@ -1,6 +1,6 @@
 import type { CapacityCooldownScope } from '~/lib/error'
 
-import consola from 'consola'
+import consola, { LogLevels } from 'consola'
 import { colorize } from 'consola/utils'
 
 import { formatDurationMs } from '~/util/duration'
@@ -222,7 +222,7 @@ export function logRecoveryEvent(
       Object.assign(fields, { [key]: input[key] })
   }
   if (logger === consola) {
-    consola.info(formatRecoveryEventLine(fields))
+    consola.warn(formatRecoveryEventLine(fields))
     return
   }
   logger.info('Upstream recovery', fields)
@@ -320,6 +320,10 @@ function formatModelMapping(info: ModelMappingInfo | undefined): string {
   return ` ${colorize('dim', 'model=')}${parts.join(' ')}`
 }
 
+export function shouldLogRequest(status: number): boolean {
+  return status >= 400 || consola.level >= LogLevels.debug
+}
+
 /**
  * Request logging function.
  * Logs a formatted request line with method, path, status, elapsed time,
@@ -335,6 +339,9 @@ export function logRequest(
   callerRequestId?: string,
   accountName?: string,
 ): void {
+  if (!shouldLogRequest(status))
+    return
+
   const path = formatPath(url)
   const line = [
     colorize('dim', '<-'),
@@ -353,6 +360,11 @@ export function logRequest(
     ? ` ${colorize('dim', `account=${sanitizeAccountName(accountName)}`)}`
     : ''
 
-  // eslint-disable-next-line no-console
-  console.log(`${line}${formatModelMapping(modelInfo)}${account}${rid}${callerRid}`)
+  const message = `${line}${formatModelMapping(modelInfo)}${account}${rid}${callerRid}`
+  if (status >= 500)
+    consola.error(message)
+  else if (status >= 400)
+    consola.warn(message)
+  else
+    consola.debug(message)
 }

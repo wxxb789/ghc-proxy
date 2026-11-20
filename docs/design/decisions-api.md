@@ -18,6 +18,7 @@ planning pipeline, streaming, or model overload fallback.
 | Method | Path | Behavior |
 | --- | --- | --- |
 | `POST` | `/decisions`, `/v1/decisions` | Validate a Decisions request, admit the model, then pass it through to `/v1/decisions` or translate it to `/v1/systemone`, and return a Decisions response |
+| `POST` | `/systemone`, `/v1/systemone` | Send a keyed System One request to a model advertising `/v1/systemone` and return a keyed System One response |
 
 The route is available at the root and under `/v1` with the same behavior. It is
 JSON-only; a `stream` field is not part of the public contract. Requests use the
@@ -46,9 +47,10 @@ prefixed with `_` until unique) and restores the original name (`null` when
 absent) in the matching answer. Requests whose names are already unique and
 non-empty are forwarded unchanged.
 
-The response is returned as Copilot sent it. Copilot reports the served model
-family (for example `gpt-6-luna` for `gpt-6-luna-decisions`) in `model`, and
-nests cache and reasoning counters under `usage.*_details`. Upstream errors use
+The proxy validates the native response envelope, answer count and types, and
+token counts before returning it. Apart from restored placeholder names, it
+preserves Copilot's response fields, including the served model family (for
+example `gpt-6-luna` for `gpt-6-luna-decisions`) and `usage.*_details`. Upstream errors use
 the shared upstream error path: Copilot's OpenAI-style envelopes, with public
 `param` paths such as `questions[0].choices[1].value`, pass through unchanged,
 and a plain-text gateway rejection is wrapped in an error envelope.
@@ -56,6 +58,39 @@ and a plain-text gateway rejection is wrapped in an error envelope.
 Gateway limit observed on 2026-11-06 that the public schema allows:
 `prompt_cache_options` is accepted only as `{ mode: "explicit", ttl: "30m" }`;
 other variants return the opaque `400 Bad Request`.
+
+## Native System One Path
+
+Use `POST /systemone` or `POST /v1/systemone` to send System One JSON directly:
+
+```json
+{
+  "model": "microsoft-decision-1",
+  "state": "The customer asked for a refund.",
+  "questions": {
+    "refund": { "type": "noul", "instructions": "Did the customer ask for a refund?" }
+  }
+}
+```
+
+`state` accepts a string, a JSON object, or a JSON array with bounded nesting
+and value count. `questions` has 1–255 caller-chosen keys. Each question accepts
+optional `instructions`. For `noul`, `criteria` can be omitted, `null`, or an
+object containing optional `true` and `false` strings. For `choice`, supply a
+non-empty object of string or null criteria; for `score`, a non-empty array of
+strings. Unknown envelope and question fields are rejected, including `input`
+and `stream` at the top level.
+
+The resolved model must advertise `/v1/systemone`. A Decisions-only model such
+as `gpt-6-luna-decisions` gets a `400` before inference; use `/v1/decisions` for
+that model. Neither System One alias is served on M365 targets.
+
+The response contains a keyed `answers` object with exactly the submitted keys
+and a `usage` object. The proxy preserves extra upstream fields and the upstream
+model name (for example `microsoft-decision-1.1`). Non-JSON or invalid success
+responses return `502` with `invalid_upstream_systemone_response`. Upstream
+validation errors retain System One paths such as `questions.refund` or
+`state`, but omit rejected input evidence.
 
 ## System One Translation
 
@@ -145,9 +180,9 @@ during queue wait, or during the upstream body read stops the work and releases
 the queue lease. An already-aborted caller enters the shared tagged client-abort
 path, which records the request as aborted rather than failed or timed out.
 
-Both paths are classified in the request store, and the handler records the
-original and effective model mapping there; the access log and Dashboard request
-history both read it from the store. The Dashboard model row shape and DTO are unchanged.
+Both aliases for each API are classified in the request store. The handlers
+record the requested and effective model mapping for Dashboard request history;
+the Dashboard model row shape and DTO are unchanged.
 
 ## Verification Status
 
@@ -164,5 +199,3 @@ not observed.
 
 - Streaming Decisions results
 - Image or tool-call evidence for System One models
-- System One passthrough from the public boundary
-- M365-specific behavior

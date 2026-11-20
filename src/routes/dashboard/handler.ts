@@ -1,7 +1,8 @@
+import type { DashboardModel, DashboardModelBilling, DashboardTokenPriceTier } from './contract'
 import type { RoutedAccountDescriptor } from '~/accounts/descriptor'
 import type { AccountManagementSnapshot } from '~/accounts/manager'
 import type { AccountRuntime } from '~/state/account-runtime'
-import type { CopilotUsageResponse, Model, QuotaDetail } from '~/types'
+import type { CopilotUsageResponse, Model, ModelTokenPriceTier, QuotaDetail } from '~/types'
 
 import { getUpstreamRequestQueueSnapshot } from '~/clients/factory'
 import { getEffectiveModelFallbackConfig } from '~/lib/model-resolver'
@@ -322,12 +323,13 @@ export function getDashboardRequests() {
   return runtimeStore.requests.snapshot()
 }
 
-function projectModel(model: Model) {
+function projectModel(model: Model): DashboardModel {
   const nativeMessagesAvailable = modelCache.supportsEndpoint(model, MESSAGES_ENDPOINT)
   const responsesAvailable = modelCache.supportsEndpoint(model, RESPONSES_ENDPOINT)
   const nativeStructuredOutput = modelCache.supportsStructuredOutputs(model)
   const defaultResponsesStrategy = resolveResponsesStrategyName(model) ?? null
   const usesChatTranslation = defaultResponsesStrategy === 'responses-chat-completions'
+  const billing = projectModelBilling(model.billing)
 
   return {
     id: model.id,
@@ -340,6 +342,7 @@ function projectModel(model: Model) {
       endpoints: (model.supported_endpoints ?? [])
         .filter(endpoint => endpoint.startsWith('/') && endpoint.length <= 128),
       capabilities: projectModelCapabilities(model.capabilities),
+      ...(billing && { billing }),
       ...(model.policy
         ? { policy: { state: model.policy.state, terms: model.policy.terms } }
         : {}),
@@ -364,6 +367,58 @@ function projectModel(model: Model) {
       chatTokenParameter: getChatCompletionsTokenParameter(model.id),
     },
   }
+}
+
+const TOKEN_PRICE_FIELDS = [
+  ['input_price', 'input'],
+  ['output_price', 'output'],
+  ['cache_read_price', 'cacheRead'],
+  ['cache_write_price', 'cacheWrite'],
+  ['image_input_price', 'imageInput'],
+  ['image_output_price', 'imageOutput'],
+] as const
+
+function isNonnegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function projectTokenPriceTier(tier: ModelTokenPriceTier | undefined, batchSize: number): DashboardTokenPriceTier | undefined {
+  const result: DashboardTokenPriceTier = {}
+  let hasPrice = false
+  for (const [source, target] of TOKEN_PRICE_FIELDS) {
+    const credits = tier?.[source]
+    if (credits === undefined)
+      continue
+    if (!isNonnegativeNumber(credits) || (batchSize === 0 && credits !== 0))
+      return undefined
+
+    // One GitHub AI Credit is $0.01. Normalize the batch to one million tokens.
+    const usd = credits === 0 ? 0 : (credits / batchSize) * 10_000
+    if (!Number.isFinite(usd))
+      return undefined
+    result[target] = Number(usd.toFixed(6)) || usd
+    hasPrice = true
+  }
+  if (!hasPrice)
+    return undefined
+  if (isNonnegativeNumber(tier?.max_prompt_tokens))
+    result.maxPromptTokens = tier.max_prompt_tokens
+  return result
+}
+
+function projectModelBilling(billing: Model['billing']): DashboardModelBilling | undefined {
+  const source = billing?.token_prices
+  const batchSize = source?.batch_size
+  if (!isNonnegativeNumber(batchSize))
+    return undefined
+
+  const standard = projectTokenPriceTier(source?.default, batchSize)
+  const longContext = projectTokenPriceTier(source?.long_context, batchSize)
+  if (!standard || (batchSize === 0 && source?.long_context !== undefined && !longContext))
+    return undefined
+
+  const hasDistinctLongContext = longContext && TOKEN_PRICE_FIELDS.some(([key]) => source?.default?.[key] !== source?.long_context?.[key])
+  return { tokenPrices: { batchSize, default: standard, ...(hasDistinctLongContext ? { longContext } : {}) } }
 }
 
 function projectModelCapabilities(capabilities: Model['capabilities'] | undefined) {

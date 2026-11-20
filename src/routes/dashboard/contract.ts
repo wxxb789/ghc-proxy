@@ -89,6 +89,27 @@ export interface OverviewResponse extends DashboardEnvelope {
   }
 }
 
+/** Advertised rates in USD per million tokens, before discounts. */
+export interface DashboardTokenPriceTier {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+  imageInput?: number
+  imageOutput?: number
+  maxPromptTokens?: number
+}
+
+export interface DashboardTokenPrices {
+  batchSize: number
+  default: DashboardTokenPriceTier
+  longContext?: DashboardTokenPriceTier
+}
+
+export interface DashboardModelBilling {
+  tokenPrices?: DashboardTokenPrices
+}
+
 export interface DashboardModel {
   id: string
   name: string
@@ -117,6 +138,7 @@ export interface DashboardModel {
       supports: Record<string, boolean | string[] | undefined>
     }
     policy?: { state: string, terms: string }
+    billing?: DashboardModelBilling
   }
   effective: {
     defaultMessagesStrategy: string

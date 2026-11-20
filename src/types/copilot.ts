@@ -219,9 +219,38 @@ interface ModelCapabilities {
   type: string
 }
 
+export interface ModelTokenPriceTier {
+  input_price?: number
+  output_price?: number
+  cache_read_price?: number
+  cache_write_price?: number
+  image_input_price?: number
+  image_output_price?: number
+  max_prompt_tokens?: number
+}
+
+export interface ModelBilling {
+  auto_discount?: number
+  restricted_to?: string[]
+  promo?: {
+    discount_percent?: number
+    ends_at?: string
+    id?: string
+    message?: string
+    show_banner?: boolean
+  }
+  token_prices?: {
+    batch_size: number
+    default: ModelTokenPriceTier
+    long_context?: ModelTokenPriceTier
+  }
+}
+
 export interface Model {
+  billing?: ModelBilling
   capabilities: ModelCapabilities
   id: string
+  model_picker_price_category?: string
   model_picker_enabled: boolean
   name: string
   object: string
