@@ -23,7 +23,7 @@ the relevant document indexed by `docs/design/README.md`.
 ```
 /
 ├── CONCEPTS.md              ← glossary (CONTEXT.md equivalent)
-├── AGENTS.md                ← agent instructions (CLAUDE.md is a symlink to it)
+├── AGENTS.md                ← agent instructions
 ├── docs/
 │   ├── design/              ← indexed architecture and design decisions
 │   │   └── README.md        ← current design-doc index
