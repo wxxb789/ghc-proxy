@@ -11,23 +11,28 @@ import { getConfiguredAccountRuntimes } from '~/state/account-runtime'
 import { buildGitHubUrls } from './ghe-domain'
 import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
-let upstreamRequestQueueOptions: Partial<UpstreamRequestQueueOptions> = {}
-const accountQueues = new WeakMap<AccountRuntime, {
+interface AccountQueue {
   queue: ReturnType<typeof createDefaultUpstreamRequestQueue>
   options: Partial<UpstreamRequestQueueOptions>
-}>()
+}
+
+let upstreamRequestQueueOptions: Partial<UpstreamRequestQueueOptions> = {}
+const accountQueues = new WeakMap<AccountRuntime, AccountQueue>()
 const coldModelLoads = new WeakMap<ModelCache, Promise<void>>()
 let vsCodeVersionPromise: Promise<string> | undefined
+
+function applyUpstreamRequestQueueOptions(entry: AccountQueue): void {
+  entry.queue.updateOptions(upstreamRequestQueueOptions)
+  entry.options = upstreamRequestQueueOptions
+}
 
 function getUpstreamRequestQueue() {
   const runtime = getCurrentAccountRuntime()
   const existing = accountQueues.get(runtime)
   if (existing) {
     // A runtime warmed up outside the committed table may have missed a broadcast.
-    if (existing.options !== upstreamRequestQueueOptions) {
-      existing.queue.updateOptions(upstreamRequestQueueOptions)
-      existing.options = upstreamRequestQueueOptions
-    }
+    if (existing.options !== upstreamRequestQueueOptions)
+      applyUpstreamRequestQueueOptions(existing)
     return existing.queue
   }
 
@@ -42,10 +47,8 @@ export function configureUpstreamRequestQueue(
   upstreamRequestQueueOptions = { ...upstreamRequestQueueOptions, ...options }
   for (const runtime of getConfiguredAccountRuntimes()) {
     const existing = accountQueues.get(runtime)
-    if (existing) {
-      existing.queue.updateOptions(upstreamRequestQueueOptions)
-      existing.options = upstreamRequestQueueOptions
-    }
+    if (existing)
+      applyUpstreamRequestQueueOptions(existing)
   }
 }
 

@@ -126,4 +126,31 @@ describe('account queue ownership', () => {
       resetAccountRuntimes()
     }
   })
+
+  test('catches up a queue that missed an update before its runtime was published', () => {
+    const runtime = createAccountRuntime('work')
+    const updateOptions = spyOn(UpstreamRequestQueue.prototype, 'updateOptions')
+
+    try {
+      configureUpstreamRequestQueue({ concurrency: 2 })
+      expect(queueSnapshot(runtime).concurrency).toBe(2)
+
+      updateOptions.mockClear()
+      configureUpstreamRequestQueue({ concurrency: 3 })
+      expect(updateOptions).not.toHaveBeenCalled()
+      configureAccountRuntimes(compileAccountRouting({
+        baseHostname: 'localhost',
+        defaultAccount: runtime.name,
+        hostnames: { 'work.localhost': runtime.name },
+      }, [runtime.name]), [runtime])
+
+      expect(queueSnapshot(runtime).concurrency).toBe(3)
+      expect(updateOptions).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      updateOptions.mockRestore()
+      resetAccountRuntimes()
+      configureUpstreamRequestQueue({ concurrency: 10 })
+    }
+  })
 })
