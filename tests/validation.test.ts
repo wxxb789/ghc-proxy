@@ -9,11 +9,43 @@ import {
   parseOpenAIChatPayload,
   parseResponsesInputTokensPayload,
   parseResponsesPayload,
+  parseSystemOneRequest,
 } from '~/ingest/validation'
 import { getCachedConfig } from '~/lib/config'
 import { HTTPError, withTranslationErrors } from '~/lib/error'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { REASONING_EFFORT_VALUES } from '~/types'
+
+describe('System One payload validation', () => {
+  const valid = { model: 'microsoft-decision-1', state: 'evidence', questions: { check: { type: 'noul' } } }
+
+  test.each([
+    { patch: { input: 'not state' }, label: 'unknown envelope field' },
+    { patch: { model: '' }, label: 'empty model' },
+    { patch: { state: null }, label: 'null state' },
+    { patch: { state: true }, label: 'boolean state' },
+    { patch: { state: 42 }, label: 'numeric state' },
+    { patch: { state: Array.from({ length: 10_000 }).fill(null) }, label: 'too many JSON values' },
+    { patch: { state: Array.from({ length: 33 }).reduce<unknown>(value => [value], null) }, label: 'excessive JSON depth' },
+    { patch: { questions: [] }, label: 'array of questions' },
+    { patch: { questions: {} }, label: 'no questions' },
+    { patch: { questions: Object.fromEntries(Array.from({ length: 256 }, (_, index) => [index, { type: 'noul' }])) }, label: 'more than 255 questions' },
+    { patch: { questions: { check: { type: 'noul', criteria: { yes: 'wrong field' } } } }, label: 'unknown noul criteria field' },
+    { patch: { questions: { check: { type: 'choice', criteria: {} } } }, label: 'empty choice criteria' },
+    { patch: { questions: { check: { type: 'choice', criteria: { ['__proto__']: 42 } } } }, label: 'non-string own choice criteria' },
+    { patch: { questions: { check: { type: 'score', criteria: [] } } }, label: 'empty score criteria' },
+    { patch: { questions: { check: { type: 'score', criteria: ['low', null] } } }, label: 'non-string score criteria' },
+    { patch: { questions: { check: { type: 'noul', extra: true } } }, label: 'unknown question field' },
+    { patch: { ['__proto__']: true }, label: 'unknown __proto__ envelope field' },
+  ])('rejects $label', ({ patch }) => {
+    expect(() => parseSystemOneRequest({ ...valid, ...patch })).toThrow(HTTPError)
+  })
+
+  test('accepts 255 own question keys', () => {
+    const questions = Object.fromEntries(Array.from({ length: 255 }, (_, index) => [index, { type: 'noul' as const }]))
+    expect(parseSystemOneRequest({ ...valid, questions }).questions).toEqual(questions)
+  })
+})
 
 function expectUnsupportedTopK(run: () => unknown, apiName: string) {
   try {

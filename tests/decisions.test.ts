@@ -513,12 +513,33 @@ describe('decisions route', () => {
       expect(createCalls).toHaveLength(0)
     })
 
+    test.each([
+      { label: 'missing envelope', raw: {} },
+      { label: 'missing answers', raw: { model: 'gpt-6-luna', usage: { input_tokens: 10, output_tokens: 0 } } },
+      { label: 'wrong count', raw: { model: 'gpt-6-luna', usage: { input_tokens: 10, output_tokens: 0 }, answers: [] } },
+      { label: 'unknown answer type', raw: { model: 'gpt-6-luna', usage: { input_tokens: 10, output_tokens: 0 }, answers: [{ type: 'box' }] } },
+      { label: 'invalid usage', raw: { model: 'gpt-6-luna', usage: { input_tokens: -1, output_tokens: 0 }, answers: [{ type: 'refusal', name: 'q0' }] } },
+    ])('rejects native upstream 200 with $label', async ({ raw }) => {
+      nativeImpl = async () => raw
+      const response = await post('/v1/decisions', {
+        ...validBody,
+        model: 'gpt-6-luna-decisions',
+      })
+
+      expect(response.status).toBe(502)
+      expect(await response.json()).toMatchObject({
+        error: { type: 'translation_error', code: 'invalid_upstream_decisions_response' },
+      })
+    })
+
     test('names questions for the gateway and restores the public names', async () => {
       const names = [undefined, 'a', 'a', '', 'q0']
       nativeImpl = async payload => ({
         model: 'gpt-6-luna',
-        answers: payload.questions.map(question => ({ type: 'predicate', name: question.name, probability: 0.5 })),
-        usage: {},
+        answers: payload.questions.map((question, index) => index === 0
+          ? { type: 'refusal', name: question.name }
+          : { type: 'predicate', name: question.name, probability: 0.5 }),
+        usage: { input_tokens: 10, output_tokens: 0, total_tokens: 10 },
       })
 
       const response = await post('/v1/decisions', {
@@ -530,6 +551,7 @@ describe('decisions route', () => {
       expect(response.status).toBe(200)
       expect(nativeCalls[0]?.questions.map(question => question.name)).toEqual(['_q0', 'a', 'q2', 'q3', 'q0'])
       const json = await response.json() as { answers: Array<{ name: string | null }> }
+      expect(json.answers[0]).toMatchObject({ type: 'refusal', name: null })
       expect(json.answers.map(answer => answer.name)).toEqual([null, 'a', 'a', '', 'q0'])
     })
 

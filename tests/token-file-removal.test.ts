@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 
 const tempDir = await fs.mkdtemp(
   path.join(os.tmpdir(), 'ghc-proxy-test-token-'),
@@ -18,12 +18,8 @@ const testPaths = {
   CONFIG_MIGRATION_BACKUP_PATH: path.join(tempDir, 'config.json.github-token-migration.bak'),
 }
 
-await mock.module('../src/lib/paths', () => ({
-  PATHS: testPaths,
-  ensurePaths: () => fs.mkdir(testPaths.APP_DIR, { recursive: true }),
-}))
-
 const mockInfo = mock(() => {})
+const mockDebug = mock(() => {})
 const mockWarn = mock(() => {})
 const mockError = mock(() => {})
 const mockSuccess = mock(() => {})
@@ -32,7 +28,7 @@ await mock.module('consola', () => ({
   default: {
     level: 0,
     info: mockInfo,
-    debug: mock(() => {}),
+    debug: mockDebug,
     warn: mockWarn,
     error: mockError,
     success: mockSuccess,
@@ -61,10 +57,6 @@ await mock.module('../src/lib/server-runtime', () => ({
       close: async () => {},
     }
   },
-}))
-
-await mock.module('../src/cli/startup-banner', () => ({
-  printStartupBanner: mock(() => {}),
 }))
 
 let githubUserFailure: unknown
@@ -165,6 +157,19 @@ await mock.module('../src/clients/github-client', () => ({
 }))
 
 const { PATHS, ensurePaths } = await import('../src/lib/paths')
+const originalPaths = { ...PATHS }
+
+function installSharedTestPaths(): void {
+  Object.assign(PATHS, testPaths)
+}
+
+function restoreSharedTestPaths(): void {
+  Object.assign(PATHS, originalPaths)
+}
+
+beforeEach(installSharedTestPaths)
+afterEach(restoreSharedTestPaths)
+
 const { beginAccountManagementTransaction } = await import('../src/lib/account-management-transaction')
 const { auth } = await import('../src/auth')
 const { checkUsage } = await import('../src/check-usage')
@@ -313,10 +318,12 @@ async function runStartCommand(args: StartArgs): Promise<void> {
   CopilotClient.prototype.getModels = async () => ({ data: [], object: 'list' }) as Awaited<ReturnType<typeof originalGetModels>>
   globalThis.setTimeout = ((..._args: Parameters<typeof setTimeout>) => 1 as unknown as ReturnType<typeof setTimeout>) as typeof setTimeout
   globalThis.clearTimeout = ((..._args: Parameters<typeof clearTimeout>) => {}) as typeof clearTimeout
+  const banner = spyOn(console, 'log').mockImplementation(() => {})
   try {
     await start.run!({ rawArgs: [], args, cmd: start })
   }
   finally {
+    banner.mockRestore()
     globalThis.setTimeout = originalSetTimeout
     globalThis.clearTimeout = originalClearTimeout
     CopilotClient.prototype.getModels = originalGetModels
@@ -344,6 +351,7 @@ describe('GitHub credential migration', () => {
     copilotUsageTokens.length = 0
     copilotUsageApiBaseUrls.length = 0
     mockInfo.mockClear()
+    mockDebug.mockClear()
     mockWarn.mockClear()
     mockError.mockClear()
     mockSuccess.mockClear()
@@ -388,6 +396,9 @@ describe('GitHub credential migration', () => {
 
     await runStartCommand(makeStartArgs())
 
+    expect(mockDebug).toHaveBeenCalledWith(expect.stringContaining('Migrated legacy account'))
+    expect(mockInfo).not.toHaveBeenCalledWith(expect.stringContaining('Migrated legacy account'))
+
     expect(JSON.parse(await fs.readFile(PATHS.CONFIG_PATH, 'utf8'))).toEqual({
       smallModel: 'gpt-5-mini',
       accountRouting: {
@@ -407,6 +418,9 @@ describe('GitHub credential migration', () => {
       'account': 'account1',
       'ghe-domain': 'corp.ghe.com',
     }))
+
+    expect(mockInfo).toHaveBeenCalledWith('Not logged in, getting new access token')
+    expect(mockInfo).toHaveBeenCalledWith('Please enter the code "1234" in http://test')
 
     expect(await readGitHubCredential()).toMatchObject({
       accountName: 'default',
@@ -613,6 +627,9 @@ describe('GitHub credential migration', () => {
     }))
 
     await runStartCommand(makeStartArgs())
+
+    expect(mockDebug).toHaveBeenCalledWith('Initializing GitHub account "primary"')
+    expect(mockInfo).not.toHaveBeenCalledWith(expect.stringContaining('Initializing GitHub account'))
 
     expect(githubUserTokens).toEqual(['primary-token', 'account1-token'])
     expect(githubUserApiBaseUrls).toEqual([

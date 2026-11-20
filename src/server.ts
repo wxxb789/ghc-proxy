@@ -4,7 +4,7 @@ import { cors } from '@elysiajs/cors'
 import { enforceTargetGates } from '~/lib/target-gates'
 import { HTTPError } from './lib/error'
 import { normalizeRequestPathname, pathRefusalResponse } from './lib/error-dialect'
-import { formatElapsed, getOrCreateRequestCorrelation, getRequestStart, logRequest, markRequestStart } from './lib/request-logger'
+import { formatElapsed, getOrCreateRequestCorrelation, getRequestStart, logRequest, markRequestStart, shouldLogRequest } from './lib/request-logger'
 import { createRuntimeApp } from './lib/server-runtime'
 import { isTimeoutLikeError } from './lib/timeout-error'
 import { isClientAbortError } from './lib/upstream-signal'
@@ -17,6 +17,7 @@ import { createImageRoutes } from './routes/images/route'
 import { createMessageRoutes } from './routes/messages/route'
 import { createModelRoutes } from './routes/models/route'
 import { createResponsesRoutes } from './routes/responses/route'
+import { createSystemOneRoutes } from './routes/systemone/route'
 import { createTokenRoute } from './routes/token/route'
 import { createUsageRoute } from './routes/usage/route'
 import { authStore, getRequestAccountName, modelCache, resolveRequestAccountRuntime, runtimeStore, runWithAccountRuntime } from './state'
@@ -182,6 +183,24 @@ export function toErrorResponse(
 }
 
 export function createServer(options?: ServerOptions) {
+  function completeRequest(request: Request, status: number): void {
+    const { requestId, callerRequestId } = getOrCreateRequestCorrelation(request)
+    const completed = runtimeStore.requests.complete(requestId, status)
+    if (!completed || options?.logRequests === false || !shouldLogRequest(status))
+      return
+
+    logRequest(
+      request.method,
+      request.url,
+      status,
+      formatElapsed(getRequestStart(request)),
+      { originalModel: completed.requestedModel, steps: completed.modelTransforms },
+      requestId,
+      callerRequestId,
+      getRequestAccountName(request),
+    )
+  }
+
   const app = createRuntimeApp({ idleTimeout: options?.idleTimeout })
     .wrap(accountRoutingWrapper)
     // Names the class for `code`-based observability classification only
@@ -210,8 +229,17 @@ export function createServer(options?: ServerOptions) {
     })
     .onRequest(async ({ request, server }) => {
       const refusal = await enforceTargetGates(request, server)
-      if (refusal)
+      if (refusal) {
+        // Elysia returns from onRequest without calling onAfterResponse; a
+        // Response's `.body` is a ReadableStream rather than an error body, so
+        // pass the known `invalid_request_error` category explicitly.
+        runtimeStore.requests.recordError(
+          getOrCreateRequestCorrelation(request).requestId,
+          sanitizeObservedError({ body: { error: { type: 'invalid_request_error' } } }, 'HTTP', refusal.status),
+        )
+        completeRequest(request, refusal.status)
         return refusal
+      }
     })
     .use(cors())
     .derive(({ request }) => ({
@@ -231,35 +259,15 @@ export function createServer(options?: ServerOptions) {
         )
       }
     })
-    .onAfterResponse(({ callerRequestId, request, requestId, set }) => {
-      const correlation = getOrCreateRequestCorrelation(request)
-      const internalRequestId = requestId ?? correlation.requestId
-      const status = typeof set.status === 'number' ? set.status : 200
-      const completed = runtimeStore.requests.complete(internalRequestId, status)
-      if (!completed)
-        return
-      if (options?.logRequests === false)
-        return
-
-      const elapsed = formatElapsed(getRequestStart(request))
-      const externalRequestId = callerRequestId ?? correlation.callerRequestId
-      logRequest(
-        request.method,
-        request.url,
-        status,
-        elapsed,
-        { originalModel: completed.requestedModel, steps: completed.modelTransforms },
-        internalRequestId,
-        externalRequestId,
-        getRequestAccountName(request),
-      )
+    .onAfterResponse(({ request, response, set }) => {
+      const status = response instanceof Response
+        ? response.status
+        : typeof set.status === 'number' ? set.status : 200
+      completeRequest(request, status)
     })
     .onError(({ code, error, request, set }) => {
       const response = toErrorResponse({ code, error })
-      // `onAfterResponse` logs `set.status`, and the request record stores it,
-      // so derive it from the response that is actually sent. Writing it in
-      // the mapper's branches made the two drift whenever a branch was added
-      // or bypassed.
+      // Some error paths expose only set.status to onAfterResponse.
       set.status = response.status
       if (!isClientAbortError(error)) {
         runtimeStore.requests.recordError(
@@ -280,25 +288,20 @@ export function createServer(options?: ServerOptions) {
       accountManager: options?.accountManager,
       serverPort: options?.serverPort,
     }))
-    // Root-level routes: completions, decisions, models, embeddings, images, responses are
-    // registered here for clients that omit the /v1 prefix. Token and usage routes
-    // are root-only because they are proxy-specific endpoints, not part of any
-    // upstream API spec.
     .use(createCompletionRoutes())
     .use(createDecisionRoutes())
+    .use(createSystemOneRoutes())
     .use(createModelRoutes())
     .use(createEmbeddingRoutes())
     .use(createImageRoutes())
     .use(createResponsesRoutes())
     .use(createTokenRoute())
     .use(createUsageRoute())
-    // /v1-prefixed routes: mirrors the root-level API routes under /v1 for clients
-    // that include the standard OpenAI/Anthropic prefix. Messages (Anthropic native)
-    // is /v1-only since Anthropic clients always use /v1/messages.
     .group('/v1', (app) => {
       return app
         .use(createCompletionRoutes())
         .use(createDecisionRoutes())
+        .use(createSystemOneRoutes())
         .use(createModelRoutes())
         .use(createEmbeddingRoutes())
         .use(createImageRoutes())

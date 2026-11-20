@@ -9,6 +9,7 @@ import type {
 import type { AccountRoutingConfig } from '~/lib/account-routing'
 import type { SSEStreamChunk } from '~/lib/execution-strategy'
 import type { RuntimeListener } from '~/lib/server-runtime'
+import type { AccountRuntime } from '~/state'
 import type { CopilotUsageResponse, Model } from '~/types'
 
 import { deepStrictEqual } from 'node:assert'
@@ -197,6 +198,36 @@ async function probeHttpErrorResponseContract(): Promise<void> {
   assertProbe(payload.error?.type === 'overloaded_error', 'error payload changed during toResponse()')
 }
 
+function seedOfflineDecisionsCatalog(models: AccountRuntime['models']): void {
+  const systemOneModel: Model = {
+    id: 'microsoft-decision-1',
+    model_picker_enabled: false,
+    name: 'microsoft-decision-1',
+    object: 'model',
+    preview: true,
+    vendor: 'Experimental',
+    version: 'microsoft-decision-1',
+    capabilities: {
+      family: 'microsoft-decision-1',
+      limits: {},
+      object: 'model_capabilities',
+      supports: {},
+      tokenizer: 'o200k_base',
+      type: 'decisions',
+    },
+    supported_endpoints: ['/v1/systemone'],
+  }
+  models.cacheModels({
+    object: 'list',
+    data: [systemOneModel, {
+      ...systemOneModel,
+      id: 'gpt-6-luna-decisions',
+      name: 'gpt-6-luna-decisions',
+      supported_endpoints: ['/v1/decisions'],
+    }],
+  })
+}
+
 /**
  * Exercise a thrown `HTTPError` over a real listener.
  *
@@ -217,29 +248,7 @@ async function probeHttpErrorResponseContract(): Promise<void> {
 async function probeHttpErrorTransportContract(): Promise<void> {
   const runtime = createAccountRuntime('default')
   runtime.auth.copilotToken = 'selfcheck-http-error-token'
-  // System One admission happens after the catalog lookup, so the Decisions
-  // rejection probe needs a cached System One model to stay offline.
-  runtime.models.cacheModels({
-    object: 'list',
-    data: [{
-      id: 'microsoft-decision-1',
-      model_picker_enabled: false,
-      name: 'microsoft-decision-1',
-      object: 'model',
-      preview: true,
-      vendor: 'Experimental',
-      version: 'microsoft-decision-1',
-      capabilities: {
-        family: 'microsoft-decision-1',
-        limits: {},
-        object: 'model_capabilities',
-        supports: {},
-        tokenizer: 'o200k_base',
-        type: 'decisions',
-      },
-      supported_endpoints: ['/v1/systemone'],
-    } satisfies Model],
-  })
+  seedOfflineDecisionsCatalog(runtime.models)
   const routing = compileAccountRouting({
     baseHostname: 'localhost',
     defaultAccount: 'default',
@@ -338,6 +347,33 @@ async function probeHttpErrorTransportContract(): Promise<void> {
           code: 'unsupported_decisions_image',
           message: 'Image input is not supported by System One models.',
           type: 'translation_error',
+        },
+      },
+      status: 400,
+    })
+
+    const requestSystemOne = (state: unknown) => requestAccountRoute(port, DEFAULT_ACCOUNT_HOSTNAME, '/v1/systemone', {
+      body: JSON.stringify({ model: 'gpt-6-luna-decisions', state, questions: { probe: { type: 'noul' } } }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+    assertHttpErrorEnvelope(await requestSystemOne('probe'), 'systemone model admission', {
+      body: {
+        error: {
+          message: 'The selected model does not support the systemone endpoint.',
+          param: 'model',
+          type: 'invalid_request_error',
+        },
+      },
+      status: 400,
+    })
+    assertHttpErrorEnvelope(await requestSystemOne(null), 'systemone state validation', {
+      body: {
+        error: {
+          message: 'Invalid request payload',
+          param: 'systemone',
+          type: 'invalid_request_error',
+          details: [{ path: ['state'], code: 'custom', message: 'Expected a string, object or array within the JSON size and depth limits' }],
         },
       },
       status: 400,

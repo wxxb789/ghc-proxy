@@ -100,7 +100,7 @@ export async function handleCountTokensCore(
   }
   finalTokenCount += calibratedBuiltinTokens
 
-  consola.info('Token count:', finalTokenCount)
+  consola.debug('Token count:', finalTokenCount)
 
   return {
     input_tokens: finalTokenCount,

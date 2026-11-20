@@ -21,6 +21,8 @@ const KNOWN_OBSERVED_ENDPOINTS = new Set([
   '/v1/images/edits',
   '/decisions',
   '/v1/decisions',
+  '/systemone',
+  '/v1/systemone',
   '/chat/completions',
   '/v1/chat/completions',
   '/responses',

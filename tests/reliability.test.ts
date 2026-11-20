@@ -1,6 +1,6 @@
 import type { ServerSentEventMessage } from 'fetch-event-stream'
 
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import consola from 'consola'
 
 import { CopilotClient } from '~/clients'
@@ -8,7 +8,7 @@ import { getCachedConfig } from '~/lib/config'
 import { HTTPError } from '~/lib/error'
 import { formatElapsed, getOrCreateRequestCorrelation, logRecoveryEvent } from '~/lib/request-logger'
 import { createServer, toErrorResponse } from '~/server'
-import { modelCache, runtimeStore } from '~/state'
+import { createAccountRuntime, modelCache, runtimeStore, runWithAccountRuntime } from '~/state'
 import { TranslationFailure } from '~/translator/anthropic/translation-issue'
 import { buildModel, buildModelsResponse, createApp, restoreStateSnapshot, saveStateSnapshot } from './helpers'
 
@@ -313,9 +313,8 @@ describe('Error classification in onError handler', () => {
 
 /**
  * `onAfterResponse` fires after `handle()` resolves, so a real-server request
- * writes its access-log line asynchronously. Without waiting, that line lands
- * inside a later test's `console.log` capture window and trips its single-line
- * assertion.
+ * writes its access-log line asynchronously. Wait for the hook before reading
+ * the captured log line or the completed request record.
  */
 async function drainAccessLog() {
   await new Promise(resolve => setTimeout(resolve, 50))
@@ -572,14 +571,6 @@ describe('Streaming error handling', () => {
   })
 })
 
-// ── Access-log status code ──
-//
-// `onAfterResponse` reads `set.status`, but `onError` returns a fresh Response
-// instead of falling through Elysia's normal path. Without an explicit
-// write-back, every error routed through `onError` was logged as 500 —
-// including the ones the client received as 504. These tests need the real
-// `createServer()`; `createApp()` omits the logging hook.
-
 // Built from a char code so the source carries no literal control character.
 const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, 'g')
 
@@ -609,17 +600,23 @@ async function captureAccessLogLine(
     request?: Request
     reject?: () => Promise<never>
     callerRequestId?: string
+    severity?: 'debug' | 'warn' | 'error'
   } = {},
 ): Promise<string> {
   const lines: Array<string> = []
-  // eslint-disable-next-line no-console
-  const originalLog = console.log
-  // eslint-disable-next-line no-console
-  console.log = ((...args: Array<unknown>) => {
-    lines.push(args.map(String).join(' '))
-  }) as typeof console.log
+  const originalLevel = consola.level
+  const noopLog = Object.assign(() => {}, { raw: () => {} }) as unknown as typeof consola.warn
+  const output = spyOn(consola, options.severity ?? 'error').mockImplementation(Object.assign((message: unknown) => {
+    if (typeof message === 'string') {
+      const line = message.replace(ANSI_RE, '')
+      if (line.startsWith('<- '))
+        lines.push(line)
+    }
+  }, { raw: noopLog.raw }) as unknown as typeof consola.error)
 
   try {
+    if (options.severity === 'debug')
+      consola.level = 4
     if (options.reject) {
       CopilotClient.prototype.createChatCompletions = options.reject as never
     }
@@ -629,22 +626,17 @@ async function captureAccessLogLine(
     await drainAccessLog()
   }
   finally {
-    // eslint-disable-next-line no-console
-    console.log = originalLog
+    consola.level = originalLevel
+    output.mockRestore()
   }
 
   expect(lines).toHaveLength(1)
-  return lines[0]!.replace(ANSI_RE, '')
+  return lines[0]!
 }
 
-/** `<- POST /v1/messages 504 12ms [model=... ] [rid=...]` — index 3 is the status. */
-function accessLogStatus(line: string): string | undefined {
-  return line.split(' ')[3]
-}
-
-/** Same line shape — index 4 is the elapsed duration. */
-function accessLogElapsed(line: string): string | undefined {
-  return line.split(' ')[4]
+function parseAccessLogLine(line: string) {
+  const [_arrow, _method, _path, status, elapsed] = line.split(' ')
+  return { status, elapsed }
 }
 
 describe('Access-log status code matches the client response', () => {
@@ -655,7 +647,7 @@ describe('Access-log status code matches the client response', () => {
       reject: () => Promise.reject(createBunFetchTimeoutError()),
     })
 
-    expect(accessLogStatus(line)).toBe('504')
+    expect(parseAccessLogLine(line).status).toBe('504')
   })
 
   test('logs 504 for a Node-shaped timeout', async () => {
@@ -663,7 +655,7 @@ describe('Access-log status code matches the client response', () => {
       reject: () => Promise.reject(createNodeHeadersTimeoutError()),
     })
 
-    expect(accessLogStatus(line)).toBe('504')
+    expect(parseAccessLogLine(line).status).toBe('504')
   })
 
   test('logs 500 for a generic error', async () => {
@@ -671,7 +663,7 @@ describe('Access-log status code matches the client response', () => {
       reject: () => Promise.reject(new Error('Something went wrong')),
     })
 
-    expect(accessLogStatus(line)).toBe('500')
+    expect(parseAccessLogLine(line).status).toBe('500')
   })
 
   test('logs the upstream status for an HTTPError', async () => {
@@ -679,9 +671,10 @@ describe('Access-log status code matches the client response', () => {
       reject: () => Promise.reject(
         new HTTPError(429, { error: { message: 'Upstream error', type: 'error' } }),
       ),
+      severity: 'warn',
     })
 
-    expect(accessLogStatus(line)).toBe('429')
+    expect(parseAccessLogLine(line).status).toBe('429')
   })
 
   test('logs the caller request id alongside the unique internal id', async () => {
@@ -693,15 +686,31 @@ describe('Access-log status code matches the client response', () => {
     expect(line).toContain('callerRid=caller_request/id')
     expect(line).toMatch(/\brid=[\da-f]{8}\b/)
   })
-})
 
-// ── Access-log model mapping ──
-//
-// The access log used to keep its own copy of the model mapping, refreshed
-// only when a result was delivered. A rewritten request that then failed
-// upstream logged the requested model with no steps while the Dashboard
-// recorded the rewrite, so the two disagreed on exactly the requests an
-// operator debugs.
+  test('an M365 gate refusal logs and records the actual 400 status', async () => {
+    const target = createAccountRuntime('office', { upstream: 'm365' })
+    const request = new Request('http://localhost/v1/chat/completions', { method: 'POST' })
+    const { requestId } = getOrCreateRequestCorrelation(request)
+    const warn = spyOn(consola, 'warn').mockImplementation(Object.assign(() => {}, { raw: () => {} }) as unknown as typeof consola.warn)
+    try {
+      const response = await runWithAccountRuntime(target, () => createServer().handle(request))
+      expect(response.status).toBe(400)
+      await drainAccessLog()
+
+      const snapshot = runtimeStore.requests.snapshot()
+      expect(snapshot.recent.find(record => record.requestId === requestId)).toMatchObject({
+        state: 'failed',
+        status: 400,
+        errorSummary: 'HTTP 400 (invalid_request_error)',
+      })
+      expect(snapshot.active.some(record => record.requestId === requestId)).toBe(false)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('400'))
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+})
 
 describe('Access-log model mapping matches the request record', () => {
   useCreateChatCompletionsSnapshot()
@@ -731,9 +740,10 @@ describe('Access-log model mapping matches the request record', () => {
       reject: () => Promise.reject(
         new HTTPError(400, { error: { message: 'Bad request', type: 'invalid_request_error' } }),
       ),
+      severity: 'warn',
     })
 
-    expect(accessLogStatus(line)).toBe('400')
+    expect(parseAccessLogLine(line).status).toBe('400')
     expect(line).toContain('model=claude-haiku-4.5 -[CONFIG_REWRITE]-> claude-sonnet-4.5')
     const record = runtimeStore.requests.snapshot().recent[0]
     expect(record?.requestedModel).toBe('claude-haiku-4.5')
@@ -754,21 +764,60 @@ describe('Access-log elapsed duration is real on every path', () => {
   test('an unmatched route logs a real duration, not NaNs', async () => {
     const line = await captureAccessLogLine({
       request: new Request('http://localhost/api/tags'),
+      severity: 'warn',
     })
 
     expect(line).not.toContain('NaN')
-    expect(accessLogStatus(line)).toBe('404')
-    expect(accessLogElapsed(line)).toMatch(DURATION_RE)
+    const { status, elapsed } = parseAccessLogLine(line)
+    expect(status).toBe('404')
+    expect(elapsed).toMatch(DURATION_RE)
   })
 
   test('a matched route still logs a real duration', async () => {
     const line = await captureAccessLogLine({
       request: new Request('http://localhost/health'),
+      severity: 'debug',
     })
 
     expect(line).not.toContain('NaN')
-    expect(accessLogStatus(line)).toBe('200')
-    expect(accessLogElapsed(line)).toMatch(DURATION_RE)
+    const { status, elapsed } = parseAccessLogLine(line)
+    expect(status).toBe('200')
+    expect(elapsed).toMatch(DURATION_RE)
+  })
+
+  test('default logging omits a successful request but still completes its Dashboard record', async () => {
+    const request = new Request('http://localhost/health')
+    const { requestId } = getOrCreateRequestCorrelation(request)
+    const originalLevel = consola.level
+    const noopLog = Object.assign(() => {}, { raw: () => {} }) as unknown as typeof consola.debug
+    const spies = [
+      spyOn(consola, 'debug').mockImplementation(noopLog),
+      spyOn(consola, 'info').mockImplementation(noopLog),
+      spyOn(consola, 'warn').mockImplementation(noopLog),
+      spyOn(consola, 'error').mockImplementation(noopLog),
+      spyOn(console, 'log').mockImplementation(() => {}),
+    ]
+    try {
+      consola.level = 3
+      const response = await createServer().handle(request)
+      expect(response.status).toBe(200)
+      await drainAccessLog()
+
+      const snapshot = runtimeStore.requests.snapshot()
+      expect(snapshot.recent.find(record => record.requestId === requestId)?.status).toBe(200)
+      expect(snapshot.active).toHaveLength(0)
+      for (const spy of spies) {
+        const accessLogs = spy.mock.calls.filter(([message]) =>
+          typeof message === 'string' && message.replace(ANSI_RE, '').startsWith('<- '),
+        )
+        expect(accessLogs).toHaveLength(0)
+      }
+    }
+    finally {
+      consola.level = originalLevel
+      for (const spy of spies)
+        spy.mockRestore()
+    }
   })
 
   // The `onRequest` hook must discard its return value: `WeakMap.set` returns
@@ -860,11 +909,7 @@ describe('Request correlation and recovery logging', () => {
   })
 
   test('default recovery logs are concise, safe, and keep terminal summaries', () => {
-    const originalInfo = consola.info
-    const calls: unknown[][] = []
-    consola.info = ((...args: unknown[]) => {
-      calls.push(args)
-    }) as unknown as typeof consola.info
+    const warn = spyOn(consola, 'warn').mockImplementation(Object.assign(() => {}, { raw: () => {} }) as unknown as typeof consola.warn)
 
     try {
       logRecoveryEvent({
@@ -901,15 +946,14 @@ describe('Request correlation and recovery logging', () => {
         remainingBudgetMs: 12_000,
         decision: 'retry-limit',
       })
+      expect(warn.mock.calls).toEqual([
+        ['Upstream recovery recovered account=account1 status=200 model=gpt\\nforged retry=1 rid=recovere'],
+        ['Upstream rate limit retry-limit status=429 model=gpt-5.6-luna scope=account retry=1 budget=12s rid=rate-lim'],
+      ])
     }
     finally {
-      consola.info = originalInfo
+      warn.mockRestore()
     }
-
-    expect(calls).toEqual([
-      ['Upstream recovery recovered account=account1 status=200 model=gpt\\nforged retry=1 rid=recovere'],
-      ['Upstream rate limit retry-limit status=429 model=gpt-5.6-luna scope=account retry=1 budget=12s rid=rate-lim'],
-    ])
   })
 })
 

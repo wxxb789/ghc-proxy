@@ -72,11 +72,11 @@ claudeSonnet: claude-sonnet-5.5
 claudeHaiku:  claude-haiku-5.5
 ```
 
-Within this Chat Completions adapter, an unconfigured family fallback uses its
-previous default (`claude-opus-5`, `claude-sonnet-5`, or `claude-haiku-4.5`)
-only when the cached model IDs advertise it and omit the 5.5 default; absent
-cache data or neither ID keeps the built-in 5.5 default. Explicit environment
-and config overrides are unchanged, and no other candidate is inferred.
+Without an override, the Opus fallback stays `claude-opus-5.5` even when the
+cache only advertises `claude-opus-5`. Sonnet and Haiku use their previous
+defaults (`claude-sonnet-5` and `claude-haiku-4.5`) only when the cache advertises
+the previous default but not the 5.5 default. An exact match in the cache still
+takes precedence over a family fallback.
 
 ### Overload Fallback
 

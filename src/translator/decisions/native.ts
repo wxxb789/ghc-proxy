@@ -1,5 +1,21 @@
 import type { DecisionsRequest, DecisionsResponse } from '~/types'
 
+import { z } from 'zod'
+
+import { nonNegativeIntegerSchema } from '~/ingest/validation/shared'
+import { TranslationFailure } from '~/translator/anthropic/translation-issue'
+
+const nativeAnswerSchema = z.object({
+  type: z.enum(['predicate', 'choice', 'score', 'refusal']),
+  name: z.string().nullable().optional(),
+})
+
+const nativeResponseSchema = z.object({
+  model: z.string().min(1),
+  answers: z.unknown(),
+  usage: z.object({ input_tokens: nonNegativeIntegerSchema, output_tokens: nonNegativeIntegerSchema }),
+})
+
 export interface NativeDecisionsRequest {
   upstream: DecisionsRequest
   /** Placeholder name sent upstream → the public `name` it stands in for. */
@@ -12,7 +28,7 @@ export interface NativeDecisionsRequest {
  * question names: the Copilot gateway answers an opaque `400 Bad Request` when
  * any question has no name, an empty name, or a name already used by another
  * question, although the public contract allows all three. Each such question
- * gets a unique placeholder that `restoreNativeDecisionsNames` maps back.
+ * gets a unique placeholder that `restoreNativeDecisionsResponse` maps back.
  */
 export function buildNativeDecisionsRequest(
   payload: DecisionsRequest,
@@ -43,37 +59,42 @@ export function buildNativeDecisionsRequest(
   }
 }
 
+function hasValidAnswers(answers: unknown, questionCount: number): boolean {
+  if (!Array.isArray(answers) || answers.length !== questionCount)
+    return false
+  for (let index = 0; index < answers.length; index++) {
+    if (!nativeAnswerSchema.safeParse(answers[index]).success)
+      return false
+  }
+  return true
+}
+
 /**
  * Pass the upstream response through, restoring the public names replaced by
  * placeholders. Answers are otherwise returned exactly as upstream sent them.
  */
-export function restoreNativeDecisionsNames(
+export function restoreNativeDecisionsResponse(
   raw: unknown,
-  placeholders: Map<string, string | null>,
+  { upstream, placeholders }: NativeDecisionsRequest,
 ): DecisionsResponse {
-  if (
-    placeholders.size === 0
-    || typeof raw !== 'object'
-    || raw === null
-    || !('answers' in raw)
-    || !Array.isArray(raw.answers)
-  ) {
-    return raw as DecisionsResponse
+  const parsed = nativeResponseSchema.safeParse(raw)
+  if (!parsed.success || !hasValidAnswers(parsed.data.answers, upstream.questions.length)) {
+    throw new TranslationFailure('Upstream decisions response has an invalid shape.', {
+      status: 502,
+      kind: 'invalid_upstream_decisions_response',
+    })
   }
 
+  const response = raw as DecisionsResponse
+  if (placeholders.size === 0)
+    return response
+
   return {
-    ...raw,
-    answers: raw.answers.map((answer: unknown) => {
-      if (
-        typeof answer === 'object'
-        && answer !== null
-        && 'name' in answer
-        && typeof answer.name === 'string'
-        && placeholders.has(answer.name)
-      ) {
-        return { ...answer, name: placeholders.get(answer.name) }
-      }
+    ...response,
+    answers: response.answers.map((answer) => {
+      if (typeof answer.name === 'string' && placeholders.has(answer.name))
+        return { ...answer, name: placeholders.get(answer.name) ?? null }
       return answer
     }),
-  } as DecisionsResponse
+  }
 }

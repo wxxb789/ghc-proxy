@@ -1371,12 +1371,12 @@ describe('messages routing', () => {
     const config = getCachedConfig() as Record<string, unknown>
     config.overloadFallbacks = { 'messages-source': 'messages-target' }
 
-    const originalInfo = consola.info
+    const originalWarn = consola.warn
     const fallbackEvents: string[] = []
-    consola.info = ((message: unknown) => {
+    consola.warn = ((message: unknown) => {
       if (typeof message === 'string' && message.startsWith('Upstream '))
         fallbackEvents.push(message)
-    }) as unknown as typeof consola.info
+    }) as unknown as typeof consola.warn
 
     const sourceError = new HTTPError(529, {
       error: { message: 'source overloaded', type: 'overloaded_error' },
@@ -1429,7 +1429,7 @@ describe('messages routing', () => {
       }
     }
     finally {
-      consola.info = originalInfo
+      consola.warn = originalWarn
     }
   })
 

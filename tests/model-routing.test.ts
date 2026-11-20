@@ -2,7 +2,8 @@ import type { ModelMappingInfo } from '~/lib/request-logger'
 import type { AnthropicMessagesPayload } from '~/translator'
 
 import process from 'node:process'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import consola from 'consola'
 
 import { getCachedConfig } from '~/lib/config'
 import { DEFAULT_FALLBACKS, getModelFallbackConfig, resolveModel } from '~/lib/model-resolver'
@@ -110,12 +111,14 @@ describe.each(FALLBACK_FAMILIES)('getModelFallbackConfig ($family)', ({ family, 
     }
   })
 
-  test('uses the advertised legacy default in the resolver path when 5.5 is unavailable', () => {
+  test('uses the family fallback even when only the previous default is advertised', () => {
     const knownModelIds = new Set([legacy])
     const fallbackConfig = getModelFallbackConfig(knownModelIds)
+    const expected = family === 'opus' ? current : legacy
 
-    expect(fallbackConfig[key]).toBe(legacy)
-    expect(resolveModel(`claude-${family}-unadvertised`, knownModelIds, fallbackConfig)).toBe(legacy)
+    expect(fallbackConfig[key]).toBe(expected)
+    expect(resolveModel(`claude-${family}-unadvertised`, knownModelIds, fallbackConfig)).toBe(expected)
+    expect(resolveModel(legacy, knownModelIds, fallbackConfig)).toBe(legacy)
   })
 
   test('keeps the built-in default when cache IDs are absent or advertise neither default', () => {
@@ -127,16 +130,17 @@ describe.each(FALLBACK_FAMILIES)('getModelFallbackConfig ($family)', ({ family, 
     expect(getModelFallbackConfig(new Set([legacy, current]))[key]).toBe(current)
   })
 
-  test('preserves an explicit config fallback equal to the built-in default', () => {
-    getCachedConfig().modelFallback = { [key]: current }
+  test('honors an explicit config fallback', () => {
+    getCachedConfig().modelFallback = { [key]: older }
 
-    expect(getModelFallbackConfig(new Set([legacy]))[key]).toBe(current)
+    expect(getModelFallbackConfig(new Set([legacy]))[key]).toBe(older)
   })
 
-  test('preserves an explicit environment fallback equal to the built-in default', () => {
-    process.env[envVar] = current
+  test('prefers an explicit environment fallback over config', () => {
+    process.env[envVar] = legacy
+    getCachedConfig().modelFallback = { [key]: older }
 
-    expect(getModelFallbackConfig(new Set([legacy]))[key]).toBe(current)
+    expect(getModelFallbackConfig(new Set([current]))[key]).toBe(legacy)
   })
 })
 
@@ -383,13 +387,6 @@ describe('request model policy', () => {
   })
 })
 
-// ── Model trace rendering — the ONLY user-visible output of the transform chain ──
-//
-// The trace is printed to stdout on every request (src/server.ts onAfterResponse
-// -> logRequest -> formatModelMapping). Nothing else in the suite asserts on it,
-// so a refactor that drops a tag or reorders the chain would be invisible.
-// These tests lock the rendered shape.
-
 // Built from a char code so the source carries no literal control character.
 const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, 'g')
 
@@ -397,27 +394,53 @@ function stripAnsi(value: string): string {
   return value.replace(ANSI_RE, '')
 }
 
-/** Capture the single line logRequest writes to stdout, with colors stripped. */
+const noopLog = Object.assign(() => {}, { raw: () => {} }) as unknown as typeof consola.warn
+
 function captureLogLine(modelInfo?: ModelMappingInfo): string {
-  const lines: Array<string> = []
-  // eslint-disable-next-line no-console
-  const originalLog = console.log
-  // eslint-disable-next-line no-console
-  console.log = ((...args: Array<unknown>) => {
-    lines.push(args.map(String).join(' '))
-  }) as typeof console.log
+  const warn = spyOn(consola, 'warn').mockImplementation(noopLog)
 
   try {
-    logRequest('POST', 'http://localhost/v1/messages', 200, '1ms', modelInfo)
+    logRequest('POST', 'http://localhost/v1/messages', 400, '1ms', modelInfo)
+    expect(warn).toHaveBeenCalledTimes(1)
+    return stripAnsi(String(warn.mock.calls[0]?.[0]))
   }
   finally {
-    // eslint-disable-next-line no-console
-    console.log = originalLog
+    warn.mockRestore()
   }
-
-  expect(lines).toHaveLength(1)
-  return stripAnsi(lines[0]!)
 }
+
+describe('access log severity', () => {
+  test.each([
+    { status: 200, level: 3, severity: undefined },
+    { status: 302, level: 3, severity: undefined },
+    { status: 200, level: 4, severity: 'debug' },
+    { status: 400, level: 3, severity: 'warn' },
+    { status: 500, level: 3, severity: 'error' },
+  ])('status $status at level $level logs at $severity', ({ status, level, severity }) => {
+    const originalLevel = consola.level
+    const spies = {
+      debug: spyOn(consola, 'debug').mockImplementation(noopLog),
+      info: spyOn(consola, 'info').mockImplementation(noopLog),
+      warn: spyOn(consola, 'warn').mockImplementation(noopLog),
+      error: spyOn(consola, 'error').mockImplementation(noopLog),
+    }
+    const stdout = spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      consola.level = level
+      logRequest('GET', 'http://localhost/health', status, '1ms')
+      expect(stdout).not.toHaveBeenCalled()
+      for (const [name, spy] of Object.entries(spies)) {
+        expect(spy).toHaveBeenCalledTimes(name === severity ? 1 : 0)
+      }
+    }
+    finally {
+      consola.level = originalLevel
+      stdout.mockRestore()
+      for (const spy of Object.values(spies))
+        spy.mockRestore()
+    }
+  })
+})
 
 describe('model trace rendering', () => {
   test('renders no model segment when there is no mapping', () => {

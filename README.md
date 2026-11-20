@@ -442,7 +442,7 @@ Or in the proxy's **config file** (`~/.local/share/ghc-proxy/config.json`):
 }
 ```
 
-> **Note:** Model fallbacks apply only inside the **Chat Completions adapter** used by the Messages fallback path and by `/v1/messages/count_tokens`; native Messages and Responses strategies pass the model ID through to Copilot unchanged. With no override for a family, its previous default (`claude-opus-5`, `claude-sonnet-5`, or `claude-haiku-4.5`) is selected only when cached models advertise it but omit the 5.5 default.
+> **Note:** Model fallbacks apply only inside the **Chat Completions adapter** used by the Messages fallback path and by `/v1/messages/count_tokens`; native Messages and Responses strategies pass the model ID through to Copilot unchanged. `claude-opus-*` always defaults to `claude-opus-5.5` unless overridden; with no override for Sonnet or Haiku, its previous default (`claude-sonnet-5` or `claude-haiku-4.5`) is selected only when cached models advertise it and omit the 5.5 default.
 >
 > The M365 target is an exception: when no `modelRewrites` rule matches, unadvertised `claude-opus-*`, `claude-sonnet-*`, and `claude-haiku-*` IDs are mapped to `claude-opus-5.5`, `claude-sonnet-5.5`, and `claude-haiku-5.5` before strategy selection, and `MODEL_FALLBACK_*` / `modelFallback` are ignored (see [M365 family fallbacks](./docs/design/m365-upstream.md#family-fallbacks)).
 
@@ -538,6 +538,7 @@ For Anthropic `search_result` blocks, an April 17, 2026 probe against `claude-op
 
 - `POST /v1/chat/completions`: OpenAI Chat Completions -> shared planning pipeline -> Copilot `/chat/completions`
 - `POST /v1/decisions`: OpenAI Decisions -> Copilot `/v1/decisions` passthrough for models advertising it (e.g. `gpt-6-luna-decisions`), or direct JSON translation to `/v1/systemone` for System One models (e.g. `microsoft-decision-1`); no streaming, strategy, or overload fallback
+- `POST /v1/systemone`: System One -> Copilot `/v1/systemone` passthrough for models advertising it (e.g. `microsoft-decision-1`); no streaming, strategy, or overload fallback
 - `POST /v1/images/generations` and `/v1/images/edits`: OpenAI Images -> the matching advertised Copilot Images endpoint; image-only models do not use the chat or Messages fallback
 - `POST /v1/responses`: OpenAI Responses create -> native Responses handler -> Copilot `/responses`, or (with `responsesChatCompletionsFallback: true`) Responses-to-Chat translation -> Copilot `/chat/completions` for Chat-only models
 - `POST /v1/responses/input_tokens`: Responses input-token counting passthrough by default, or local estimation in official emulator mode
@@ -559,6 +560,7 @@ This keeps the existing chat pipeline stable while allowing newer Copilot models
 |--------|------|-------------|
 | `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming) |
 | `POST` | `/v1/decisions` | OpenAI Decisions, passed through to `/v1/decisions` or translated to System One (`/v1/systemone`), per model |
+| `POST` | `/v1/systemone` | System One passthrough for models advertising `/v1/systemone` (e.g. `microsoft-decision-1`) |
 | `POST` | `/v1/responses` | Create a Responses API response |
 | `POST` | `/v1/responses/input_tokens` | Count Responses input tokens via upstream passthrough or the local official emulator |
 | `GET` | `/v1/responses/:responseId` | Retrieve one response via upstream passthrough or the local official emulator |

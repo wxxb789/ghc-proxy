@@ -32,7 +32,7 @@ The record describes the model, not the deployment serving it. An advertised cap
 The public OpenAI-compatible API served by `POST /decisions` and `POST /v1/decisions`. It carries a model, string or message evidence, and keyed predicate, choice, or score questions, and returns an answer array in request order. Models advertising Copilot `/v1/decisions` receive the public body with the resolved model id, plus placeholder names for unnamed or duplicate-named questions that are restored in the response; for System One models the proxy rejects public fields it cannot translate losslessly rather than dropping them.
 
 ### System One
-Copilot's keyed-question upstream contract at `POST /v1/systemone`. Its request pairs a state with a `questions` object keyed `q{index}`, and its response supplies an answer for each key plus usage. The Decisions route maps to and from this shape; the public boundary never exposes System One question or answer objects.
+Copilot's keyed-question contract, exposed by the proxy at `POST /systemone` and `POST /v1/systemone`. A request pairs a `state` with a `questions` object; the response supplies an answer for each caller-chosen key plus usage. The OpenAI Decisions route can also translate to this contract internally, using generated `q{index}` keys instead.
 
 ### Execution mechanism
 Who runs a tool once the model decides to use it: the upstream executes it and returns a result, or the model emits a call and the caller executes it. The distinction decides what counts as proof that the tool works — a result coming back, versus a correctly-named call going out — so a check written for one mechanism reports the other as broken.

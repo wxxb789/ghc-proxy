@@ -5,12 +5,11 @@ import type { DecisionsRequest, DecisionsResponse } from '~/types'
 import { cacheModels, createCopilotClient, createRequestRecoveryRecord } from '~/clients/factory'
 import { protocolRegistry } from '~/ingest'
 import { throwInvalidRequestError, withTranslationErrors } from '~/lib/error'
-import { ClientAbortError, withUpstreamSignal } from '~/lib/upstream-signal'
+import { withUpstreamSignal } from '~/lib/upstream-signal'
 import { DECISIONS_ENDPOINT, modelCache, runtimeStore, SYSTEMONE_ENDPOINT } from '~/state'
 import { resolveRequestModel } from '~/transform/resolve-model'
-import { TranslationFailure } from '~/translator/anthropic/translation-issue'
-import { normalizeDecisionsUpstreamError } from '~/translator/decisions/errors'
-import { buildNativeDecisionsRequest, restoreNativeDecisionsNames } from '~/translator/decisions/native'
+import { callDecisionsUpstream, normalizeDecisionsUpstreamError } from '~/translator/decisions/errors'
+import { buildNativeDecisionsRequest, restoreNativeDecisionsResponse } from '~/translator/decisions/native'
 import { translateDecisionsRequest } from '~/translator/decisions/openai-to-systemone'
 import { translateDecisionsResponse } from '~/translator/decisions/systemone-to-openai'
 
@@ -50,33 +49,12 @@ export async function handleDecisionsCore(
     if (!resolved.resolvedModel)
       throwInvalidRequestError('The selected model could not be resolved.', 'model')
 
-    // A bare AbortError from a cancelled body read has no marker, so it
-    // would be reclassified as a plain upstream error by the error mapper.
-    // Tag it here so the shared client-abort path records the request as
-    // aborted instead of failed. Deadline aborts stay timeout-shaped.
-    const callUpstream = async (call: () => Promise<unknown>): Promise<unknown> => {
-      try {
-        return await call()
-      }
-      catch (error) {
-        if (
-          error instanceof DOMException
-          && error.name === 'AbortError'
-          && signal.aborted
-        ) {
-          throw new ClientAbortError()
-        }
-        if (error instanceof SyntaxError) {
-          withTranslationErrors(() => {
-            throw new TranslationFailure('Upstream decisions response was not valid JSON.', {
-              status: 502,
-              kind: 'invalid_upstream_decisions_response',
-            })
-          })
-        }
-        throw error
-      }
-    }
+    const callUpstream = (call: () => Promise<unknown>) => callDecisionsUpstream(
+      call,
+      signal,
+      'Upstream decisions response was not valid JSON.',
+      'invalid_upstream_decisions_response',
+    )
 
     // Models served on Copilot's native Decisions endpoint take the public
     // body as-is; System One models need the translated request.
@@ -85,7 +63,7 @@ export async function handleDecisionsCore(
       const raw = await callUpstream(() => copilotClient.createDecisions(native.upstream, {
         signal: upstreamSignal,
       }))
-      return restoreNativeDecisionsNames(raw, native.placeholders)
+      return withTranslationErrors(() => restoreNativeDecisionsResponse(raw, native))
     }
     if (!modelCache.supportsEndpoint(resolved.resolvedModel, SYSTEMONE_ENDPOINT)) {
       throwInvalidRequestError(

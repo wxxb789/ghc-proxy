@@ -227,6 +227,7 @@ describe('per-target gates', () => {
   })
 
   test('records a refused request in the request history', async () => {
+    runtimeStore.requests.reset()
     const m365 = activate('m365-only')
     setTargetAvailability(m365, { status: 'unavailable', cause: 'no matching broker account' })
     setMscHelperRunner(async () => ({ stdout: '', stderr: '', code: 2 }))
@@ -243,8 +244,13 @@ describe('per-target gates', () => {
 
     expect(response.status).toBe(503)
     const snapshot = runtimeStore.requests.snapshot()
-    expect(snapshot.totals.started).toBeGreaterThan(0)
-    expect(snapshot.active.some(entry => entry.endpoint === '/v1/messages')).toBe(true)
+    expect(snapshot.totals.failed).toBe(1)
+    expect(snapshot.active.some(entry => entry.endpoint === '/v1/messages')).toBe(false)
+    expect(snapshot.recent.find(entry => entry.endpoint === '/v1/messages')).toMatchObject({
+      state: 'failed',
+      status: 503,
+      errorSummary: 'HTTP 503 (invalid_request_error)',
+    })
   })
 })
 
@@ -285,7 +291,14 @@ describe('M365 allow-list over every registered route', () => {
 
   test('enumerates the proxy-specific routes it must refuse', () => {
     const paths = registeredRoutes.map(route => route.path)
-    expect(paths).toEqual(expect.arrayContaining(['/token', '/usage', '/decisions', '/v1/decisions']))
+    expect(paths).toEqual(expect.arrayContaining([
+      '/token',
+      '/usage',
+      '/decisions',
+      '/v1/decisions',
+      '/systemone',
+      '/v1/systemone',
+    ]))
   })
 
   for (const { method, path } of registeredRoutes) {
