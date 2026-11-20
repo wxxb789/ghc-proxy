@@ -47,6 +47,44 @@ afterEach(() => {
 })
 
 describe('dashboard model introspection', () => {
+  test('normalizes billing rates and only retains a differently priced long-context tier', () => {
+    const standard = { input_price: 100, cache_read_price: 8.75, cache_write_price: 125, output_price: 500, max_prompt_tokens: 272_000 }
+    const tokenPrices = { batch_size: 500_000, default: standard }
+    modelCache.cacheModels(buildModelsResponse(
+      buildModel('tiered', { billing: { token_prices: { ...tokenPrices, long_context: { ...standard, output_price: 750 } } } }),
+      buildModel('flat', { billing: { token_prices: { ...tokenPrices, long_context: { ...standard, max_prompt_tokens: 500_000 } } } }),
+      buildModel('included', { billing: { token_prices: { batch_size: 0, default: { input_price: 0, output_price: 0 } } } }),
+      buildModel('unknown'),
+    ))
+
+    const [tiered, flat, included, unknown] = getDashboardModels()
+    expect(tiered?.upstream.billing?.tokenPrices).toEqual({
+      batchSize: 500_000,
+      default: { input: 2, output: 10, cacheRead: 0.175, cacheWrite: 2.5, maxPromptTokens: 272_000 },
+      longContext: { input: 2, output: 15, cacheRead: 0.175, cacheWrite: 2.5, maxPromptTokens: 272_000 },
+    })
+    expect(flat?.upstream.billing?.tokenPrices?.longContext).toBeUndefined()
+    expect(included?.upstream.billing?.tokenPrices?.default).toEqual({ input: 0, output: 0 })
+    expect(unknown?.upstream.billing).toBeUndefined()
+  })
+
+  test.each([
+    { batch_size: -1, default: { input_price: 0 } },
+    { batch_size: 0, default: { input_price: 100 } },
+    { batch_size: 1_000_000, default: { input_price: '100', output_price: 500 } },
+    { batch_size: 1_000_000, default: { input_price: 100, output_price: Number.POSITIVE_INFINITY } },
+    { batch_size: 1_000_000, default: { input_price: 0, output_price: -1 } },
+    { batch_size: 1_000_000, default: null },
+  ])('does not turn malformed billing into free pricing (%j)', (tokenPrices) => {
+    const model = buildModel('malformed')
+    model.billing = { token_prices: tokenPrices } as Model['billing']
+    modelCache.cacheModels(buildModelsResponse(model))
+
+    const [projected] = getDashboardModels()
+    expect(projected?.id).toBe('malformed')
+    expect(projected?.upstream.billing?.tokenPrices).toBeUndefined()
+  })
+
   test('does not advertise a Messages strategy for an image-only model', () => {
     modelCache.cacheModels(buildModelsResponse(buildModel('gpt-image-2.5-flare', {
       supported_endpoints: ['/v1/images/generations', '/v1/images/edits'],

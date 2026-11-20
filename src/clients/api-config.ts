@@ -18,15 +18,15 @@ const EDITOR_PLUGIN_VERSION = `copilot-chat/${COPILOT_VERSION}`
 const USER_AGENT = `GitHubCopilotChat/${COPILOT_VERSION}`
 
 const API_VERSION = '2025-04-01'
+export const MODELS_API_VERSION = '2026-08-01'
 const TRAILING_SLASHES_RE = /\/+$/
 
-/** Headers shared by both Copilot and GitHub API requests (editor identity + versioning) */
-function editorHeaders(config: ClientConfig) {
+function editorHeaders(config: ClientConfig, apiVersion = API_VERSION) {
   return {
     'editor-version': `vscode/${config.vsCodeVersion ?? 'unknown'}`,
     'editor-plugin-version': EDITOR_PLUGIN_VERSION,
     'user-agent': USER_AGENT,
-    'x-github-api-version': API_VERSION,
+    'x-github-api-version': apiVersion,
     'x-vscode-user-agent-library-version': 'electron-fetch',
   }
 }
@@ -43,6 +43,7 @@ export function copilotBaseUrl(config: ClientConfig) {
     : `https://api.${config.accountType}.githubcopilot.com`
 }
 export interface CopilotHeaderOptions {
+  apiVersion?: string
   initiator?: 'user' | 'agent'
   requestContext?: Partial<CapiRequestContext>
   vision?: boolean
@@ -62,7 +63,7 @@ export function copilotHeaders(
     'Authorization': `Bearer ${auth.copilotToken}`,
     'content-type': standardHeaders()['content-type'],
     'copilot-integration-id': 'vscode-chat',
-    ...editorHeaders(config),
+    ...editorHeaders(config, options.apiVersion),
     'openai-intent': 'conversation-panel',
     'x-request-id': randomUUID(),
   }

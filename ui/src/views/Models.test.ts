@@ -1,4 +1,4 @@
-import type { DashboardModel, DashboardModelTarget, ModelsResponse } from '@contract'
+import type { DashboardModel, DashboardModelTarget, DashboardTokenPrices, ModelsResponse } from '@contract'
 import { render, screen, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { flushSync } from 'svelte'
@@ -61,7 +61,29 @@ afterEach(() => {
 })
 
 describe('models view', () => {
-  it('copies the selected models as the byte-identical TSV and reports the count', async () => {
+  it('distinguishes included, unknown, image and long-context pricing', () => {
+    const [base] = CATALOG
+    const withPrices = (id: string, tokenPrices: DashboardTokenPrices) => model({
+      id,
+      upstream: { ...base!.upstream, billing: { tokenPrices } },
+    })
+    renderModels([
+      withPrices('image', { batchSize: 1_000_000, default: { input: 5, output: 0, imageInput: 8, imageOutput: 30 } }),
+      withPrices('tiered', { batchSize: 1_000_000, default: { input: 2, output: 10, maxPromptTokens: 272_000 }, longContext: { input: 4, output: 15 } }),
+      withPrices('included', { batchSize: 0, default: { input: 0 } }),
+      model({ id: 'unknown' }),
+    ])
+
+    expect(screen.getByRole('columnheader', { name: /Price/ })).toBeVisible()
+    const price = (id: string) => within(row(id)).getAllByRole('cell')[5]!
+    expect(price('image')).toHaveTextContent(/text in.*\$5\.00.*img in.*\$8\.00.*img out.*\$30\.00/)
+    expect(price('image')).not.toHaveTextContent('$0.00')
+    expect(price('tiered')).toHaveTextContent(/>272k.*\$4\.00.*\$15\.00/)
+    expect(price('included')).toHaveTextContent('Included')
+    expect(price('unknown')).toHaveTextContent('—')
+  })
+
+  it('copies the selected models as TSV and reports the count', async () => {
     const user = setup()
     renderModels()
     expect(copyButton()).toBeDisabled()
@@ -319,17 +341,16 @@ describe('models view', () => {
   it('renders multi-line limits, capabilities, compatibility and the preview tag', () => {
     renderModels()
     expect(Array.from(document.querySelectorAll('thead th'), header => header.textContent).slice(1))
-      .toEqual(['Model', 'Messages route', 'Upstream endpoints', 'Limits', 'Capabilities', 'Proxy compatibility'])
+      .toEqual(['Model', 'Messages route', 'Upstream endpoints', 'Limits', 'PriceUSD / 1M tokens', 'Capabilities', 'Proxy compatibility'])
     const cells = [...row('claude-opus-5.5').querySelectorAll('td')]
     expect(cells[1]).toHaveTextContent(/^claude-opus-5\.5 Claude Opus 5\.5 preview · 2026-09-01$/)
     expect(cells[2]).toHaveTextContent('native-messages')
     expect(Array.from(cells[3]!.querySelectorAll('.line'), line => line.textContent)).toEqual(['/v1/messages', '/chat/completions'])
     expect(cells[4]).toHaveTextContent('context200,000prompt168,000output64,000')
-    expect(Array.from(cells[5]!.querySelectorAll('.tag-mono'), tag => tag.textContent)).toEqual(['tool_calls', 'vision', 'reasoning_effort'])
-    // Card captions (≤560) stay only on the route, the endpoints and the compatibility lines.
+    expect(Array.from(cells[6]!.querySelectorAll('.tag-mono'), tag => tag.textContent)).toEqual(['tool_calls', 'vision', 'reasoning_effort'])
     expect(cells.map(cell => cell.dataset.label))
-      .toEqual([undefined, undefined, 'Messages route', 'Upstream endpoints', undefined, undefined, 'Proxy compatibility'])
-    const compat = [...cells[6]!.querySelectorAll('.line')]
+      .toEqual([undefined, undefined, 'Messages route', 'Upstream endpoints', undefined, 'Price · USD / 1M tokens', undefined, 'Proxy compatibility'])
+    const compat = [...cells[7]!.querySelectorAll('.line')]
     expect(compat.map(line => line.textContent)).toEqual([
       'responses native',
       'structured yes',
@@ -349,9 +370,9 @@ describe('models view', () => {
       model({ id: 'bare', version: '' }),
     ])
     const sub = (id: string) => row(id).querySelector('.model .sub')
-    expect(document.querySelector('tr.vendor-group > th')).toHaveAttribute('colspan', '7')
+    expect(document.querySelector('tr.vendor-group > th')).toHaveAttribute('colspan', '8')
     expect(sub('claude-haiku-4.5')).toHaveTextContent(/^Claude Haiku 4\.5 · 2026-09-01$/)
-    expect(sub('gpt-5.4')).toHaveTextContent(/^2026-09-01$/) // "GPT-5.4" repeats the id
+    expect(sub('gpt-5.4')).toHaveTextContent(/^2026-09-01$/)
     expect(sub('o4-mini')).toHaveTextContent(/^preview · 2026-09-01$/)
     expect(sub('mystery')).toHaveTextContent(/^2026-09-01$/)
     expect(sub('bare')).toBeNull()

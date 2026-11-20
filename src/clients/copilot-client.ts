@@ -32,7 +32,7 @@ import { events } from 'fetch-event-stream'
 import { HTTPError, throwUpstreamError } from '~/lib/error'
 import { setTargetAvailability } from '~/state/account-runtime'
 
-import { copilotBaseUrl, copilotHeaders } from './api-config'
+import { copilotBaseUrl, copilotHeaders, MODELS_API_VERSION } from './api-config'
 import { acquireM365Credential, isM365CatalogAccessDenied, markM365Unavailable } from './m365-credential'
 import { normalizeM365Catalog } from './m365-upstream'
 import { TerminalUpstreamRecoveryError } from './upstream-queue'
@@ -364,7 +364,7 @@ export class CopilotClient {
       const payload = await this.requestJson<unknown>(
         '/models',
         'Failed to get models',
-        { retryable: true, signal: options.signal },
+        { retryable: true, signal: options.signal, headerOptions: { apiVersion: MODELS_API_VERSION } },
       )
       if (!this.m365Runtime)
         return payload as ModelsResponse

@@ -63,7 +63,7 @@ describe('values', () => {
   })
 })
 
-describe('models TSV (legacy F§3.13, byte-identical)', () => {
+describe('models TSV', () => {
   it('collapses tabs and line breaks in a cell', () => {
     expect(tsvCell(' a\t\tb\r\nc ')).toBe('a b c')
     expect(tsvCell(undefined)).toBe('')
@@ -77,7 +77,11 @@ describe('models TSV (legacy F§3.13, byte-identical)', () => {
       name: '',
       vendor: 'OpenAI',
       version: 'gpt-5.4-2026',
-      upstream: { endpoints: [], capabilities: { limits: { max_context_window_tokens: 400_000 }, supports: { streaming: true } } },
+      upstream: {
+        endpoints: [],
+        capabilities: { limits: { max_context_window_tokens: 400_000 }, supports: { streaming: true } },
+        billing: { tokenPrices: { batchSize: 1_000_000, default: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 2.5 } } },
+      },
       effective: {
         ...opus.effective,
         defaultMessagesStrategy: 'chat-completions',
@@ -91,9 +95,9 @@ describe('models TSV (legacy F§3.13, byte-identical)', () => {
     })
     const expected = [
       'Endpoint: http://localhost:4141/v1',
-      'Model ID\tModel Name\tVendor\tVersion\tMessages Route\tUpstream Endpoints\tLimits\tCapabilities\tProxy Compatibility',
-      'claude-opus-5.5\tClaude Opus 5.5 / preview\tAnthropic\t2026-09-01\tnative-messages\t/v1/messages, /chat/completions\tcontext 200,000; prompt 168,000; output 64,000\ttool_calls, vision, reasoning_effort\tresponses native; structured yes; output_config yes; chat tokens max_tokens; filters none; context managed',
-      'gpt-5.4\t\tOpenAI\tgpt-5.4-2026\tchat-completions\t-\tcontext 400,000; prompt -; output -\tstreaming\tresponses unavailable; structured no; output_config no; chat tokens max_completion_tokens; filters temperature,top_p; context passthrough',
+      'Model ID\tModel Name\tVendor\tVersion\tMessages Route\tUpstream Endpoints\tLimits\tPrice (USD / 1M tokens)\tCapabilities\tProxy Compatibility',
+      'claude-opus-5.5\tClaude Opus 5.5 / preview\tAnthropic\t2026-09-01\tnative-messages\t/v1/messages, /chat/completions\tcontext 200,000; prompt 168,000; output 64,000\t-\ttool_calls, vision, reasoning_effort\tresponses native; structured yes; output_config yes; chat tokens max_tokens; filters none; context managed',
+      'gpt-5.4\t\tOpenAI\tgpt-5.4-2026\tchat-completions\t-\tcontext 400,000; prompt -; output -\tin $1.75; out $14.00; cache $0.175; write $2.50\tstreaming\tresponses unavailable; structured no; output_config no; chat tokens max_completion_tokens; filters temperature,top_p; context passthrough',
     ].join('\n')
     expect(modelsTsv([gpt, opus], 'http://localhost:4141')).toBe(expected)
   })
