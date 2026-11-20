@@ -34,6 +34,16 @@ function queueSnapshot(runtime: AccountRuntime) {
   return runWithAccountRuntime(runtime, getUpstreamRequestQueueSnapshot)
 }
 
+function publishQueueRuntimes(control: AccountRuntime, ...others: Array<AccountRuntime>) {
+  const runtimes = [control, ...others]
+  const names = runtimes.map(runtime => runtime.name)
+  configureAccountRuntimes(compileAccountRouting({
+    baseHostname: 'localhost',
+    defaultAccount: control.name,
+    hostnames: Object.fromEntries(names.map(name => [`${name}.localhost`, name])),
+  }, names), runtimes)
+}
+
 describe('account queue ownership', () => {
   test('stops broadcasting updates to replaced and removed runtimes without moving their work', async () => {
     const unchanged = createAccountRuntime('default', { copilotToken: 'unchanged' })
@@ -128,29 +138,62 @@ describe('account queue ownership', () => {
   })
 
   test('catches up a queue that missed an update before its runtime was published', () => {
+    const control = createAccountRuntime('default')
     const runtime = createAccountRuntime('work')
     const updateOptions = spyOn(UpstreamRequestQueue.prototype, 'updateOptions')
+    const snapshot = spyOn(UpstreamRequestQueue.prototype, 'snapshot')
 
     try {
+      publishQueueRuntimes(control)
       configureUpstreamRequestQueue({ concurrency: 2 })
+      expect(queueSnapshot(control).concurrency).toBe(2)
+      const controlQueue = snapshot.mock.contexts[0]
       expect(queueSnapshot(runtime).concurrency).toBe(2)
+      const warmedQueue = snapshot.mock.contexts[1]
+      expect(warmedQueue).toBeInstanceOf(UpstreamRequestQueue)
 
       updateOptions.mockClear()
       configureUpstreamRequestQueue({ concurrency: 3 })
-      expect(updateOptions).not.toHaveBeenCalled()
-      configureAccountRuntimes(compileAccountRouting({
-        baseHostname: 'localhost',
-        defaultAccount: runtime.name,
-        hostnames: { 'work.localhost': runtime.name },
-      }, [runtime.name]), [runtime])
+      expect(updateOptions).toHaveBeenCalledTimes(1)
+      expect(updateOptions.mock.contexts[0]).toBe(controlQueue)
+      publishQueueRuntimes(control, runtime)
 
       expect(queueSnapshot(runtime).concurrency).toBe(3)
-      expect(updateOptions).toHaveBeenCalledTimes(1)
+      expect(updateOptions).toHaveBeenCalledTimes(2)
+      expect(updateOptions.mock.contexts[1]).toBe(warmedQueue)
     }
     finally {
+      snapshot.mockRestore()
       updateOptions.mockRestore()
       resetAccountRuntimes()
       configureUpstreamRequestQueue({ concurrency: 10 })
+    }
+  })
+
+  test('keeps defined updates for existing queues without restoring cleared overrides to new queues', () => {
+    const control = createAccountRuntime('default')
+    const warmed = createAccountRuntime('work')
+    const fresh = createAccountRuntime('fresh')
+
+    try {
+      publishQueueRuntimes(control)
+      configureUpstreamRequestQueue({ concurrency: 2, maxQueueDepth: 7 })
+      expect(queueSnapshot(control)).toMatchObject({ concurrency: 2, maxPending: 7 })
+      expect(queueSnapshot(warmed)).toMatchObject({ concurrency: 2, maxPending: 7 })
+
+      configureUpstreamRequestQueue({ concurrency: 3 })
+      configureUpstreamRequestQueue({ concurrency: undefined })
+      expect(queueSnapshot(fresh)).toMatchObject({ concurrency: 10, maxPending: 7 })
+      configureUpstreamRequestQueue({ maxQueueDepth: 8 })
+      publishQueueRuntimes(control, warmed, fresh)
+
+      expect(queueSnapshot(control)).toMatchObject({ concurrency: 3, maxPending: 8 })
+      expect(queueSnapshot(warmed)).toMatchObject({ concurrency: 3, maxPending: 8 })
+      expect(queueSnapshot(fresh)).toMatchObject({ concurrency: 10, maxPending: 8 })
+    }
+    finally {
+      resetAccountRuntimes()
+      configureUpstreamRequestQueue({ concurrency: 10, maxQueueDepth: 1_000 })
     }
   })
 })

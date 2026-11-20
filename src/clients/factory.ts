@@ -13,17 +13,34 @@ import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
 interface AccountQueue {
   queue: ReturnType<typeof createDefaultUpstreamRequestQueue>
-  options: Partial<UpstreamRequestQueueOptions>
+  optionsRevision: number
 }
 
 let upstreamRequestQueueOptions: Partial<UpstreamRequestQueueOptions> = {}
+let queueOptionsRevision = 0
+// Clearing a constructor override does not undo a defined update for existing queues.
+const lastDefinedQueueOptions: Record<keyof UpstreamRequestQueueOptions, { revision: number, value: number } | undefined> = {
+  concurrency: undefined,
+  maxRetries: undefined,
+  baseDelayMs: undefined,
+  maxDelayMs: undefined,
+  maxQueueDepth: undefined,
+  recoveryBudgetMs: undefined,
+}
+const queueOptionKeys = Object.keys(lastDefinedQueueOptions) as Array<keyof UpstreamRequestQueueOptions>
 const accountQueues = new WeakMap<AccountRuntime, AccountQueue>()
 const coldModelLoads = new WeakMap<ModelCache, Promise<void>>()
 let vsCodeVersionPromise: Promise<string> | undefined
 
 function applyUpstreamRequestQueueOptions(entry: AccountQueue): void {
-  entry.queue.updateOptions(upstreamRequestQueueOptions)
-  entry.options = upstreamRequestQueueOptions
+  const updates: Partial<UpstreamRequestQueueOptions> = {}
+  for (const key of queueOptionKeys) {
+    const update = lastDefinedQueueOptions[key]
+    if (update && update.revision > entry.optionsRevision)
+      updates[key] = update.value
+  }
+  entry.optionsRevision = queueOptionsRevision
+  entry.queue.updateOptions(updates)
 }
 
 function getUpstreamRequestQueue() {
@@ -31,13 +48,13 @@ function getUpstreamRequestQueue() {
   const existing = accountQueues.get(runtime)
   if (existing) {
     // A runtime warmed up outside the committed table may have missed a broadcast.
-    if (existing.options !== upstreamRequestQueueOptions)
+    if (existing.optionsRevision !== queueOptionsRevision)
       applyUpstreamRequestQueueOptions(existing)
     return existing.queue
   }
 
   const queue = createDefaultUpstreamRequestQueue(upstreamRequestQueueOptions)
-  accountQueues.set(runtime, { queue, options: upstreamRequestQueueOptions })
+  accountQueues.set(runtime, { queue, optionsRevision: queueOptionsRevision })
   return queue
 }
 
@@ -45,6 +62,12 @@ export function configureUpstreamRequestQueue(
   options: Partial<UpstreamRequestQueueOptions>,
 ): void {
   upstreamRequestQueueOptions = { ...upstreamRequestQueueOptions, ...options }
+  queueOptionsRevision++
+  for (const key of queueOptionKeys) {
+    const value = options[key]
+    if (value != null)
+      lastDefinedQueueOptions[key] = { revision: queueOptionsRevision, value }
+  }
   for (const runtime of getConfiguredAccountRuntimes()) {
     const existing = accountQueues.get(runtime)
     if (existing)
