@@ -6,35 +6,22 @@ import consola from 'consola'
 import { CopilotClient, getVSCodeVersion } from '~/clients'
 import { getOrCreateRequestCorrelation } from '~/lib/request-logger'
 import { getCurrentAccountRuntime, getRequestAccountName } from '~/state'
+import { getConfiguredAccountRuntimes } from '~/state/account-runtime'
+import { configureAccountQueueOptions, getOrCreateAccountQueue } from './account-queue'
 import { buildGitHubUrls } from './ghe-domain'
 import { createDefaultUpstreamRequestQueue } from './upstream-queue'
 
-const upstreamRequestQueues = new Set<ReturnType<typeof createDefaultUpstreamRequestQueue>>()
-let upstreamRequestQueueOptions: Partial<UpstreamRequestQueueOptions> = {}
-const accountQueues = new WeakMap<object, ReturnType<typeof createDefaultUpstreamRequestQueue>>()
 const coldModelLoads = new WeakMap<ModelCache, Promise<void>>()
 let vsCodeVersionPromise: Promise<string> | undefined
 
 function getUpstreamRequestQueue() {
-  const runtime = getCurrentAccountRuntime()
-  const existing = accountQueues.get(runtime)
-  if (existing) {
-    return existing
-  }
-
-  const queue = createDefaultUpstreamRequestQueue(upstreamRequestQueueOptions)
-  accountQueues.set(runtime, queue)
-  upstreamRequestQueues.add(queue)
-  return queue
+  return getOrCreateAccountQueue(getCurrentAccountRuntime(), createDefaultUpstreamRequestQueue)
 }
 
 export function configureUpstreamRequestQueue(
   options: Partial<UpstreamRequestQueueOptions>,
 ): void {
-  upstreamRequestQueueOptions = { ...upstreamRequestQueueOptions, ...options }
-  for (const queue of upstreamRequestQueues) {
-    queue.updateOptions(options)
-  }
+  configureAccountQueueOptions(options, getConfiguredAccountRuntimes())
 }
 
 export function getUpstreamRequestQueueSnapshot(): UpstreamRequestQueueSnapshot {

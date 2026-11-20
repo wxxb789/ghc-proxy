@@ -2,6 +2,7 @@ import type { CompiledAccountRouting } from '~/lib/account-routing'
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 
+import { syncAccountQueueOptions } from '~/clients/account-queue'
 import { resolveAccountName } from '~/lib/account-routing'
 
 import { AuthStore, authStore as legacyAuthStore } from './auth'
@@ -118,6 +119,8 @@ export function configureAccountRuntimes(
   accountRuntimes = nextRuntimes
   defaultRuntime = nextDefault
   routing = nextRouting
+  for (const runtime of nextRuntimes.values())
+    syncAccountQueueOptions(runtime)
 }
 
 export function setTargetAvailability(
@@ -154,6 +157,11 @@ export function disableAccountRouting(): void {
   accountRuntimes = new Map([[legacyRuntime.name, legacyRuntime]])
   defaultRuntime = legacyRuntime
   routing = undefined
+  syncAccountQueueOptions(legacyRuntime)
+}
+
+export function getConfiguredAccountRuntimes(): Iterable<AccountRuntime> {
+  return accountRuntimes.values()
 }
 
 export interface RoutingTargetView {
